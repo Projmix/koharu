@@ -483,6 +483,8 @@ pub enum OcrModel {
     MangaOcr,
     #[serde(rename = "baberu-ocr")]
     BaberuOcr,
+    #[serde(rename = "hayai-ocr")]
+    HayaiOcr,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize, Type)]

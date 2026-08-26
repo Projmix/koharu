@@ -389,7 +389,7 @@ export type OcrConfig = {
 
 export type OcrMethod = "local" | "api";
 
-export type OcrModel = { model: "paddleocr-vl-1.6" } | { model: "manga-ocr" } | { model: "baberu-ocr" };
+export type OcrModel = { model: "paddleocr-vl-1.6" } | { model: "manga-ocr" } | { model: "baberu-ocr" } | { model: "hayai-ocr" };
 
 export type OcrRegionCommit = {
 	revision: Revision,

@@ -12,11 +12,12 @@ export type PipelineModel = DetectionModel | LocalInpaintingModel
 export type ModelStage = Exclude<Stage, 'ocr' | 'translation'>
 export type ModelName = PipelineModel['model']
 
-export const localOcrModels = ['paddleocr-vl-1.6', 'manga-ocr', 'baberu-ocr'] as const
+export const localOcrModels = ['paddleocr-vl-1.6', 'manga-ocr', 'baberu-ocr', 'hayai-ocr'] as const
 export const localOcrNames: Record<OcrModel['model'], string> = {
   'paddleocr-vl-1.6': 'PaddleOCR-VL 1.6',
   'manga-ocr': 'Manga OCR',
   'baberu-ocr': 'Baberu OCR',
+  'hayai-ocr': 'Hayai OCR',
 }
 
 export const modelOptions = {

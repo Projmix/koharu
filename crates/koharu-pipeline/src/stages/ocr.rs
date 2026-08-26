@@ -6,8 +6,8 @@ use anyhow::{Context as _, Result, anyhow, bail};
 use async_trait::async_trait;
 use image::{DynamicImage, GenericImageView, Rgb};
 use koharu_ml::{
-    baberu_ocr::BaberuOcr, manga_ocr::MangaOcr, paddle_ocr_vl::PaddleOCRVLTask,
-    paddle_ocr_vl_quantized::PaddleOCRVLQuantized,
+    baberu_ocr::BaberuOcr, hayai_ocr::HayaiOcr, manga_ocr::MangaOcr,
+    paddle_ocr_vl::PaddleOCRVLTask, paddle_ocr_vl_quantized::PaddleOCRVLQuantized,
 };
 use koharu_scene::{
     Authored, EntityId, Geometry, LanguageTag, OcrAnalysis, Origin, RecognizedFrom, Region,
@@ -133,6 +133,7 @@ fn local_model_name(model: &OcrModel) -> &'static str {
     match model {
         OcrModel::MangaOcr => "manga-ocr",
         OcrModel::BaberuOcr => "baberu-ocr",
+        OcrModel::HayaiOcr => "hayai-ocr",
         OcrModel::PaddleOcrVl1_6 => "paddleocr-vl-1.6",
     }
 }
@@ -140,6 +141,7 @@ fn local_model_name(model: &OcrModel) -> &'static str {
 enum Model {
     Manga(Arc<Mutex<MangaOcr>>),
     Baberu(Arc<Mutex<BaberuOcr>>),
+    Hayai(Arc<Mutex<HayaiOcr>>),
     Paddle(Arc<Mutex<PaddleOCRVLQuantized>>),
 }
 
@@ -151,6 +153,9 @@ impl Model {
             )))),
             OcrModel::BaberuOcr => Ok(Self::Baberu(Arc::new(Mutex::new(
                 BaberuOcr::load(device).await?,
+            )))),
+            OcrModel::HayaiOcr => Ok(Self::Hayai(Arc::new(Mutex::new(
+                HayaiOcr::load(device).await?,
             )))),
             OcrModel::PaddleOcrVl1_6 => Ok(Self::Paddle(Arc::new(Mutex::new(
                 PaddleOCRVLQuantized::load(device).await?,
@@ -166,6 +171,7 @@ impl Model {
         let model_name = match self {
             Self::Manga(_) => "manga-ocr",
             Self::Baberu(_) => "baberu-ocr",
+            Self::Hayai(_) => "hayai-ocr",
             Self::Paddle(_) => "paddleocr-vl-1.6",
         };
         let (page, targets) = targets(&input).await?;
@@ -178,6 +184,12 @@ impl Model {
                 .await?
             }
             Self::Baberu(model) => {
+                infer_text(model.clone(), targets, |model, image| {
+                    model.inference(image)
+                })
+                .await?
+            }
+            Self::Hayai(model) => {
                 infer_text(model.clone(), targets, |model, image| {
                     model.inference(image)
                 })

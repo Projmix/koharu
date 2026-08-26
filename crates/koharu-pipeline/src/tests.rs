@@ -49,17 +49,56 @@ async fn stop_after_a_page_keeps_completed_progress() {
     let pipeline = pipeline(translation);
     let mut session = koharu_scene::Session::memory().await.unwrap();
     let mut pages = Vec::new();
+    let generated = koharu_scene::Generation::new(
+        koharu_scene::ProducerId::new("dev.koharu.pipeline.translation").unwrap(),
+    );
     let patch = session
         .snapshot()
         .patch(|edit| {
-            pages.push(edit.add_page(
-                koharu_scene::PageDraft::new("one", 1.0, 1.0),
-                koharu_scene::At::End,
-            )?);
-            pages.push(edit.add_page(
-                koharu_scene::PageDraft::new("two", 1.0, 1.0),
-                koharu_scene::At::End,
-            )?);
+            for (name, source, translation) in [
+                ("one", "one source", "one translation"),
+                ("two", "two source", "two translation"),
+            ] {
+                let page = edit.add_page(
+                    koharu_scene::PageDraft::new(name, 100.0, 100.0),
+                    koharu_scene::At::End,
+                )?;
+                let region = edit.add_analysis_region::<koharu_scene::TextRegion>(
+                    page,
+                    koharu_scene::At::End,
+                    &koharu_scene::Geometry::rectangle(10.0, 10.0, 20.0, 20.0),
+                    None,
+                )?;
+                let content = edit.add_text_content(page, koharu_scene::At::End)?;
+                edit.add_text_layer(
+                    page,
+                    koharu_scene::At::End,
+                    content,
+                    &koharu_scene::TextLayout {
+                        origin: koharu_scene::Origin::User,
+                        kind: koharu_scene::TextLayoutKind::Paragraph,
+                    },
+                )?;
+                edit.set(
+                    content,
+                    &koharu_scene::SourceText {
+                        text: koharu_scene::Authored::user(source.to_owned()),
+                        language: Some(koharu_scene::LanguageTag::new("ja-JP").unwrap()),
+                    },
+                )?;
+                edit.set(
+                    content,
+                    &koharu_scene::Translation {
+                        text: koharu_scene::Authored::generated(
+                            translation.to_owned(),
+                            generated.clone(),
+                        ),
+                        language: None,
+                    },
+                )?;
+                edit.relate::<koharu_scene::RecognizedFrom>(content, region)?;
+                pages.push(page);
+            }
             Ok(())
         })
         .unwrap();
