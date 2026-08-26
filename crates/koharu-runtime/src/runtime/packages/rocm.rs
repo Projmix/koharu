@@ -190,21 +190,6 @@ impl Rocm {
             .context("ROCm device is unsupported")
     }
 
-    pub(crate) fn torch_family(self) -> Option<&'static str> {
-        match self {
-            Self::Gfx1100
-            | Self::Gfx1101
-            | Self::Gfx1102
-            | Self::Gfx1103
-            | Self::Gfx1150
-            | Self::Gfx1151
-            | Self::Gfx1152
-            | Self::Gfx1153 => Some("gfx11"),
-            Self::Gfx1200 | Self::Gfx1201 => Some("gfx12_0"),
-            _ => None,
-        }
-    }
-
     pub(crate) async fn probe(self) -> Result<usize> {
         type GetDeviceCount = unsafe extern "C" fn(*mut i32) -> i32;
         type GetDeviceProperties = unsafe extern "C" fn(*mut c_void, i32) -> i32;
@@ -327,18 +312,6 @@ impl RuntimePackage for Rocm {
 
     async fn activate(self) -> Result<()> {
         let root = self.install().await?;
-        if cfg!(target_os = "windows") && self == Self::Gfx1032 {
-            // The ROCm 7.14 package's MIOpen 3.5.2 selects F3x2 and F2x3 Winograd assembly kernels
-            // that COMGR cannot build for gfx1032 on Windows. Disable only those solvers while
-            // preserving other Winograd paths.
-            // SAFETY: ROCm activation is restricted to Windows, where changing the process
-            // environment is safe even in a multithreaded process.
-            unsafe {
-                std::env::set_var("MIOPEN_DEBUG_AMD_WINOGRAD_RXS_F3X2", "0");
-                std::env::set_var("MIOPEN_DEBUG_AMD_WINOGRAD_RXS_F2X3_G1", "0");
-            }
-        }
-
         if !cfg!(any(target_os = "windows", target_os = "linux")) {
             anyhow::bail!("ROCm packages support only Windows and Linux")
         }
