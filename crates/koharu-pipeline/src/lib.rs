@@ -32,8 +32,8 @@ pub use resources::{DeviceResources, ResourceSnapshot};
 pub use scope::{Bounds, Scope};
 pub use stage::{Stage, StageTarget};
 pub use stages::{
-    Flux2KleinConfig, ImageEditConfig, InpaintingApplyMode, KoharuLayoutRFDetrSeg2XLConfig,
-    RoremMixedConfig, text_layer_placement,
+    ChapterTranslation, Flux2KleinConfig, ImageEditConfig, InpaintingApplyMode,
+    KoharuLayoutRFDetrSeg2XLConfig, RoremMixedConfig, text_layer_placement,
 };
 
 use images::ImageCache;

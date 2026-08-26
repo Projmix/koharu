@@ -40,6 +40,25 @@ pub(super) async fn translate(
     super::openai_compatible::translate(client, backend, request).await
 }
 
+pub(super) fn translation_request_body(
+    model: &str,
+    generation: &GenerationConfig,
+    request: &TranslationRequest,
+) -> Result<serde_json::Value> {
+    let backend = ChatBackend {
+        reasoning: generation.reasoning,
+        ..ChatBackend::new(
+            "openrouter",
+            CHAT_URL,
+            None,
+            model,
+            generation,
+            ResponseMode::JsonSchema,
+        )
+    };
+    super::openai_compatible::translation_request_body(&backend, request)
+}
+
 pub(super) async fn recognize(
     client: &Client,
     _config: &OpenRouterConfig,

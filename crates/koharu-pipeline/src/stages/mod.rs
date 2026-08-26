@@ -15,6 +15,7 @@ pub use detection::{KoharuLayoutRFDetrSeg2XLConfig, text_layer_placement};
 pub(crate) use fal::normalize_cleanup_prompt;
 pub use fal::{ImageEditConfig, InpaintingApplyMode};
 pub use inpainting::{Flux2KleinConfig, RoremMixedConfig};
+pub use translation::ChapterTranslation;
 
 use crate::{
     Bounds, ImageCache, InpaintingMask, InpaintingModelChoice, InpaintingProvider, PipelineConfig,

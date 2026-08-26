@@ -31,6 +31,14 @@ pub use openai::OpenAiConfig;
 pub use openai_compatible::OpenAiCompatibleConfig;
 pub use openrouter::OpenRouterConfig;
 
+pub(crate) fn openrouter_translation_request_body(
+    model: &str,
+    generation: &GenerationConfig,
+    request: &TranslationRequest,
+) -> Result<serde_json::Value> {
+    openrouter::translation_request_body(model, generation, request)
+}
+
 use crate::{
     Error, GenerationConfig, Model, ModelSelection, OcrRequest, Provider, ProvidersConfig, Result,
     TranslationRequest,

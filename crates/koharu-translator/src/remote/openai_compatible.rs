@@ -5,6 +5,7 @@ use anyhow::Context;
 use koharu_secrets::ExposeSecret;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use url::Url;
 
 use super::send_json;
@@ -86,6 +87,31 @@ pub(super) async fn translate(
     backend: ChatBackend<'_>,
     request: &TranslationRequest,
 ) -> Result<Vec<String>> {
+    let body = translation_request_body(&backend, request)?;
+    let http = client.post(backend.endpoint).json(&body);
+    let http = match backend.api_key {
+        Some(api_key) => http.bearer_auth(api_key),
+        None => http,
+    };
+    let response: ChatResponse = send_json(backend.provider, http).await?;
+    let text = response
+        .choices
+        .into_iter()
+        .next()
+        .context("chat completion returned no choices")?
+        .message
+        .content;
+    Ok(prompt::parse_translation_response(
+        backend.provider,
+        &text,
+        request,
+    )?)
+}
+
+pub(super) fn translation_request_body(
+    backend: &ChatBackend<'_>,
+    request: &TranslationRequest,
+) -> Result<Value> {
     let (system, user) = prompt::prompts(request)?;
     let user_content = match request.image.as_deref() {
         Some(image) => MessageContent::Parts(vec![
@@ -123,20 +149,7 @@ pub(super) async fn translate(
             .response_mode
             .response_format("manga_translation", prompt::output_schema()),
     };
-    let http = client.post(backend.endpoint).json(&body);
-    let http = match backend.api_key {
-        Some(api_key) => http.bearer_auth(api_key),
-        None => http,
-    };
-    let response: ChatResponse = send_json(backend.provider, http).await?;
-    let text = response
-        .choices
-        .into_iter()
-        .next()
-        .context("chat completion returned no choices")?
-        .message
-        .content;
-    Ok(prompt::translations(backend.provider, &text, request)?)
+    Ok(serde_json::to_value(body).map_err(anyhow::Error::from)?)
 }
 
 pub(super) async fn recognize(

@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use anyhow::Result;
 use async_trait::async_trait;
 use koharu_scene::{
@@ -5,8 +7,8 @@ use koharu_scene::{
     RegionSpec, SourceText, Translation,
 };
 use koharu_translator::{
-    Language, Provider, TranslationContext, TranslationRequest, TranslationSegmentMetadata,
-    TranslationUnit, Translator,
+    GenerationConfig, Language, ModelSelection, Provider, TranslationContext, TranslationRequest,
+    TranslationSegmentMetadata, TranslationUnit, Translator,
 };
 
 use crate::{StageTarget, TranslationConfig, TranslationProfile, TranslationUnitPolicy};
@@ -54,6 +56,140 @@ struct OrderedEntry {
     bounds: Option<(f64, f64, f64, f64)>,
 }
 
+/// The complete, ordered chapter translation input and its target entities.
+/// Keeping request construction and patch construction together ensures that
+/// network responses and manually imported files use exactly the same contract.
+pub struct ChapterTranslation {
+    snapshot: koharu_scene::Snapshot,
+    targets: Vec<(EntityId, String)>,
+    request: TranslationRequest,
+    model: ModelSelection,
+    generation: GenerationConfig,
+    target_language: Language,
+}
+
+impl ChapterTranslation {
+    pub fn from_snapshot(
+        snapshot: koharu_scene::Snapshot,
+        config: &TranslationConfig,
+    ) -> Result<Self> {
+        let pages: Arc<[EntityId]> = snapshot.pages().map(|page| page.id()).collect();
+        let input = StageInput::chapter(snapshot, pages);
+        Self::from_input(
+            &input,
+            &config.chapter,
+            config.source_language,
+            config.target_language,
+        )
+    }
+
+    fn from_input(
+        input: &StageInput,
+        profile: &TranslationProfile,
+        source_language: Language,
+        target_language: Language,
+    ) -> Result<Self> {
+        let (mut targets, context) = collect_inputs(input, source_language)?;
+        anyhow::ensure!(
+            !targets.is_empty() || !context.is_empty(),
+            "Translation found no OCR text. Run Detection and OCR before Translation."
+        );
+        let units = match profile.unit_policy {
+            TranslationUnitPolicy::PageOnly => page_units(&mut targets)?,
+            TranslationUnitPolicy::AdaptiveV1 => adaptive_units(&mut targets)?,
+        };
+        let mut request = TranslationRequest::new(
+            targets.iter().map(|target| target.source.clone()),
+            target_language,
+        )
+        .with_source_language(source_language)
+        .with_segment_metadata(targets.iter().map(|target| target.metadata.clone()))?
+        .with_segment_ids(
+            targets
+                .iter()
+                .map(|target| stable_segment_id(&target.metadata))
+                .collect::<Vec<_>>(),
+        )?
+        .with_context(context)
+        .with_page_numbers(targets.iter().map(|target| target.page))?
+        .with_units(
+            match profile.unit_policy {
+                TranslationUnitPolicy::PageOnly => "page_only",
+                TranslationUnitPolicy::AdaptiveV1 => "adaptive_v1",
+            },
+            units,
+        );
+        if let Some(instructions) = profile.instructions.as_deref() {
+            request = request.with_instructions(instructions);
+        }
+        Ok(Self {
+            snapshot: input.scene.clone(),
+            targets: targets
+                .into_iter()
+                .map(|target| (target.entity, target.source))
+                .collect(),
+            request,
+            model: profile.model.clone(),
+            generation: profile.generation,
+            target_language,
+        })
+    }
+
+    #[must_use]
+    pub fn model(&self) -> &ModelSelection {
+        &self.model
+    }
+
+    pub fn openrouter_request(&self) -> Result<serde_json::Value> {
+        anyhow::ensure!(
+            !self.request.segments.is_empty(),
+            "chapter translation found no untranslated OCR text"
+        );
+        Translator::openrouter_request(&self.model, self.generation, self.request.clone())
+    }
+
+    pub fn patch_from_response(&self, response: &str) -> Result<koharu_scene::Patch> {
+        let translated =
+            koharu_translator::parse_translation_response("openrouter", response, &self.request)?;
+        self.patch_from_translations(translated, "openrouter-manual-import")
+    }
+
+    fn patch_from_translations(
+        &self,
+        translated: Vec<String>,
+        provider: &str,
+    ) -> Result<koharu_scene::Patch> {
+        anyhow::ensure!(
+            translated.len() == self.targets.len(),
+            "chapter translation returned {} translations, expected {}",
+            translated.len(),
+            self.targets.len()
+        );
+        let language = koharu_scene::LanguageTag::new(self.target_language.tag())?;
+        let generated = generation(PRODUCER, provider)?;
+        let mut edit = self.snapshot.edit_as(generated.clone());
+        for (entity, _) in &self.targets {
+            edit.observe::<SourceText>(*entity)?;
+            edit.observe::<Translation>(*entity)?;
+        }
+        for ((entity, source), text) in self.targets.iter().zip(translated) {
+            let text = if source.trim() == "\u{2026}" {
+                "\u{2026}".to_owned()
+            } else {
+                text
+            };
+            edit.set(
+                *entity,
+                &Translation {
+                    text: Authored::generated(text, generated.clone()),
+                    language: Some(language.clone()),
+                },
+            )?;
+        }
+        finish(edit)
+    }
+}
+
 #[async_trait]
 impl StageProcessor for Processor {
     fn model(&self, input: &StageInput) -> String {
@@ -96,8 +232,20 @@ impl StageProcessor for Processor {
 
     async fn process(&self, input: StageInput) -> Result<koharu_scene::Patch> {
         let profile = self.profile(&input).clone();
-        let chapter = input.target() == StageTarget::Chapter;
-        let (mut targets, context) = collect_inputs(&input, self.config.source_language)?;
+        if input.target() == StageTarget::Chapter {
+            let chapter = ChapterTranslation::from_input(
+                &input,
+                &profile,
+                self.config.source_language,
+                self.config.target_language,
+            )?;
+            let (provider, translated) = self
+                .translator
+                .translate(&profile.model, profile.generation, chapter.request.clone())
+                .await?;
+            return chapter.patch_from_translations(translated, provider);
+        }
+        let (targets, context) = collect_inputs(&input, self.config.source_language)?;
         anyhow::ensure!(
             !targets.is_empty() || !context.is_empty(),
             "Translation found no OCR text. Run Detection and OCR before Translation."
@@ -105,14 +253,6 @@ impl StageProcessor for Processor {
         if targets.is_empty() {
             return finish(input.scene.edit());
         }
-        let units = if chapter {
-            Some(match profile.unit_policy {
-                TranslationUnitPolicy::PageOnly => page_units(&mut targets)?,
-                TranslationUnitPolicy::AdaptiveV1 => adaptive_units(&mut targets)?,
-            })
-        } else {
-            None
-        };
         let mut request = TranslationRequest::new(
             targets.iter().map(|target| target.source.clone()),
             self.config.target_language,
@@ -126,21 +266,10 @@ impl StageProcessor for Processor {
                 .collect::<Vec<_>>(),
         )?
         .with_context(context);
-        if chapter {
-            request = request.with_page_numbers(targets.iter().map(|target| target.page))?;
-        }
-        if let Some(units) = units {
-            let policy = match profile.unit_policy {
-                TranslationUnitPolicy::PageOnly => "page_only",
-                TranslationUnitPolicy::AdaptiveV1 => "adaptive_v1",
-            };
-            request = request.with_units(policy, units);
-        }
         if let Some(instructions) = profile.instructions.as_deref() {
             request = request.with_instructions(instructions);
         }
-        if !chapter
-            && Translator::supports_vision(&profile.model, &profile.generation)
+        if Translator::supports_vision(&profile.model, &profile.generation)
             && let Some(image) = input
                 .images
                 .get(&input.scene, input.page()?, "source")
@@ -735,6 +864,63 @@ mod tests {
             [(1, "first-page"), (2, "second-page")]
         );
         assert!(context.is_empty());
+    }
+
+    #[tokio::test]
+    async fn manual_chapter_import_is_strict_and_preserves_user_translations() {
+        let mut session = koharu_scene::Session::memory().await.unwrap();
+        let mut edit = session.snapshot().edit();
+        let page = edit
+            .add_page(PageDraft::new("page", 120.0, 180.0), At::End)
+            .unwrap();
+        let (target, region, _) = add_text(&mut edit, page, "source", (80.0, 10.0, 20.0, 30.0));
+        let (reference, _, _) =
+            add_text(&mut edit, page, "manual source", (10.0, 10.0, 20.0, 30.0));
+        edit.set(
+            reference,
+            &Translation {
+                text: Authored::user("manual translation".to_owned()),
+                language: None,
+            },
+        )
+        .unwrap();
+        session.commit(edit.finish().unwrap()).await.unwrap();
+
+        let chapter =
+            ChapterTranslation::from_snapshot(session.snapshot(), &TranslationConfig::default())
+                .unwrap();
+        let response = serde_json::json!({
+            "translations": [{
+                "id": format!("page:{page}::region:{region}"),
+                "page_id": page.to_string(),
+                "region_id": region.to_string(),
+                "source_text": "source",
+                "translated_text": "перевод"
+            }],
+            "notes": ""
+        });
+        let patch = chapter.patch_from_response(&response.to_string()).unwrap();
+        session.commit(patch).await.unwrap();
+
+        let snapshot = session.snapshot();
+        assert_eq!(
+            snapshot
+                .component::<Translation>(target)
+                .unwrap()
+                .unwrap()
+                .text
+                .value,
+            "перевод"
+        );
+        let manual = snapshot
+            .component::<Translation>(reference)
+            .unwrap()
+            .unwrap();
+        assert_eq!(manual.text.value, "manual translation");
+        assert!(matches!(manual.text.origin, Origin::User));
+
+        let changed = response.to_string().replace("\"source\"", "\"changed\"");
+        assert!(chapter.patch_from_response(&changed).is_err());
     }
 
     #[tokio::test]

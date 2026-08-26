@@ -57,6 +57,10 @@ export const commands = {
 	redo: () => __TAURI_INVOKE<null>("redo"),
 	process: (scope: Scope, operation: Operation) => __TAURI_INVOKE<JobId>("process", { scope, operation }),
 	stopJob: (job: JobId) => __TAURI_INVOKE<null>("stop_job", { job }),
+	/**  Save the exact, credential-free OpenRouter request used for a chapter. */
+	exportChapterTranslation: () => __TAURI_INVOKE<null>("export_chapter_translation"),
+	/**  Import a manually completed chapter translation and commit it atomically. */
+	importChapterTranslation: () => __TAURI_INVOKE<null>("import_chapter_translation"),
 	exportPages: (pages: EntityId[], format: ExportFormat) => __TAURI_INVOKE<null>("export_pages", { pages, format }),
 	getThumbnail: (page: EntityId) => __TAURI_INVOKE<ThumbnailBytes>("get_thumbnail", { page }),
 	getFonts: () => __TAURI_INVOKE<FontFamily[]>("get_fonts"),

@@ -5,6 +5,7 @@ use koharu_pipeline::{Committer, Progress, RunStatus, StageOutput, StopToken};
 use koharu_scene::{EntityId, ProjectId, Snapshot};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use specta::Type;
 use tauri::{AppHandle, Cef, Manager as _, State, ipc::Channel};
 use uuid::Uuid;
@@ -497,6 +498,154 @@ pub(crate) async fn process(
         }
     }));
     Ok(id)
+}
+
+#[derive(Serialize)]
+struct ChapterTranslationExport {
+    format: &'static str,
+    version: u32,
+    project_id: String,
+    revision: String,
+    provider: String,
+    model: String,
+    endpoint: &'static str,
+    request: Value,
+    system_prompt: Value,
+    chapter_payload: Value,
+}
+
+/// Save the exact, credential-free OpenRouter request used for a chapter.
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn export_chapter_translation(
+    window: tauri::WebviewWindow<Cef>,
+    project: State<'_, CurrentProject>,
+    processing: State<'_, Processing>,
+) -> std::result::Result<(), Error> {
+    if !processing.stops.lock().is_empty() {
+        return Err(anyhow::anyhow!(
+            "chapter translation export is unavailable while processing is running"
+        )
+        .into());
+    }
+    let Some(file) = rfd::AsyncFileDialog::new()
+        .add_filter("JSON", &["json"])
+        .set_file_name("koharu-chapter-translation-request.json")
+        .set_parent(&window)
+        .save_file()
+        .await
+    else {
+        return Ok(());
+    };
+    let snapshot = {
+        let project = project.project.lock().await;
+        project.as_ref().context("no project is open")?.snapshot()
+    };
+    let config = koharu_pipeline::PipelineConfig::load()?.read()?.clone();
+    let chapter =
+        koharu_pipeline::ChapterTranslation::from_snapshot(snapshot.clone(), &config.translation)?;
+    let request = chapter.openrouter_request()?;
+    let messages = request
+        .get("messages")
+        .and_then(Value::as_array)
+        .context("OpenRouter request did not contain messages")?;
+    let system_prompt = messages
+        .first()
+        .and_then(|message| message.get("content"))
+        .cloned()
+        .context("OpenRouter request did not contain a system prompt")?;
+    let chapter_payload = messages
+        .get(1)
+        .and_then(|message| message.get("content"))
+        .cloned()
+        .context("OpenRouter request did not contain a chapter payload")?;
+    let model = chapter
+        .model()
+        .model
+        .clone()
+        .context("OpenRouter requires a selected translation model")?;
+    let export = ChapterTranslationExport {
+        format: "koharu.chapter-translation-request",
+        version: 1,
+        project_id: snapshot.project_id().to_string(),
+        revision: snapshot.revision().to_string(),
+        provider: chapter.model().provider.to_string(),
+        model,
+        endpoint: "https://openrouter.ai/api/v1/chat/completions",
+        request,
+        system_prompt,
+        chapter_payload,
+    };
+    let bytes = serde_json::to_vec_pretty(&export)?;
+    tokio::fs::write(file.path(), bytes).await?;
+    tracing::info!(target: "koharu_metrics", metric = "chapter_translation_exported");
+    Ok(())
+}
+
+/// Import a manually completed chapter translation and commit it atomically.
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn import_chapter_translation(
+    window: tauri::WebviewWindow<Cef>,
+    handle: AppHandle<Cef>,
+    project: State<'_, CurrentProject>,
+    processing: State<'_, Processing>,
+) -> std::result::Result<(), Error> {
+    if !processing.stops.lock().is_empty() {
+        return Err(anyhow::anyhow!(
+            "chapter translation import is unavailable while processing is running"
+        )
+        .into());
+    }
+    let Some(file) = rfd::AsyncFileDialog::new()
+        .add_filter("JSON", &["json"])
+        .set_parent(&window)
+        .pick_file()
+        .await
+    else {
+        return Ok(());
+    };
+    let bytes = tokio::fs::read(file.path()).await?;
+    let value: Value =
+        serde_json::from_slice(&bytes).context("chapter translation file is not valid JSON")?;
+    let response = if value.get("translations").is_some() {
+        value
+    } else if value.get("choices").is_some() {
+        value
+    } else if let Some(response) = value.get("response") {
+        response.clone()
+    } else {
+        return Err(anyhow::anyhow!(
+            "chapter translation JSON must contain translations or an OpenRouter choices response"
+        )
+        .into());
+    };
+    let snapshot = {
+        let project = project.project.lock().await;
+        project.as_ref().context("no project is open")?.snapshot()
+    };
+    let config = koharu_pipeline::PipelineConfig::load()?.read()?.clone();
+    let chapter =
+        koharu_pipeline::ChapterTranslation::from_snapshot(snapshot, &config.translation)?;
+    let patch = chapter.patch_from_response(&serde_json::to_string(&response)?)?;
+    let (commit, page) = {
+        let mut projects = project.project.lock().await;
+        let project = projects.as_mut().context("no project is open")?;
+        let commit = project
+            .commit_rebased(patch)
+            .await?
+            .context("the project changed while importing; export a fresh chapter request")?;
+        project.record_commit(&commit);
+        (commit, project.active_page())
+    };
+    let desktop = handle.state::<Desktop>();
+    desktop.synchronize(&commit.snapshot, page, &commit).await?;
+    handle
+        .state::<CanvasChannel>()
+        .channel
+        .publish(desktop.canvas_state());
+    tracing::info!(target: "koharu_metrics", metric = "chapter_translation_imported");
+    Ok(())
 }
 
 #[cfg(test)]

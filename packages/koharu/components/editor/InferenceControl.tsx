@@ -6,6 +6,7 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  Download,
   Languages,
   Maximize2,
   Minimize2,
@@ -18,6 +19,7 @@ import {
   Sparkles,
   Square,
   Type,
+  Upload,
 } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -113,6 +115,35 @@ export function InferenceControl({
         onScopeChange={setScope}
         onStagesChange={setStages}
       />
+
+      {scope === 'project' && (
+        <>
+          <Button
+            type='button'
+            variant='ghost'
+            size='icon-sm'
+            className='shrink-0 rounded-lg'
+            disabled={disabled || Boolean(running)}
+            aria-label={t('inference.exportChapter')}
+            title={t('inference.exportChapter')}
+            onClick={() => void call(commands.exportChapterTranslation).catch(() => undefined)}
+          >
+            <Download className='size-3.5' />
+          </Button>
+          <Button
+            type='button'
+            variant='ghost'
+            size='icon-sm'
+            className='shrink-0 rounded-lg'
+            disabled={disabled || Boolean(running)}
+            aria-label={t('inference.importChapter')}
+            title={t('inference.importChapter')}
+            onClick={() => void call(commands.importChapterTranslation).catch(() => undefined)}
+          >
+            <Upload className='size-3.5' />
+          </Button>
+        </>
+      )}
 
       <Button
         type='button'

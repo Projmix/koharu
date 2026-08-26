@@ -1118,12 +1118,21 @@ describe('greenfield editor', () => {
   it('changes the pipeline scope and selected stages from the runtime selector', async () => {
     installProject()
     const run = vi.spyOn(commands, 'process').mockResolvedValue('job')
+    const exportChapter = vi.spyOn(commands, 'exportChapterTranslation').mockResolvedValue(null)
+    const importChapter = vi.spyOn(commands, 'importChapterTranslation').mockResolvedValue(null)
     render(<CanvasCommandBar />)
     useCompactProcessingControls()
 
     fireEvent.click(screen.getByRole('button', { name: 'Processing settings' }))
     fireEvent.click(screen.getByRole('button', { name: /Scope Page/ }))
     fireEvent.click(screen.getByRole('button', { name: /Entire project/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Export chapter translation request' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Import chapter translation response' }))
+    await waitFor(() => {
+      expect(exportChapter).toHaveBeenCalledOnce()
+      expect(importChapter).toHaveBeenCalledOnce()
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Processing settings' }))
     fireEvent.click(screen.getByRole('button', { name: /Stages 4 stages/ }))
     fireEvent.click(screen.getByRole('button', { name: /Translation/ }))
     fireEvent.click(screen.getByRole('button', { name: /Inpainting/ }))
@@ -1138,6 +1147,9 @@ describe('greenfield editor', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Processing settings' }))
     fireEvent.click(screen.getByRole('button', { name: /Scope Project/ }))
     fireEvent.click(screen.getByRole('button', { name: /Selected pages/ }))
+    expect(
+      screen.queryByRole('button', { name: 'Export chapter translation request' }),
+    ).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: /Stages 2 stages/ }))
     fireEvent.click(screen.getByRole('button', { name: /Translation/ }))
     fireEvent.click(screen.getByRole('button', { name: /Inpainting/ }))

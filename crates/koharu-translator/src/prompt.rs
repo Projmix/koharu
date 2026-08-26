@@ -108,6 +108,30 @@ pub(crate) fn prompts(request: &TranslationRequest) -> anyhow::Result<(String, S
     Ok((translation_system_prompt(request), user))
 }
 
+pub fn parse_translation_response(
+    source: &str,
+    text: &str,
+    request: &TranslationRequest,
+) -> anyhow::Result<Vec<String>> {
+    // Manual imports may be copied from the OpenRouter API response instead of
+    // only the assistant's JSON content. Normalize that wrapper at the seam so
+    // the same strict ID validation is used for both network and file imports.
+    let text = if let Ok(response) = serde_json::from_str::<Value>(text) {
+        response
+            .get("choices")
+            .and_then(Value::as_array)
+            .and_then(|choices| choices.first())
+            .and_then(|choice| choice.get("message"))
+            .and_then(|message| message.get("content"))
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .unwrap_or_else(|| text.to_owned())
+    } else {
+        text.to_owned()
+    };
+    translations(source, &text, request)
+}
+
 pub(crate) fn translations(
     provider: &str,
     text: &str,
@@ -503,6 +527,20 @@ mod tests {
 
         let unknown_field = r#"{"translations":[{"id":"segment:0","page_id":"page:2","region_id":"region:0","source_text":"one","translated_text":"hello","extra":true},{"id":"segment:1","page_id":"page:3","region_id":"region:1","source_text":"two","translated_text":"world"}],"notes":""}"#;
         assert!(translations("test", unknown_field, &request).is_err());
+    }
+
+    #[test]
+    fn manual_import_accepts_full_openrouter_response() {
+        let request = TranslationRequest::new(["one"], Language::Russian);
+        let content = r#"{"translations":[{"id":"segment:0","page_id":"page:1","region_id":"region:0","source_text":"one","translated_text":"один"}],"notes":""}"#;
+        let response = serde_json::json!({
+            "choices": [{ "message": { "content": content } }]
+        });
+
+        assert_eq!(
+            parse_translation_response("openrouter", &response.to_string(), &request).unwrap(),
+            ["один"]
+        );
     }
 
     #[test]
