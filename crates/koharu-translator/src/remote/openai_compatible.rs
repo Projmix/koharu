@@ -9,8 +9,8 @@ use url::Url;
 
 use super::send_json;
 use crate::{
-    GenerationConfig, Model, Provider, Result, TranslationRequest, backend::encode_image,
-    display_name, prompt,
+    GenerationConfig, Model, OcrRequest, Provider, Result, TranslationRequest,
+    backend::encode_image, display_name, prompt,
 };
 
 const DEFAULT_BASE_URL: &str = "http://localhost:11434/v1";
@@ -56,6 +56,31 @@ pub(super) async fn compatible(
     translate(client, backend, request).await
 }
 
+pub(super) async fn compatible_ocr(
+    client: &Client,
+    config: &OpenAiCompatibleConfig,
+    model: &str,
+    generation: &GenerationConfig,
+    request: &OcrRequest,
+) -> Result<String> {
+    let api_key = koharu_secrets::get("openai-compatible")?;
+    let endpoint = endpoint(config.base_url.as_ref(), "chat/completions");
+    let backend = ChatBackend {
+        reasoning_effort: generation
+            .reasoning
+            .map(|enabled| if enabled { "medium" } else { "none" }),
+        ..ChatBackend::new(
+            "openai-compatible",
+            &endpoint,
+            api_key.as_ref().map(ExposeSecret::expose_secret),
+            model,
+            generation,
+            ResponseMode::PromptOnly,
+        )
+    };
+    recognize(client, backend, request).await
+}
+
 pub(super) async fn translate(
     client: &Client,
     backend: ChatBackend<'_>,
@@ -94,9 +119,10 @@ pub(super) async fn translate(
         reasoning_effort: backend.reasoning_effort,
         reasoning: backend.reasoning.map(|enabled| ReasoningConfig { enabled }),
         thinking: backend.thinking.map(|kind| ThinkingConfig { kind }),
-        response_format: backend
-            .response_mode
-            .response_format(request.segments.len()),
+        response_format: backend.response_mode.response_format(
+            "manga_translation",
+            prompt::output_schema(request.segments.len()),
+        ),
     };
     let http = client.post(backend.endpoint).json(&body);
     let http = match backend.api_key {
@@ -111,11 +137,61 @@ pub(super) async fn translate(
         .context("chat completion returned no choices")?
         .message
         .content;
-    Ok(prompt::translations(
-        backend.provider,
-        &text,
-        &request.segments,
-    )?)
+    Ok(prompt::translations(backend.provider, &text, request)?)
+}
+
+pub(super) async fn recognize(
+    client: &Client,
+    backend: ChatBackend<'_>,
+    request: &OcrRequest,
+) -> Result<String> {
+    let (system, user) = prompt::ocr_prompts(request);
+    let body = ChatRequest {
+        model: backend.model,
+        messages: [
+            Message {
+                role: "system",
+                content: MessageContent::Text(system),
+            },
+            Message {
+                role: "user",
+                content: MessageContent::Parts(vec![
+                    ContentPart::Text { text: user },
+                    ContentPart::ImageUrl {
+                        image_url: ImageUrl {
+                            url: encode_image(&request.image)?.data_url(),
+                        },
+                    },
+                ]),
+            },
+        ],
+        temperature: backend.temperature,
+        top_p: backend.top_p,
+        max_tokens: backend.max_tokens,
+        max_completion_tokens: backend.max_completion_tokens,
+        frequency_penalty: backend.frequency_penalty,
+        presence_penalty: backend.presence_penalty,
+        reasoning_effort: backend.reasoning_effort,
+        reasoning: backend.reasoning.map(|enabled| ReasoningConfig { enabled }),
+        thinking: backend.thinking.map(|kind| ThinkingConfig { kind }),
+        response_format: backend
+            .response_mode
+            .response_format("manga_ocr", prompt::ocr_output_schema()),
+    };
+    let http = client.post(backend.endpoint).json(&body);
+    let http = match backend.api_key {
+        Some(api_key) => http.bearer_auth(api_key),
+        None => http,
+    };
+    let response: ChatResponse = send_json(backend.provider, http).await?;
+    let text = response
+        .choices
+        .into_iter()
+        .next()
+        .context("chat completion returned no choices")?
+        .message
+        .content;
+    Ok(prompt::ocr_text(backend.provider, &text)?)
 }
 
 pub(super) struct ChatBackend<'a> {
@@ -180,6 +256,7 @@ pub(super) async fn models(client: &Client, config: &OpenAiCompatibleConfig) -> 
             quantizations: Vec::new(),
             vision: true,
             reasoning: true,
+            reasoning_required: false,
         })
         .collect())
 }
@@ -246,7 +323,11 @@ pub(super) enum ResponseMode {
 }
 
 impl ResponseMode {
-    fn response_format(self, expected: usize) -> Option<ResponseFormat> {
+    fn response_format(
+        self,
+        name: &'static str,
+        schema: serde_json::Value,
+    ) -> Option<ResponseFormat> {
         match self {
             Self::PromptOnly => None,
             Self::JsonObject => Some(ResponseFormat {
@@ -256,9 +337,9 @@ impl ResponseMode {
             Self::JsonSchema => Some(ResponseFormat {
                 kind: "json_schema",
                 json_schema: Some(JsonSchema {
-                    name: "manga_translation",
+                    name,
                     strict: true,
-                    schema: prompt::output_schema(expected),
+                    schema,
                 }),
             }),
         }
@@ -333,6 +414,7 @@ struct ListedModel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::prompt::output_schema;
 
     #[test]
     fn endpoint_preserves_base_path() {
@@ -346,21 +428,34 @@ mod tests {
     #[test]
     fn serializes_provider_specific_response_formats() {
         assert_eq!(
-            serde_json::to_value(ResponseMode::JsonObject.response_format(2).unwrap()).unwrap(),
+            serde_json::to_value(
+                ResponseMode::JsonObject
+                    .response_format("manga_translation", output_schema(2))
+                    .unwrap()
+            )
+            .unwrap(),
             serde_json::json!({ "type": "json_object" })
         );
 
-        let strict =
-            serde_json::to_value(ResponseMode::JsonSchema.response_format(2).unwrap()).unwrap();
+        let strict = serde_json::to_value(
+            ResponseMode::JsonSchema
+                .response_format("manga_translation", output_schema(2))
+                .unwrap(),
+        )
+        .unwrap();
         assert_eq!(strict["type"], "json_schema");
         assert_eq!(strict["json_schema"]["name"], "manga_translation");
         assert_eq!(strict["json_schema"]["strict"], true);
         assert_eq!(
             strict["json_schema"]["schema"]["properties"]["translations"]["items"]["properties"]["id"]
-                ["maximum"],
-            1
+                ["type"],
+            "string"
         );
-        assert!(ResponseMode::PromptOnly.response_format(2).is_none());
+        assert!(
+            ResponseMode::PromptOnly
+                .response_format("manga_translation", output_schema(2))
+                .is_none()
+        );
     }
 
     #[test]
@@ -384,22 +479,49 @@ mod tests {
             frequency_penalty: None,
             presence_penalty: None,
             reasoning_effort: Some("none"),
-            reasoning: None,
+            reasoning: Some(ReasoningConfig { enabled: true }),
             thinking: None,
             response_format: None,
         };
         let value = serde_json::to_value(request).unwrap();
         assert_eq!(value["max_completion_tokens"], 1024);
         assert_eq!(value["reasoning_effort"], "none");
+        assert_eq!(value["reasoning"], serde_json::json!({ "enabled": true }));
         assert!(value.get("max_tokens").is_none());
         assert!(value.get("thinking").is_none());
     }
 
     #[test]
-    fn serializes_reasoning_control() {
+    fn markdown_openrouter_content_reproduces_translation_json_error() {
+        let response: ChatResponse = serde_json::from_value(serde_json::json!({
+            "id": "gen-reproduction",
+            "provider": "Google AI Studio",
+            "model": "google/gemini-3.5-flash-lite",
+            "choices": [{
+                "index": 0,
+                "finish_reason": "stop",
+                "native_finish_reason": "STOP",
+                "message": {
+                    "role": "assistant",
+                    "content": "```json\n{\"translations\":[{\"id\":0,\"page\":1,\"source_text\":\"one\",\"translated_text\":\"один\"}]}\n```",
+                    "reasoning": "I will return the requested translation.",
+                    "reasoning_details": [{
+                        "type": "reasoning.text",
+                        "text": "I will return the requested translation."
+                    }]
+                }
+            }]
+        }))
+        .unwrap();
+        let text = response.choices.into_iter().next().unwrap().message.content;
+        let request = TranslationRequest::new(["one"], crate::Language::Russian);
+
         assert_eq!(
-            serde_json::to_value(ReasoningConfig { enabled: false }).unwrap(),
-            serde_json::json!({ "enabled": false })
+            format!(
+                "{:#}",
+                prompt::translations("openrouter", &text, &request).unwrap_err()
+            ),
+            "openrouter returned invalid translation JSON: expected value at line 1 column 1"
         );
     }
 

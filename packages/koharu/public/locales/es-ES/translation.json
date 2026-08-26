@@ -6,6 +6,7 @@
     "version": "Versión"
   },
   "activity": {
+    "chapter": "Capítulo",
     "dismiss": "Descartar",
     "downloadFailed": "Error en la descarga.",
     "downloadingFiles": "Descargando {{count}} archivos",
@@ -125,12 +126,16 @@
   "inference": {
     "currentPage": "Página actual",
     "currentPageDescription": "Procesa solo la página del lienzo.",
+    "automatic": "Automático",
+    "compactMode": "Usar controles de procesamiento compactos",
     "entireProject": "Proyecto completo",
     "entireProjectDescription": "Procesa todas las páginas de este proyecto.",
+    "expandedMode": "Usar controles de procesamiento ampliados",
     "model": "Modelo",
     "noModel": "Sin modelo",
     "notSet": "Sin definir",
     "output": "Salida",
+    "pageProfile": "Perfil de página",
     "pipelineStages": "Etapas del flujo",
     "providerDefault": "Predeterminado del proveedor",
     "run": "Ejecutar",
@@ -153,7 +158,8 @@
     "stageCount_other": "{{count}} etapas",
     "stages": "Etapas",
     "stop": "Detener",
-    "stopProcessing": "Detener procesamiento"
+    "stopProcessing": "Detener procesamiento",
+    "typing": "Rotulación"
   },
   "inspector": {
     "alignBottom": "Alinear abajo",
@@ -221,6 +227,7 @@
       "cleanup": "Limpieza",
       "dialogue": "Diálogo",
       "freeText": "Texto libre",
+      "onomatopoeia": "Sonido",
       "group": "Grupo",
       "image": "Imagen",
       "paint": "Pintura",
@@ -232,6 +239,7 @@
     "moveDown": "Mover {{name}} abajo",
     "moveUp": "Mover {{name}} arriba",
     "opacityLabel": "Opacidad de {{name}}",
+    "roleLabel": "Tipo de texto de {{name}}",
     "originalArtwork": "Ilustración original",
     "show": "Mostrar {{name}}",
     "sourceLabel": "Texto original de {{name}}",
@@ -241,6 +249,7 @@
   },
   "menu": {
     "about": "Acerca de",
+    "clearProject": "Vaciar proyecto",
     "closeProject": "Cerrar proyecto",
     "delete": "Eliminar selección",
     "discord": "Discord",
@@ -280,6 +289,10 @@
   "navigator": {
     "actionsFor": "Acciones para {{page}}",
     "delete": "Eliminar",
+    "deleteAllAction": "Eliminar todas las páginas",
+    "deleteAllDescription": "Esto elimina todas las páginas ({{count}} en total) y su contenido del proyecto. Puedes deshacer esta acción.",
+    "deleteAllTitle": "¿Eliminar todas las páginas?",
+    "deletingPages": "Eliminando páginas…",
     "emptyDescription": "Importa archivos de imagen o una carpeta para añadir páginas.",
     "emptyTitle": "Aún no hay páginas",
     "filter": "Filtrar páginas",
@@ -310,6 +323,12 @@
     "inpainting": "Relleno",
     "ocr": "OCR",
     "translation": "Traducción"
+  },
+  "phaseShort": {
+    "detection": "Detectar",
+    "inpainting": "Limpiar",
+    "ocr": "OCR",
+    "translation": "Traducir"
   },
   "phaseDescription": {
     "detection": "Localiza el texto en la página.",
@@ -385,9 +404,36 @@
       "options": {
         "bubbleThreshold": "Umbral de bocadillo",
         "negativePrompt": "Indicación negativa",
+        "applyMode": "Modo de aplicación",
+        "fullPage": "Página completa",
+        "mask": "Máscara",
         "panelThreshold": "Umbral de viñeta",
         "prompt": "Indicación",
         "textThreshold": "Umbral de texto"
+      },
+      "ocr": {
+        "api": "API / nube",
+        "apiModel": "Modelo visual de API",
+        "instructions": "Instrucciones de OCR",
+        "instructionsDescription": "Indicaciones para transcripción exacta, orden de lectura, furigana o efectos de sonido.",
+        "instructionsPlaceholder": "Indicaciones opcionales para OCR",
+        "local": "Local (CPU)",
+        "localModel": "Modelo OCR local",
+        "method": "Método de OCR"
+      },
+      "inpainting": {
+        "apiModel": "Modelo de edición de imagen",
+        "localModel": "Modelo local de restauración",
+        "method": "Método de restauración",
+        "options": "Opciones de restauración por API",
+        "promptPreset": "Preajuste del prompt",
+        "promptPresets": {
+          "cleanup-all": "Eliminar todo el texto y las marcas de agua",
+          "cleanup-text": "Eliminar solo el texto",
+          "custom": "Prompt personalizado",
+          "translate-russian": "Sustituir los textos por ruso"
+        },
+        "provider": "Proveedor de imágenes"
       },
       "processing": "Procesando",
       "stages": {
@@ -411,6 +457,7 @@
       "configured": "Configurado",
       "connections": "Conexiones",
       "connectionsDescription": "Las credenciales se almacenan de forma segura en este dispositivo.",
+      "falDescription": "Credencial para los modelos de edición de imágenes de Fal.ai.",
       "credential": "Credencial",
       "credentialLabel": "Credencial de {{provider}}",
       "description": "Conecta proveedores de traducción y modelos de lenguaje.",
@@ -418,7 +465,7 @@
       "title": "Proveedores"
     },
     "shortcuts": {
-      "description": "Los atajos de una tecla están disponibles cuando ningún campo de texto tiene el foco.",
+      "description": "Usa Ctrl más la tecla configurada cuando ningún campo de texto tenga el foco.",
       "inputLabel": "Atajo de {{action}}",
       "title": "Atajos",
       "tools": "Herramientas"
@@ -433,17 +480,22 @@
     },
     "title": "Ajustes",
     "translation": {
-      "description": "Elige un modelo de cualquier proveedor configurado y aplica un conjunto compartido de opciones de traducción y generación.",
-      "instructionsDescription": "Indicaciones sobre nombres, tono, terminología o formato.",
+      "description": "Configura perfiles de traducción separados para páginas y capítulos.",
+      "chapterProfile": "Capítulo",
+      "instructions": "Instrucciones",
+      "instructionsDescription": "El prompt integrado fija los idiomas y el formato JSON. Déjalo vacío para usarlo; el texto se añade como orientación.",
       "instructionsLabel": "Instrucciones de traducción",
       "instructionsPlaceholder": "Indicaciones opcionales para todo el proyecto",
       "model": "Modelo",
+      "pageProfile": "Página",
       "modelDescription": "Las etiquetas de proveedor indican dónde se ejecuta cada modelo; las conexiones se configuran por separado.",
       "modelQuantization": "Cuantización del modelo",
       "output": "Salida",
       "quantization": "Cuantización",
       "quantizationDescription": "Los formatos más pequeños usan menos memoria, normalmente a cambio de calidad.",
       "selectQuantization": "Seleccionar una cuantización",
+      "sourceLanguage": "Idioma de origen",
+      "sourceLanguageDescription": "Elige el idioma de las páginas originales. Sirve de guía tanto para el OCR como para la traducción.",
       "targetLanguageDescription": "Elige el idioma al que se traducirá el texto.",
       "title": "Traducción",
       "translationModel": "Modelo de traducción",
@@ -503,6 +555,7 @@
     "draw": "Dibujar",
     "eraser": "Borrador",
     "increaseBrushSize": "Aumentar tamaño del pincel",
+    "ocr": "Región OCR",
     "pan": "Desplazar",
     "remove": "Eliminar",
     "select": "Seleccionar",

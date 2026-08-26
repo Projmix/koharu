@@ -6,6 +6,7 @@
     "version": "バージョン"
   },
   "activity": {
+    "chapter": "章",
     "dismiss": "閉じる",
     "downloadFailed": "ダウンロードに失敗しました。",
     "downloadingFiles": "{{count}}件のファイルをダウンロード中",
@@ -125,12 +126,16 @@
   "inference": {
     "currentPage": "現在のページ",
     "currentPageDescription": "キャンバスに表示中のページだけを処理します。",
+    "automatic": "自動",
+    "compactMode": "処理コントロールをコンパクト表示",
     "entireProject": "プロジェクト全体",
     "entireProjectDescription": "このプロジェクトの全ページを処理します。",
+    "expandedMode": "処理コントロールを詳細表示",
     "model": "モデル",
     "noModel": "モデルなし",
     "notSet": "未設定",
     "output": "出力",
+    "pageProfile": "ページプロファイル",
     "pipelineStages": "パイプラインの工程",
     "providerDefault": "プロバイダーの既定値",
     "run": "実行",
@@ -153,7 +158,8 @@
     "stageCount_other": "{{count}}工程",
     "stages": "工程",
     "stop": "停止",
-    "stopProcessing": "処理を停止"
+    "stopProcessing": "処理を停止",
+    "typing": "写植"
   },
   "inspector": {
     "alignBottom": "下揃え",
@@ -221,6 +227,7 @@
       "cleanup": "クリーンアップ",
       "dialogue": "台詞",
       "freeText": "自由テキスト",
+      "onomatopoeia": "効果音",
       "group": "グループ",
       "image": "画像",
       "paint": "ペイント",
@@ -232,6 +239,7 @@
     "moveDown": "{{name}}を下へ移動",
     "moveUp": "{{name}}を上へ移動",
     "opacityLabel": "{{name}}の不透明度",
+    "roleLabel": "{{name}}のテキスト種類",
     "originalArtwork": "元のアートワーク",
     "show": "{{name}}を表示",
     "sourceLabel": "{{name}}の原文",
@@ -241,6 +249,7 @@
   },
   "menu": {
     "about": "Koharuについて",
+    "clearProject": "プロジェクトを空にする",
     "closeProject": "プロジェクトを閉じる",
     "delete": "選択項目を削除",
     "discord": "Discord",
@@ -280,6 +289,10 @@
   "navigator": {
     "actionsFor": "{{page}}の操作",
     "delete": "削除",
+    "deleteAllAction": "すべてのページを削除",
+    "deleteAllDescription": "プロジェクト内のすべてのページ（全{{count}}ページ）とその内容を削除します。この操作は元に戻せます。",
+    "deleteAllTitle": "すべてのページを削除しますか？",
+    "deletingPages": "ページを削除中…",
     "emptyDescription": "画像ファイルまたはフォルダーを読み込んでページを追加します。",
     "emptyTitle": "ページがまだありません",
     "filter": "ページを絞り込む",
@@ -308,6 +321,12 @@
   "phase": {
     "detection": "検出",
     "inpainting": "インペイント",
+    "ocr": "OCR",
+    "translation": "翻訳"
+  },
+  "phaseShort": {
+    "detection": "検出",
+    "inpainting": "修復",
     "ocr": "OCR",
     "translation": "翻訳"
   },
@@ -385,9 +404,36 @@
       "options": {
         "bubbleThreshold": "吹き出ししきい値",
         "negativePrompt": "ネガティブプロンプト",
+        "applyMode": "適用モード",
+        "fullPage": "ページ全体",
+        "mask": "マスク",
         "panelThreshold": "コマしきい値",
         "prompt": "プロンプト",
         "textThreshold": "テキストしきい値"
+      },
+      "ocr": {
+        "api": "API / クラウド",
+        "apiModel": "Vision APIモデル",
+        "instructions": "OCR指示",
+        "instructionsDescription": "正確な転記、読み順、ふりがな、効果音に関する指示です。",
+        "instructionsPlaceholder": "OCR固有の指示（任意）",
+        "local": "ローカル（CPU）",
+        "localModel": "ローカルOCRモデル",
+        "method": "OCR方式"
+      },
+      "inpainting": {
+        "apiModel": "画像編集モデル",
+        "localModel": "ローカル修復モデル",
+        "method": "修復方法",
+        "options": "API修復オプション",
+        "promptPreset": "プロンプトプリセット",
+        "promptPresets": {
+          "cleanup-all": "すべての文字と透かしを除去",
+          "cleanup-text": "文字のみを除去",
+          "custom": "カスタムプロンプト",
+          "translate-russian": "文字をロシア語に置換"
+        },
+        "provider": "画像プロバイダー"
       },
       "processing": "処理中",
       "stages": {
@@ -411,6 +457,7 @@
       "configured": "設定済み",
       "connections": "接続",
       "connectionsDescription": "認証情報はこのデバイスに安全に保存されます。",
+      "falDescription": "Fal.ai 画像編集モデルで使用する認証情報です。",
       "credential": "認証情報",
       "credentialLabel": "{{provider}}の認証情報",
       "description": "翻訳および言語モデルのプロバイダーに接続します。",
@@ -418,7 +465,7 @@
       "title": "プロバイダー"
     },
     "shortcuts": {
-      "description": "テキスト入力欄にフォーカスがないとき、単一キーのショートカットを使用できます。",
+      "description": "テキスト入力欄にフォーカスがないときは、Ctrl と設定したキーを使用します。",
       "inputLabel": "{{action}}のショートカット",
       "title": "ショートカット",
       "tools": "ツール"
@@ -433,17 +480,22 @@
     },
     "title": "設定",
     "translation": {
-      "description": "設定済みプロバイダーのモデルを選び、共通の翻訳・生成オプションを適用します。",
-      "instructionsDescription": "名前、語調、用語、書式に関する指示です。",
+      "description": "ページと章の翻訳プロファイルを個別に設定します。",
+      "chapterProfile": "章",
+      "instructions": "指示",
+      "instructionsDescription": "組み込みプロンプトが言語とJSON形式を指定します。空欄ならそのまま使い、入力内容は追加指示になります。",
       "instructionsLabel": "翻訳指示",
       "instructionsPlaceholder": "プロジェクト全体への任意の指示",
       "model": "モデル",
+      "pageProfile": "ページ",
       "modelDescription": "プロバイダー名はモデルの実行場所を示します。接続は別途設定します。",
       "modelQuantization": "モデル量子化",
       "output": "出力",
       "quantization": "量子化",
       "quantizationDescription": "小さい形式はメモリ使用量を抑えますが、通常は品質とのトレードオフがあります。",
       "selectQuantization": "量子化方式を選択",
+      "sourceLanguage": "原文の言語",
+      "sourceLanguageDescription": "原稿ページで使われている言語を選択します。OCR と翻訳の両方のヒントになります。",
       "targetLanguageDescription": "テキストの翻訳先言語を選択します。",
       "title": "翻訳",
       "translationModel": "翻訳モデル",
@@ -503,6 +555,7 @@
     "draw": "描画",
     "eraser": "消しゴム",
     "increaseBrushSize": "ブラシサイズを拡大",
+    "ocr": "OCR領域",
     "pan": "移動",
     "remove": "削除",
     "select": "選択",

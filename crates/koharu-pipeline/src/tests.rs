@@ -33,28 +33,33 @@ async fn stop_is_a_successful_partial_result() {
 #[tokio::test]
 async fn stop_after_a_page_keeps_completed_progress() {
     let translation = TranslationConfig {
-        model: koharu_translator::ModelSelection {
-            provider: koharu_translator::Provider::OpenAi,
-            model: Some("gpt-5.6-luna".to_owned()),
-            quantization: None,
-            vision: true,
-            reasoning: true,
+        page: crate::TranslationProfile {
+            model: koharu_translator::ModelSelection {
+                provider: koharu_translator::Provider::OpenAi,
+                model: Some("gpt-5.6-luna".to_owned()),
+                quantization: None,
+                vision: true,
+                reasoning: true,
+                reasoning_required: false,
+            },
+            ..Default::default()
         },
         ..Default::default()
     };
     let pipeline = pipeline(translation);
     let mut session = koharu_scene::Session::memory().await.unwrap();
+    let mut pages = Vec::new();
     let patch = session
         .snapshot()
         .patch(|edit| {
-            edit.add_page(
+            pages.push(edit.add_page(
                 koharu_scene::PageDraft::new("one", 1.0, 1.0),
                 koharu_scene::At::End,
-            )?;
-            edit.add_page(
+            )?);
+            pages.push(edit.add_page(
                 koharu_scene::PageDraft::new("two", 1.0, 1.0),
                 koharu_scene::At::End,
-            )?;
+            )?);
             Ok(())
         })
         .unwrap();
@@ -65,6 +70,7 @@ async fn stop_after_a_page_keeps_completed_progress() {
         operation: Operation::Only {
             stage: Stage::Translation,
         },
+        scope: Scope::Pages(pages),
         stop,
         progress: Some(std::sync::Arc::new(move |event| {
             if matches!(event, Progress::Skipped { .. }) {
@@ -83,6 +89,60 @@ async fn stop_after_a_page_keeps_completed_progress() {
     assert_eq!(report.status, RunStatus::Stopped);
     assert_eq!(report.completed, 1);
     assert_eq!(report.total, 2);
+}
+
+#[tokio::test]
+async fn selected_stages_resume_by_skipping_completed_work() {
+    let pipeline = pipeline(Default::default());
+    let mut session = koharu_scene::Session::memory().await.unwrap();
+    let mut page = None;
+    let patch = session
+        .snapshot()
+        .patch(|edit| {
+            let id = edit.add_page(
+                koharu_scene::PageDraft::new("page", 100.0, 100.0),
+                koharu_scene::At::End,
+            )?;
+            edit.add_analysis_region::<koharu_scene::TextRegion>(
+                id,
+                koharu_scene::At::End,
+                &koharu_scene::Geometry::rectangle(10.0, 10.0, 20.0, 20.0),
+                None,
+            )?;
+            page = Some(id);
+            Ok(())
+        })
+        .unwrap();
+    let snapshot = session.commit(patch).await.unwrap().snapshot;
+    let page = page.unwrap();
+    let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let captured = events.clone();
+    let request = Request {
+        operation: Operation::Stages {
+            stages: vec![Stage::Detection],
+        },
+        scope: Scope::Pages(vec![page]),
+        progress: Some(std::sync::Arc::new(move |event| {
+            captured.lock().unwrap().push(event);
+        })),
+        ..Request::default()
+    };
+    let mut committer = RejectCommitter;
+
+    let report = pipeline
+        .execute(snapshot, request, &mut committer)
+        .await
+        .unwrap();
+
+    assert_eq!(report.status, RunStatus::Completed);
+    assert_eq!(report.completed, 1);
+    assert!(events.lock().unwrap().iter().any(|event| matches!(
+        event,
+        Progress::Skipped {
+            target: StageTarget::Page(target),
+            stage: Stage::Detection,
+        } if *target == page
+    )));
 }
 
 struct RejectCommitter;

@@ -44,6 +44,7 @@ pub(super) async fn models(client: &Client) -> Result<Vec<Model>> {
                 quantizations: Vec::new(),
                 vision: model.capabilities.image_input.supported,
                 reasoning,
+                reasoning_required: false,
             }
         })
         .collect())
@@ -82,7 +83,7 @@ pub(super) async fn translate(
         .into_iter()
         .find_map(|block| (block.kind == "text").then_some(block.text).flatten())
         .context("Claude returned no text content")?;
-    Ok(prompt::translations("claude", &text, &request.segments)?)
+    Ok(prompt::translations("claude", &text, request)?)
 }
 
 #[derive(Serialize)]

@@ -10,9 +10,9 @@ use anyhow::{Context as _, Result};
 use clap::{Parser, ValueEnum};
 use koharu_config::Config;
 use koharu_pipeline::{
-    Committer, DetectionModel, Flux2KleinConfig, InpaintingModel, KoharuLayoutRFDetrSeg2XLConfig,
-    OcrModel, Operation, Pipeline, PipelineConfig, Progress, Request, RoremMixedConfig, Scope,
-    StageOutput, TranslationConfig,
+    Committer, DetectionModel, Flux2KleinConfig, InpaintingConfig, KoharuLayoutRFDetrSeg2XLConfig,
+    LocalInpaintingModel, OcrConfig, OcrModel, Operation, Pipeline, PipelineConfig, Progress,
+    Request, RoremMixedConfig, Scope, StageOutput, TranslationConfig,
 };
 use koharu_rasterizer::{RasterOptions, Rasterizer};
 use koharu_renderer::Renderer;
@@ -97,32 +97,56 @@ impl Arguments {
                     )
                 }
             },
-            ocr: match self.ocr {
-                OcrChoice::PaddleOcrVl1_6 => OcrModel::PaddleOcrVl1_6,
-                OcrChoice::MangaOcr => OcrModel::MangaOcr,
-                OcrChoice::BaberuOcr => OcrModel::BaberuOcr,
+            ocr: OcrConfig {
+                local_model: match self.ocr {
+                    OcrChoice::PaddleOcrVl1_6 => OcrModel::PaddleOcrVl1_6,
+                    OcrChoice::MangaOcr => OcrModel::MangaOcr,
+                    OcrChoice::BaberuOcr => OcrModel::BaberuOcr,
+                },
+                ..OcrConfig::default()
             },
             translation: TranslationConfig {
-                model: ModelSelection {
-                    provider: Provider::Local,
-                    model: Some(self.llm.clone()),
-                    quantization: None,
-                    vision: true,
-                    reasoning: true,
-                },
-                generation: GenerationConfig::default(),
+                source_language: Language::Japanese,
                 target_language: self.target_language,
-                instructions: self.translation_instructions.clone(),
+                page: koharu_pipeline::TranslationProfile {
+                    model: ModelSelection {
+                        provider: Provider::Local,
+                        model: Some(self.llm.clone()),
+                        quantization: None,
+                        vision: true,
+                        reasoning: true,
+                        reasoning_required: false,
+                    },
+                    generation: GenerationConfig::default(),
+                    instructions: self.translation_instructions.clone(),
+                    unit_policy: koharu_pipeline::TranslationUnitPolicy::PageOnly,
+                },
+                chapter: koharu_pipeline::TranslationProfile {
+                    model: ModelSelection {
+                        provider: Provider::Local,
+                        model: Some(self.llm.clone()),
+                        quantization: None,
+                        vision: false,
+                        reasoning: true,
+                        reasoning_required: false,
+                    },
+                    generation: GenerationConfig::default(),
+                    instructions: self.translation_instructions.clone(),
+                    unit_policy: koharu_pipeline::TranslationUnitPolicy::AdaptiveV1,
+                },
             },
-            inpainting: match self.inpainting {
-                InpaintingChoice::LaMa => InpaintingModel::LaMa {},
-                InpaintingChoice::AotInpainting => InpaintingModel::AotInpainting {},
-                InpaintingChoice::Flux2Klein => {
-                    InpaintingModel::Flux2Klein(Flux2KleinConfig::default())
-                }
-                InpaintingChoice::RoremMixed => {
-                    InpaintingModel::RoremMixed(RoremMixedConfig::default())
-                }
+            inpainting: InpaintingConfig {
+                local_model: match self.inpainting {
+                    InpaintingChoice::LaMa => LocalInpaintingModel::LaMa {},
+                    InpaintingChoice::AotInpainting => LocalInpaintingModel::AotInpainting {},
+                    InpaintingChoice::Flux2Klein => {
+                        LocalInpaintingModel::Flux2Klein(Flux2KleinConfig::default())
+                    }
+                    InpaintingChoice::RoremMixed => {
+                        LocalInpaintingModel::RoremMixed(RoremMixedConfig::default())
+                    }
+                },
+                ..InpaintingConfig::default()
             },
             processor: Default::default(),
         }
@@ -270,12 +294,12 @@ mod tests {
         ])
         .unwrap();
         assert!(matches!(
-            arguments.pipeline_config().ocr,
+            arguments.pipeline_config().ocr.local_model,
             OcrModel::MangaOcr
         ));
         assert!(matches!(
-            arguments.pipeline_config().inpainting,
-            InpaintingModel::Flux2Klein(_)
+            arguments.pipeline_config().inpainting.local_model,
+            LocalInpaintingModel::Flux2Klein(_)
         ));
     }
 }

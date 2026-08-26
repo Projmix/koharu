@@ -6,6 +6,7 @@
     "version": "Sürüm"
   },
   "activity": {
+    "chapter": "Bölüm",
     "dismiss": "Kapat",
     "downloadFailed": "İndirme başarısız oldu.",
     "downloadingFiles": "{{count}} dosya indiriliyor",
@@ -125,12 +126,16 @@
   "inference": {
     "currentPage": "Geçerli sayfa",
     "currentPageDescription": "Yalnızca tuvaldeki sayfayı işler.",
+    "automatic": "Otomatik",
+    "compactMode": "İşleme denetimlerini daralt",
     "entireProject": "Tüm proje",
     "entireProjectDescription": "Bu projedeki tüm sayfaları işler.",
+    "expandedMode": "İşleme denetimlerini genişlet",
     "model": "Model",
     "noModel": "Model yok",
     "notSet": "Ayarlanmadı",
     "output": "Çıktı",
+    "pageProfile": "Sayfa profili",
     "pipelineStages": "İşlem hattı aşamaları",
     "providerDefault": "Sağlayıcı varsayılanı",
     "run": "Çalıştır",
@@ -153,7 +158,8 @@
     "stageCount_other": "{{count}} aşama",
     "stages": "Aşamalar",
     "stop": "Durdur",
-    "stopProcessing": "İşlemeyi durdur"
+    "stopProcessing": "İşlemeyi durdur",
+    "typing": "Dizgi"
   },
   "inspector": {
     "alignBottom": "Alta hizala",
@@ -221,6 +227,7 @@
       "cleanup": "Temizleme",
       "dialogue": "Diyalog",
       "freeText": "Serbest metin",
+      "onomatopoeia": "Ses",
       "group": "Grup",
       "image": "Görüntü",
       "paint": "Boyama",
@@ -232,6 +239,7 @@
     "moveDown": "{{name}} öğesini aşağı taşı",
     "moveUp": "{{name}} öğesini yukarı taşı",
     "opacityLabel": "{{name}} opaklığı",
+    "roleLabel": "{{name}} metin türü",
     "originalArtwork": "Orijinal çizim",
     "show": "{{name}} öğesini göster",
     "sourceLabel": "{{name}} kaynak metni",
@@ -241,6 +249,7 @@
   },
   "menu": {
     "about": "Hakkında",
+    "clearProject": "Projeyi temizle",
     "closeProject": "Projeyi Kapat",
     "delete": "Seçilenleri Sil",
     "discord": "Discord",
@@ -280,6 +289,10 @@
   "navigator": {
     "actionsFor": "{{page}} için eylemler",
     "delete": "Sil",
+    "deleteAllAction": "Tüm sayfaları sil",
+    "deleteAllDescription": "Bu işlem projedeki tüm sayfaları (toplam {{count}}) ve içeriklerini kaldırır. Bu işlemi geri alabilirsiniz.",
+    "deleteAllTitle": "Tüm sayfalar silinsin mi?",
+    "deletingPages": "Sayfalar siliniyor…",
     "emptyDescription": "Sayfa eklemek için görüntü dosyalarını veya bir klasörü içe aktarın.",
     "emptyTitle": "Henüz sayfa yok",
     "filter": "Sayfaları filtrele",
@@ -308,6 +321,12 @@
   "phase": {
     "detection": "Algılama",
     "inpainting": "Doldurma",
+    "ocr": "OCR",
+    "translation": "Çeviri"
+  },
+  "phaseShort": {
+    "detection": "Algı",
+    "inpainting": "Temizle",
     "ocr": "OCR",
     "translation": "Çeviri"
   },
@@ -385,9 +404,36 @@
       "options": {
         "bubbleThreshold": "Konuşma balonu eşiği",
         "negativePrompt": "Negatif istem",
+        "applyMode": "Uygulama modu",
+        "fullPage": "Tam sayfa",
+        "mask": "Maske",
         "panelThreshold": "Panel eşiği",
         "prompt": "İstem",
         "textThreshold": "Metin eşiği"
+      },
+      "ocr": {
+        "api": "API / bulut",
+        "apiModel": "Vision API modeli",
+        "instructions": "OCR talimatları",
+        "instructionsDescription": "Kesin aktarım, okuma sırası, furigana veya ses efektleri için yönergeler.",
+        "instructionsPlaceholder": "İsteğe bağlı OCR yönergeleri",
+        "local": "Yerel (CPU)",
+        "localModel": "Yerel OCR modeli",
+        "method": "OCR yöntemi"
+      },
+      "inpainting": {
+        "apiModel": "Görüntü düzenleme modeli",
+        "localModel": "Yerel restorasyon modeli",
+        "method": "Restorasyon yöntemi",
+        "options": "API restorasyon seçenekleri",
+        "promptPreset": "İstem ön ayarı",
+        "promptPresets": {
+          "cleanup-all": "Tüm metni ve filigranları kaldır",
+          "cleanup-text": "Yalnızca metni kaldır",
+          "custom": "Özel istem",
+          "translate-russian": "Yazıları Rusça ile değiştir"
+        },
+        "provider": "Görüntü sağlayıcısı"
       },
       "processing": "İşleniyor",
       "stages": {
@@ -411,6 +457,7 @@
       "configured": "Yapılandırıldı",
       "connections": "Bağlantılar",
       "connectionsDescription": "Kimlik bilgileri bu cihazda güvenli bir şekilde saklanır.",
+      "falDescription": "Fal.ai görüntü düzenleme modellerinin kullandığı kimlik bilgisi.",
       "credential": "Kimlik bilgisi",
       "credentialLabel": "{{provider}} kimlik bilgisi",
       "description": "Çeviri ve dil modeli sağlayıcılarını bağlayın.",
@@ -418,7 +465,7 @@
       "title": "Sağlayıcılar"
     },
     "shortcuts": {
-      "description": "Tek tuşlu kısayollar, bir metin alanına odaklanılmadığında kullanılabilir.",
+      "description": "Bir metin alanına odaklanılmadığında Ctrl ile ayarlanan tuşu kullanın.",
       "inputLabel": "{{action}} kısayolu",
       "title": "Kısayollar",
       "tools": "Araçlar"
@@ -433,17 +480,22 @@
     },
     "title": "Ayarlar",
     "translation": {
-      "description": "Yapılandırılmış bir sağlayıcı modeli seçin ve ortak çeviri ile üretim seçeneklerini uygulayın.",
-      "instructionsDescription": "Adlar, ton, terminoloji veya biçimlendirme yönergeleri.",
+      "description": "Sayfa ve bölüm çevirisi için ayrı profiller yapılandırın.",
+      "chapterProfile": "Bölüm",
+      "instructions": "Talimatlar",
+      "instructionsDescription": "Yerleşik istem dilleri ve JSON biçimini belirler. Olduğu gibi kullanmak için boş bırakın; metin ek yönerge olur.",
       "instructionsLabel": "Çeviri talimatları",
       "instructionsPlaceholder": "Proje genelinde isteğe bağlı yönergeler",
       "model": "Model",
+      "pageProfile": "Sayfa",
       "modelDescription": "Sağlayıcı etiketleri her modelin nerede çalıştığını gösterir; bağlantılar ayrı yapılandırılır.",
       "modelQuantization": "Model niceleme",
       "output": "Çıktı",
       "quantization": "Niceleme",
       "quantizationDescription": "Daha küçük biçimler daha az bellek kullanır, ancak genellikle kalite düşer.",
       "selectQuantization": "Niceleme seç",
+      "sourceLanguage": "Kaynak dil",
+      "sourceLanguageDescription": "Kaynak sayfalarda kullanılan dili seçin. Bu bilgi hem OCR'a hem de çeviriye yol gösterir.",
       "targetLanguageDescription": "Metnin çevrileceği dili seçin.",
       "title": "Çeviri",
       "translationModel": "Çeviri modeli",
@@ -503,6 +555,7 @@
     "draw": "Çizim",
     "eraser": "Silgi",
     "increaseBrushSize": "Fırça boyutunu artır",
+    "ocr": "OCR alanı",
     "pan": "Kaydır",
     "remove": "Kaldır",
     "select": "Seç",

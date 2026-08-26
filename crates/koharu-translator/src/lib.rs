@@ -2,7 +2,6 @@
 
 mod backend;
 mod error;
-mod json;
 mod language;
 mod local;
 mod model;
@@ -17,7 +16,11 @@ use koharu_ml::Device;
 use error::{Error, Result};
 use local::LocalTranslator;
 
-pub use backend::{TranslationContext, TranslationRequest};
+const MAX_ESTIMATED_CHAPTER_INPUT_TOKENS: usize = 100_000;
+
+pub use backend::{
+    OcrRequest, TranslationContext, TranslationRequest, TranslationSegmentMetadata, TranslationUnit,
+};
 pub use language::Language;
 pub use model::{GenerationConfig, Model, ModelSelection, Quantization};
 pub(crate) use model::{ModelGeneration, QuantizationDefinition, display_name};
@@ -137,6 +140,16 @@ impl Translator {
             request.remove_image();
         }
 
+        if request.is_chapter() {
+            let (_, payload) = prompt::prompts(&request)?;
+            let estimated_tokens = payload.len().div_ceil(4);
+            anyhow::ensure!(
+                estimated_tokens <= MAX_ESTIMATED_CHAPTER_INPUT_TOKENS,
+                "chapter translation request is estimated at {estimated_tokens} input tokens, above the conservative limit of {MAX_ESTIMATED_CHAPTER_INPUT_TOKENS}; {}",
+                request.chapter_split_hint()
+            );
+        }
+
         let expected = request.segments.len();
         let translated = if provider == Provider::Local {
             self.local(selection)
@@ -157,6 +170,51 @@ impl Translator {
         }
         tracing::Span::current().record("outcome", "completed");
         Ok((provider_id, translated))
+    }
+
+    #[tracing::instrument(
+        target = "koharu_metrics",
+        name = "model_run",
+        skip_all,
+        fields(
+            stage = "ocr",
+            provider = %selection.provider,
+            model = selection.model.as_deref().unwrap_or("provider_default"),
+            outcome = tracing::field::Empty,
+        ),
+    )]
+    pub async fn recognize(
+        &self,
+        selection: &ModelSelection,
+        generation: GenerationConfig,
+        mut request: OcrRequest,
+    ) -> anyhow::Result<(&'static str, String)> {
+        anyhow::ensure!(
+            selection.provider != Provider::Local,
+            "API OCR requires a remote provider"
+        );
+        anyhow::ensure!(
+            selection.vision,
+            "the selected OCR model does not accept images"
+        );
+        let model = selection.model.as_deref().ok_or_else(|| {
+            anyhow::anyhow!("{} requires a selected OCR model", selection.provider)
+        })?;
+        request.prepare_image()?;
+        let generation = generation.for_model(selection);
+        let providers = self.providers.read()?.clone();
+        let text = remote::recognize(
+            &self.client,
+            &providers,
+            selection.provider,
+            model,
+            &generation,
+            &request,
+        )
+        .await?;
+        let provider: &'static str = selection.provider.into();
+        tracing::Span::current().record("outcome", "completed");
+        Ok((provider, text))
     }
 
     #[tracing::instrument(skip_all)]
@@ -201,6 +259,7 @@ mod tests {
             quantization: None,
             vision: true,
             reasoning: true,
+            reasoning_required: false,
         }
     }
 
@@ -227,5 +286,34 @@ mod tests {
                 ..GenerationConfig::default()
             }
         ));
+    }
+
+    #[tokio::test]
+    async fn oversized_chapter_is_rejected_before_provider_request() {
+        let translator = Translator::from_config(
+            Device::cpu(),
+            koharu_config::Config::memory(ProvidersConfig::default()),
+        )
+        .unwrap();
+        let request = TranslationRequest::new(["x".repeat(450_000)], Language::English)
+            .with_page_numbers([1])
+            .unwrap();
+        let selection = ModelSelection {
+            provider: Provider::OpenRouter,
+            model: Some("test/model".to_owned()),
+            quantization: None,
+            vision: false,
+            reasoning: false,
+            reasoning_required: false,
+        };
+
+        let error = translator
+            .translate(&selection, GenerationConfig::default(), request)
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("above the conservative limit"), "{error}");
+        assert!(error.contains("Try two chapter parts"), "{error}");
     }
 }

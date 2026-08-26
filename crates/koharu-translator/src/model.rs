@@ -39,7 +39,9 @@ impl Default for GenerationConfig {
 impl GenerationConfig {
     pub(crate) fn for_model(self, model: &ModelSelection) -> Self {
         Self {
-            reasoning: if model.reasoning {
+            reasoning: if model.reasoning_required {
+                Some(true)
+            } else if model.reasoning {
                 self.reasoning
             } else {
                 None
@@ -61,6 +63,8 @@ pub struct ModelSelection {
     pub vision: bool,
     #[serde(default)]
     pub reasoning: bool,
+    #[serde(default)]
+    pub reasoning_required: bool,
 }
 
 impl Default for ModelSelection {
@@ -71,6 +75,7 @@ impl Default for ModelSelection {
             quantization: Some(crate::local::DEFAULT_QUANTIZATION.to_owned()),
             vision: true,
             reasoning: true,
+            reasoning_required: false,
         }
     }
 }
@@ -89,6 +94,7 @@ pub struct Model {
     pub quantizations: Vec<Quantization>,
     pub vision: bool,
     pub reasoning: bool,
+    pub reasoning_required: bool,
 }
 
 impl Model {
@@ -100,6 +106,7 @@ impl Model {
             quantizations: Vec::new(),
             vision: false,
             reasoning: false,
+            reasoning_required: false,
         }
     }
 }
@@ -189,6 +196,7 @@ mod tests {
             quantization: None,
             vision,
             reasoning,
+            reasoning_required: false,
         }
     }
 
@@ -209,6 +217,24 @@ mod tests {
     }
 
     #[test]
+    fn mandatory_reasoning_cannot_be_disabled() {
+        let required = ModelSelection {
+            provider: Provider::OpenRouter,
+            model: Some("google/gemini-3.5-flash-lite".to_owned()),
+            quantization: None,
+            vision: true,
+            reasoning: true,
+            reasoning_required: true,
+        };
+        let generation = GenerationConfig {
+            reasoning: Some(false),
+            ..GenerationConfig::default()
+        };
+
+        assert_eq!(generation.for_model(&required).reasoning, Some(true));
+    }
+
+    #[test]
     fn model_selection_defaults_missing_capabilities() {
         let selection: ModelSelection = serde_json::from_value(serde_json::json!({
             "provider": "lm-studio",
@@ -218,5 +244,6 @@ mod tests {
         .unwrap();
         assert!(!selection.vision);
         assert!(!selection.reasoning);
+        assert!(!selection.reasoning_required);
     }
 }

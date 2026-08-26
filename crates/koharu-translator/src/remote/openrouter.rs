@@ -8,7 +8,7 @@ use reqwest::Client;
 use serde::Deserialize;
 
 use super::openai_compatible::{ChatBackend, ResponseMode};
-use crate::{GenerationConfig, Model, Provider, Result, TranslationRequest};
+use crate::{GenerationConfig, Model, OcrRequest, Provider, Result, TranslationRequest};
 
 const CHAT_URL: &str = "https://openrouter.ai/api/v1/chat/completions";
 const MODELS_URL: &str = "https://openrouter.ai/api/v1/models";
@@ -34,10 +34,33 @@ pub(super) async fn translate(
             Some(api_key.expose_secret()),
             model,
             generation,
-            ResponseMode::PromptOnly,
+            ResponseMode::JsonSchema,
         )
     };
     super::openai_compatible::translate(client, backend, request).await
+}
+
+pub(super) async fn recognize(
+    client: &Client,
+    _config: &OpenRouterConfig,
+    model: &str,
+    generation: &GenerationConfig,
+    request: &OcrRequest,
+) -> Result<String> {
+    let api_key =
+        koharu_secrets::get("openrouter")?.context("openrouter API key is not configured")?;
+    let backend = ChatBackend {
+        reasoning: generation.reasoning,
+        ..ChatBackend::new(
+            "openrouter",
+            CHAT_URL,
+            Some(api_key.expose_secret()),
+            model,
+            generation,
+            ResponseMode::PromptOnly,
+        )
+    };
+    super::openai_compatible::recognize(client, backend, request).await
 }
 
 pub(super) async fn models(client: &Client) -> Result<Vec<Model>> {
@@ -53,22 +76,7 @@ pub(super) async fn models(client: &Client) -> Result<Vec<Model>> {
         Ok(discovered) => discovered
             .data
             .into_iter()
-            .map(|model| Model {
-                provider: Provider::OpenRouter,
-                name: model.name,
-                model: Some(model.id),
-                quantizations: Vec::new(),
-                vision: model
-                    .architecture
-                    .input_modalities
-                    .iter()
-                    .any(|modality| modality == "image"),
-                reasoning: model.reasoning.is_some()
-                    || model
-                        .supported_parameters
-                        .iter()
-                        .any(|parameter| parameter == "reasoning"),
-            })
+            .map(ListedModel::into_model)
             .collect(),
         Err(error) => {
             tracing::warn!(%error, "failed to list OpenRouter models");
@@ -91,8 +99,36 @@ struct ListedModel {
     reasoning: Option<ReasoningCapabilities>,
 }
 
+impl ListedModel {
+    fn into_model(self) -> Model {
+        Model {
+            provider: Provider::OpenRouter,
+            name: self.name,
+            model: Some(self.id),
+            quantizations: Vec::new(),
+            vision: self
+                .architecture
+                .input_modalities
+                .iter()
+                .any(|modality| modality == "image"),
+            reasoning: self.reasoning.is_some()
+                || self
+                    .supported_parameters
+                    .iter()
+                    .any(|parameter| parameter == "reasoning"),
+            reasoning_required: self
+                .reasoning
+                .as_ref()
+                .is_some_and(|reasoning| reasoning.mandatory),
+        }
+    }
+}
+
 #[derive(Deserialize)]
-struct ReasoningCapabilities {}
+struct ReasoningCapabilities {
+    #[serde(default)]
+    mandatory: bool,
+}
 
 #[derive(Deserialize)]
 struct Architecture {
@@ -104,6 +140,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn translation_requests_strict_structured_output() {
+        let source = include_str!("openrouter.rs");
+        let translation = source
+            .split_once("pub(super) async fn translate")
+            .unwrap()
+            .1
+            .split_once("pub(super) async fn recognize")
+            .unwrap()
+            .0;
+
+        assert!(
+            translation.contains("ResponseMode::JsonSchema"),
+            "OpenRouter translation currently relies only on prompt wording, so a model may return markdown or prose that the strict importer cannot parse"
+        );
+    }
+
+    #[test]
     fn reads_reasoning_capability_from_model_list() {
         let response: ModelsResponse = serde_json::from_value(serde_json::json!({
             "data": [
@@ -113,6 +166,7 @@ mod tests {
                     "architecture": { "input_modalities": ["text"] },
                     "supported_parameters": ["reasoning"],
                     "reasoning": {
+                        "mandatory": true,
                         "supported_efforts": ["high", "medium", "low"]
                     }
                 },
@@ -125,7 +179,14 @@ mod tests {
             ]
         }))
         .unwrap();
-        assert!(response.data[0].reasoning.is_some());
-        assert!(response.data[1].reasoning.is_none());
+        let models = response
+            .data
+            .into_iter()
+            .map(ListedModel::into_model)
+            .collect::<Vec<_>>();
+        assert!(models[0].reasoning);
+        assert!(models[0].reasoning_required);
+        assert!(!models[1].reasoning);
+        assert!(!models[1].reasoning_required);
     }
 }

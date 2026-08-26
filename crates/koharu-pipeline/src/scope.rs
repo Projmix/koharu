@@ -162,14 +162,7 @@ fn semantic_closure(snapshot: &Snapshot, mut entities: BTreeSet<EntityId>) -> BT
             .chain(snapshot.relations_to(entity, None))
         {
             let value = relation.value();
-            if ![
-                Presents::KIND,
-                RecognizedFrom::KIND,
-                FitsTo::KIND,
-                FlowsIn::KIND,
-                Inside::KIND,
-            ]
-            .contains(&value.kind.as_str())
+            if ![Presents::KIND, RecognizedFrom::KIND, FitsTo::KIND].contains(&value.kind.as_str())
             {
                 continue;
             }
@@ -177,6 +170,14 @@ fn semantic_closure(snapshot: &Snapshot, mut entities: BTreeSet<EntityId>) -> BT
                 if entities.insert(related) {
                     pending.push_back(related);
                 }
+            }
+        }
+    }
+    for entity in entities.iter().copied().collect::<Vec<_>>() {
+        for relation in snapshot.relations_from(entity, None) {
+            let value = relation.value();
+            if [FlowsIn::KIND, Inside::KIND].contains(&value.kind.as_str()) {
+                entities.insert(value.target);
             }
         }
     }
@@ -228,4 +229,76 @@ pub(crate) fn geometry_extents(geometry: &Geometry) -> Option<(f64, f64, f64, f6
         max_y = max_y.max(point.y);
     }
     Some((min_x, min_y, max_x, max_y))
+}
+
+#[cfg(test)]
+mod tests {
+    use koharu_scene::{
+        At, BubbleRegion, FlowsIn, Geometry, Inside, Origin, PageDraft, RecognizedFrom, Session,
+        TextLayout, TextLayoutKind, TextRegion,
+    };
+
+    use super::*;
+
+    #[tokio::test]
+    async fn entity_scope_keeps_a_bubble_as_context_without_selecting_its_siblings() {
+        let mut session = Session::memory().await.unwrap();
+        let mut edit = session.snapshot().edit();
+        let page = edit
+            .add_page(PageDraft::new("page", 100.0, 100.0), At::End)
+            .unwrap();
+        let bubble = edit
+            .add_analysis_region::<BubbleRegion>(
+                page,
+                At::End,
+                &Geometry::rectangle(5.0, 5.0, 90.0, 90.0),
+                None,
+            )
+            .unwrap();
+        let mut add_text = |x| {
+            let region = edit
+                .add_analysis_region::<TextRegion>(
+                    page,
+                    At::End,
+                    &Geometry::rectangle(x, 20.0, 20.0, 20.0),
+                    None,
+                )
+                .unwrap();
+            let content = edit.add_text_content(page, At::End).unwrap();
+            let layer = edit
+                .add_text_layer(
+                    page,
+                    At::End,
+                    content,
+                    &TextLayout {
+                        origin: Origin::User,
+                        kind: TextLayoutKind::Paragraph,
+                    },
+                )
+                .unwrap();
+            edit.relate::<RecognizedFrom>(content, region).unwrap();
+            edit.relate::<Inside>(region, bubble).unwrap();
+            edit.relate::<FlowsIn>(layer, bubble).unwrap();
+            (region, content, layer)
+        };
+        let selected = add_text(15.0);
+        let sibling = add_text(55.0);
+        session.commit(edit.finish().unwrap()).await.unwrap();
+
+        let scope = NormalizedScope::new(
+            &session.snapshot(),
+            &Scope::Entities(vec![selected.0]),
+            &[Stage::Ocr],
+        )
+        .unwrap();
+        let entities = scope.entities().unwrap();
+
+        assert!(entities.contains(&selected.0));
+        assert!(entities.contains(&selected.1));
+        assert!(entities.contains(&selected.2));
+        assert!(entities.contains(&bubble));
+        assert!(!entities.contains(&sibling.0));
+        assert!(!entities.contains(&sibling.1));
+        assert!(!entities.contains(&sibling.2));
+    }
 }

@@ -7,6 +7,7 @@ import type {
   Download,
   EntityId,
   Job,
+  InpaintingModelChoice,
   Model,
   Frame,
   Preferences,
@@ -16,7 +17,15 @@ import type {
 } from '@koharu/bridge/protocol'
 import { toast } from '@koharu/ui/components/toast'
 
-export type CanvasTool = 'select' | 'text' | 'draw' | 'eraser' | 'color_picker' | 'remove' | 'pan'
+export type CanvasTool =
+  | 'select'
+  | 'text'
+  | 'ocr'
+  | 'draw'
+  | 'eraser'
+  | 'color_picker'
+  | 'remove'
+  | 'pan'
 export const MIN_BRUSH_DIAMETER = 1
 export const MAX_BRUSH_DIAMETER = 128
 
@@ -38,6 +47,7 @@ interface KoharuStore {
   initialized: boolean
   preferences: Preferences | null
   translationModels: Model[]
+  inpaintingModels: InpaintingModelChoice[]
   resources: ModelResources | null
   jobs: Record<string, Job>
   downloads: Record<string, Download>
@@ -74,6 +84,7 @@ interface KoharuStore {
 export const defaultShortcuts: Shortcuts = {
   select: 'v',
   text: 't',
+  ocr: 'o',
   draw: 'b',
   eraser: 'e',
   color_picker: 'i',
@@ -86,6 +97,7 @@ export const useKoharuStore = create<KoharuStore>()((set) => ({
   initialized: false,
   preferences: null,
   translationModels: [],
+  inpaintingModels: [],
   resources: null,
   jobs: {},
   downloads: {},
@@ -164,6 +176,10 @@ export function receivePreferences(preferences: Preferences): void {
 
 export function receiveTranslationModels(translationModels: Model[]): void {
   useKoharuStore.setState({ translationModels })
+}
+
+export function receiveInpaintingModels(inpaintingModels: InpaintingModelChoice[]): void {
+  useKoharuStore.setState({ inpaintingModels })
 }
 
 export function receiveResources(resources: ModelResources): void {

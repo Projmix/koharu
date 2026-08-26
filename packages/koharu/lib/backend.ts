@@ -8,12 +8,19 @@ import type {
   TypesettingConfig,
 } from '@koharu/bridge/protocol'
 
-import { receiveError, receivePreferences, receiveTranslationModels } from './store'
+import {
+  receiveError,
+  receiveInpaintingModels,
+  receivePreferences,
+  receiveTranslationModels,
+} from './store'
 
 type Command<Args extends unknown[], Result> = (...args: Args) => Promise<Result>
 
 let translationModelsRequest: Promise<void> | null = null
 let translationModelsGeneration = 0
+let inpaintingModelsRequest: Promise<void> | null = null
+let inpaintingModelsGeneration = 0
 let preferencesWriteGeneration = 0
 let preferencesWriteQueue: Promise<void> = Promise.resolve()
 
@@ -70,6 +77,21 @@ export function refreshTranslationModels(force = false): Promise<void> {
       if (translationModelsRequest === request) translationModelsRequest = null
     })
   translationModelsRequest = request
+  return request
+}
+
+export function refreshInpaintingModels(force = false): Promise<void> {
+  if (!force && inpaintingModelsRequest) return inpaintingModelsRequest
+
+  const generation = ++inpaintingModelsGeneration
+  const request = call(commands.getInpaintingModels)
+    .then((models) => {
+      if (generation === inpaintingModelsGeneration) receiveInpaintingModels(models)
+    })
+    .finally(() => {
+      if (inpaintingModelsRequest === request) inpaintingModelsRequest = null
+    })
+  inpaintingModelsRequest = request
   return request
 }
 

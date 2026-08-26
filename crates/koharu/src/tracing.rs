@@ -1,4 +1,8 @@
-use std::time::{Duration, Instant};
+use std::{
+    fmt::Arguments,
+    io,
+    time::{Duration, Instant},
+};
 
 use console::{Style, Term, measure_text_width, style};
 use tracing::field::{Field, Visit};
@@ -263,7 +267,7 @@ fn print_span(
     let dur_s = ds.apply_to(format!("{:>w$}", fmt_dur(duration), w = DUR_W));
     let pct_s = style(format!("{:>4.0}%", ratio * 100.0)).dim();
 
-    eprintln!("{g}{styled_label}{fill}{bar} {dur_s} {pct_s}");
+    write_stderr(format_args!("{g}{styled_label}{fill}{bar} {dur_s} {pct_s}"));
 
     print_tree(children, root_dur, depth + 1);
 }
@@ -276,7 +280,7 @@ fn print_event(level: &Level, message: &str, depth: usize) {
         Level::INFO => style("ℹ").cyan(),
         _ => style("·").dim(),
     };
-    eprintln!("{g}{icon} {}", style(message).dim());
+    write_stderr(format_args!("{g}{icon} {}", style(message).dim()));
 }
 
 fn print_tree(nodes: &[Node], root_dur: Duration, depth: usize) {
@@ -307,7 +311,7 @@ fn print_root(node: &Node) {
             children,
             ..
         } => {
-            eprintln!();
+            write_stderr(format_args!(""));
             print_span(
                 name,
                 fields,
@@ -322,6 +326,17 @@ fn print_root(node: &Node) {
             print_event(level, message, 0);
         }
     }
+}
+
+/// Console output is diagnostic only. A closed parent console must not turn a
+/// tracing event into a process panic while the desktop app is shutting down.
+fn write_stderr(arguments: Arguments<'_>) {
+    let mut stderr = io::stderr().lock();
+    write_line(&mut stderr, arguments);
+}
+
+fn write_line(writer: &mut impl io::Write, arguments: Arguments<'_>) {
+    let _ = writeln!(writer, "{arguments}");
 }
 
 // ---------------------------------------------------------------------------
@@ -523,5 +538,25 @@ mod tests {
     #[test]
     fn truncate_tiny() {
         assert_eq!(truncate("hello", 2), "..");
+    }
+
+    #[test]
+    fn closed_stderr_does_not_panic() {
+        struct Closed;
+
+        impl std::io::Write for Closed {
+            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::BrokenPipe,
+                    "closed",
+                ))
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        write_line(&mut Closed, format_args!("diagnostic"));
     }
 }

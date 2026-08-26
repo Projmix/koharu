@@ -57,6 +57,7 @@ pub(super) async fn models(client: &Client) -> Result<Vec<Model>> {
                 quantizations: Vec::new(),
                 vision: false,
                 reasoning: true,
+                reasoning_required: false,
             })
             .collect(),
         Err(error) => {

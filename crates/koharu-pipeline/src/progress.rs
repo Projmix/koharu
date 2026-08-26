@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::Stage;
+use crate::{Stage, StageTarget};
 use koharu_scene::EntityId;
 
 #[derive(Clone, Debug)]
@@ -8,26 +8,33 @@ pub enum Progress {
     Started {
         pages: Vec<EntityId>,
         stages: Vec<Stage>,
+        total: usize,
     },
     Loading {
-        page: EntityId,
+        target: StageTarget,
         stage: Stage,
         model: String,
     },
     Running {
-        page: EntityId,
+        target: StageTarget,
         stage: Stage,
         model: String,
     },
     Finished {
-        page: EntityId,
+        target: StageTarget,
         stage: Stage,
         model: String,
         elapsed: std::time::Duration,
     },
     Skipped {
-        page: EntityId,
+        target: StageTarget,
         stage: Stage,
+    },
+    Warning {
+        target: StageTarget,
+        stage: Stage,
+        model: String,
+        error: String,
     },
 }
 

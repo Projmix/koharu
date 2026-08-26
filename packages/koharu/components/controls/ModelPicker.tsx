@@ -14,6 +14,7 @@ import {
   InputGroupInput,
 } from '@koharu/ui/components/input-group'
 import { ScrollArea } from '@koharu/ui/components/scroll-area'
+import { cn } from '@koharu/ui/lib/utils'
 
 export function ModelPicker({
   value,
@@ -31,12 +32,14 @@ export function ModelPicker({
   loading?: boolean
   disabled?: boolean
   busyModel?: string | null
-  onBack: () => void
+  onBack?: () => void
   onSelect: (model: Model) => void
 }) {
   const { t } = useTranslation()
   const [query, setQuery] = useState('')
   const search = useRef<HTMLInputElement>(null)
+  const selectedModel = useRef<HTMLButtonElement>(null)
+  const selectedKey = value ? modelKey(value) : null
   const normalizedQuery = query.trim().toLocaleLowerCase()
   const results = useMemo(
     () =>
@@ -54,20 +57,28 @@ export function ModelPicker({
     search.current?.focus()
   }, [])
 
+  useEffect(() => {
+    selectedModel.current?.scrollIntoView?.({ block: 'center' })
+  }, [results, selectedKey])
+
   return (
     <div className='min-w-0 overflow-hidden'>
       <div className='mb-1 flex h-7 items-center border-b border-border/60 px-0.5 pb-1'>
-        <Button
-          type='button'
-          variant='ghost'
-          size='icon-xs'
-          aria-label={t('common.back')}
-          className='rounded-md text-muted-foreground hover:bg-primary/10 hover:text-foreground'
-          onClick={onBack}
-        >
-          <ChevronLeft className='size-3.5' />
-        </Button>
-        <span className='ml-1 text-[11px] font-medium'>{t('modelPicker.title')}</span>
+        {onBack && (
+          <Button
+            type='button'
+            variant='ghost'
+            size='icon-xs'
+            aria-label={t('common.back')}
+            className='rounded-md text-muted-foreground hover:bg-primary/10 hover:text-foreground'
+            onClick={onBack}
+          >
+            <ChevronLeft className='size-3.5' />
+          </Button>
+        )}
+        <span className={cn(onBack && 'ml-1', 'text-[11px] font-medium')}>
+          {t('modelPicker.title')}
+        </span>
       </div>
 
       <div className='border-b border-border/60 p-1'>
@@ -103,6 +114,7 @@ export function ModelPicker({
             const selected = value ? key === modelKey(value) : false
             return (
               <Button
+                ref={selected ? selectedModel : undefined}
                 key={key}
                 type='button'
                 variant='ghost'

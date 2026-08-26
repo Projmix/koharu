@@ -3,7 +3,7 @@ use std::time::Duration;
 use anyhow::Result;
 use async_trait::async_trait;
 
-use crate::Stage;
+use crate::{Stage, StageTarget};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RunStatus {
@@ -23,7 +23,7 @@ pub struct Report {
 
 #[derive(Debug)]
 pub struct StageOutput {
-    pub page: koharu_scene::EntityId,
+    pub target: StageTarget,
     pub stage: Stage,
     pub patch: koharu_scene::Patch,
 }

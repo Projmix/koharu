@@ -25,7 +25,12 @@ import {
 import { ProviderPreferences } from '@/components/preferences/ProviderPreferences'
 import { TranslationPreferences } from '@/components/preferences/TranslationPreferences'
 import { TypesettingPreferences } from '@/components/preferences/TypesettingPreferences'
-import { refreshPreferences, refreshTranslationModels, savePreferences } from '@/lib/backend'
+import {
+  refreshInpaintingModels,
+  refreshPreferences,
+  refreshTranslationModels,
+  savePreferences,
+} from '@/lib/backend'
 import { supportedLanguages } from '@/lib/i18n'
 import { receivePreferences, useKoharuStore, type ShortcutAction } from '@/lib/store'
 import {
@@ -61,6 +66,7 @@ export function SettingsPage() {
   const setOpen = useKoharuStore((state) => state.setSettingsOpen)
   const preferences = useKoharuStore((state) => state.preferences)
   const translationModels = useKoharuStore((state) => state.translationModels)
+  const inpaintingModels = useKoharuStore((state) => state.inpaintingModels)
   const [tab, setTab] = useState<Tab>('appearance')
   const [pipeline, setPipeline] = useState<PipelineConfig | null>(preferences?.pipeline ?? null)
   const [providers, setProviders] = useState<ProviderSettings | null>(
@@ -115,6 +121,7 @@ export function SettingsPage() {
       if (providersChanged) {
         lastSavedProviders.current = serializedProviders
         void refreshTranslationModels(true).catch(() => undefined)
+        void refreshInpaintingModels(true).catch(() => undefined)
       }
     },
     [],
@@ -124,6 +131,7 @@ export function SettingsPage() {
     if (!open) return
     void refreshPreferences().catch(() => undefined)
     void refreshTranslationModels().catch(() => undefined)
+    void refreshInpaintingModels().catch(() => undefined)
   }, [open])
 
   useEffect(() => {
@@ -200,7 +208,13 @@ export function SettingsPage() {
             {tab === 'appearance' && <AppearancePreferences />}
             {tab === 'pipeline' &&
               (pipeline ? (
-                <PipelinePreferences value={pipeline} onChange={setPipeline} />
+                <PipelinePreferences
+                  value={pipeline}
+                  modelChoices={translationModels}
+                  inpaintingModels={inpaintingModels}
+                  providers={providers?.entries ?? []}
+                  onChange={setPipeline}
+                />
               ) : (
                 <LoadingPreferences />
               ))}
@@ -305,6 +319,7 @@ function ShortcutPreferences() {
   const actions: ShortcutAction[] = [
     'select',
     'text',
+    'ocr',
     'draw',
     'eraser',
     'color_picker',
@@ -320,13 +335,16 @@ function ShortcutPreferences() {
       <PreferenceSection title={t('settings.shortcuts.tools')}>
         {actions.map((action) => (
           <PreferenceRow key={action} title={t(shortcutKeys[action])}>
-            <Input
-              aria-label={t('settings.shortcuts.inputLabel', { action: t(shortcutKeys[action]) })}
-              maxLength={1}
-              value={shortcuts[action]}
-              className='ml-auto h-8 w-14 text-center text-[12px] uppercase'
-              onChange={(event) => setShortcut(action, event.currentTarget.value)}
-            />
+            <div className='ml-auto flex items-center gap-1.5 text-[12px] text-muted-foreground'>
+              <span>Ctrl+</span>
+              <Input
+                aria-label={t('settings.shortcuts.inputLabel', { action: t(shortcutKeys[action]) })}
+                maxLength={1}
+                value={shortcuts[action]}
+                className='h-8 w-14 text-center text-[12px] uppercase'
+                onChange={(event) => setShortcut(action, event.currentTarget.value)}
+              />
+            </div>
           </PreferenceRow>
         ))}
       </PreferenceSection>
@@ -342,6 +360,7 @@ function LoadingPreferences() {
 const shortcutKeys: Record<ShortcutAction, string> = {
   select: 'tools.select',
   text: 'tools.text',
+  ocr: 'tools.ocr',
   draw: 'tools.draw',
   eraser: 'tools.eraser',
   color_picker: 'tools.color_picker',

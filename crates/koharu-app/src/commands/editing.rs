@@ -141,6 +141,33 @@ pub(crate) async fn set_source_text(
 
 #[tracing::instrument(
     target = "koharu_metrics",
+    name = "text_role_edited",
+    skip_all,
+    fields(origin = "user", role = role.as_str()),
+)]
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn set_text_role(
+    layer: EntityId,
+    role: String,
+    desktop: State<'_, Desktop>,
+    project: State<'_, CurrentProject>,
+    canvas_channel: State<'_, CanvasChannel>,
+) -> Result<(), Error> {
+    let (commit, page) = {
+        let mut project = project.project.lock().await;
+        let project = project.as_mut().context("no project is open")?;
+        let commit = project.set_text_role(layer, role).await?;
+        project.record_commit(&commit);
+        (commit, project.active_page())
+    };
+    let canvas = synchronize_canvas(&desktop, &commit, page).await?;
+    canvas_channel.channel.publish(canvas);
+    Ok(())
+}
+
+#[tracing::instrument(
+    target = "koharu_metrics",
     name = "translation_edited",
     skip_all,
     fields(
@@ -296,6 +323,37 @@ pub(crate) async fn move_layer(
         let mut project = project.project.lock().await;
         let project = project.as_mut().context("no project is open")?;
         let commit = project.move_layer(layer, parent, index as usize).await?;
+        project.record_commit(&commit);
+        let page = project.active_page().context("no active page")?;
+        let view = Project::page(&commit.snapshot, page)?;
+        (commit, page, view)
+    };
+    desktop
+        .synchronize(&commit.snapshot, Some(page), &commit)
+        .await?;
+    canvas_channel.channel.publish(desktop.canvas_state());
+    Ok(view)
+}
+
+#[tracing::instrument(
+    target = "koharu_metrics",
+    name = "layers_reordered",
+    skip_all,
+    fields(origin = "user", entity_count = order.len() as u64)
+)]
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn reorder_layers(
+    parent: EntityId,
+    order: Vec<EntityId>,
+    desktop: State<'_, Desktop>,
+    project: State<'_, CurrentProject>,
+    canvas_channel: State<'_, CanvasChannel>,
+) -> Result<Page, Error> {
+    let (commit, page, view) = {
+        let mut project = project.project.lock().await;
+        let project = project.as_mut().context("no project is open")?;
+        let commit = project.reorder_layers(parent, order).await?;
         project.record_commit(&commit);
         let page = project.active_page().context("no active page")?;
         let view = Project::page(&commit.snapshot, page)?;

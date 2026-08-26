@@ -48,3 +48,18 @@ bun x tsc --noEmit -p packages/koharu/tsconfig.json
 cd packages/koharu
 bun run test
 ```
+
+## Standalone debug executable on Windows
+
+An executable produced by a direct `cargo build` uses the development URL and
+therefore expects the Next server on `localhost:3000`. Build through the Tauri
+CLI to export and embed the UI in a standalone debug executable:
+
+```powershell
+cargo tauri build --debug --no-bundle
+& .\target\debug\koharu.exe
+```
+
+The Tauri build runs `bun run ui:build` through `beforeBuildCommand` and enables
+the custom protocol automatically. The regular `cargo tauri dev` workflow
+continues to use the Next development server.

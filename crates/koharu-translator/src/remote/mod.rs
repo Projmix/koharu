@@ -32,7 +32,7 @@ pub use openai_compatible::OpenAiCompatibleConfig;
 pub use openrouter::OpenRouterConfig;
 
 use crate::{
-    Error, GenerationConfig, Model, ModelSelection, Provider, ProvidersConfig, Result,
+    Error, GenerationConfig, Model, ModelSelection, OcrRequest, Provider, ProvidersConfig, Result,
     TranslationRequest,
 };
 
@@ -43,6 +43,13 @@ pub(crate) async fn translate(
     generation: &GenerationConfig,
     request: &TranslationRequest,
 ) -> Result<Vec<String>> {
+    if request.is_chapter() && !supports_structured_chapter(selection.provider) {
+        return Err(anyhow::anyhow!(
+            "{} does not support strict chapter translation responses; choose a structured-output provider",
+            selection.provider
+        )
+        .into());
+    }
     let model = || {
         selection
             .model
@@ -101,6 +108,68 @@ pub(crate) async fn translate(
         }
         Provider::Caiyun => caiyun::translate(client, &providers.caiyun, request).await,
         Provider::Local => unreachable!("local translation has its own backend"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn positional_providers_are_not_allowed_for_chapter_requests() {
+        let request = TranslationRequest::new(["one"], crate::Language::English)
+            .with_page_numbers([1])
+            .unwrap();
+        assert!(request.is_chapter());
+        for provider in [
+            Provider::DeepL,
+            Provider::GoogleCloudTranslation,
+            Provider::Caiyun,
+        ] {
+            assert!(
+                !supports_structured_chapter(provider),
+                "{provider} must not be treated as an ID-addressable chapter provider"
+            );
+        }
+    }
+}
+
+fn supports_structured_chapter(provider: Provider) -> bool {
+    !matches!(
+        provider,
+        Provider::DeepL | Provider::GoogleCloudTranslation | Provider::Caiyun
+    )
+}
+
+pub(crate) async fn recognize(
+    client: &Client,
+    providers: &ProvidersConfig,
+    provider: Provider,
+    model: &str,
+    generation: &GenerationConfig,
+    request: &OcrRequest,
+) -> Result<String> {
+    match provider {
+        Provider::OpenRouter => {
+            openrouter::recognize(client, &providers.openrouter, model, generation, request).await
+        }
+        Provider::OpenAi => {
+            openai::recognize(client, &providers.openai, model, generation, request).await
+        }
+        Provider::OpenAiCompatible => {
+            openai_compatible::compatible_ocr(
+                client,
+                &providers.openai_compatible,
+                model,
+                generation,
+                request,
+            )
+            .await
+        }
+        _ => Err(anyhow::anyhow!(
+            "{provider} is not supported for API OCR; use OpenRouter, OpenAI, or OpenAI-compatible"
+        )
+        .into()),
     }
 }
 

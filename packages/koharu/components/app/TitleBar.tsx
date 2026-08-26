@@ -1,15 +1,17 @@
 'use client'
 
 import { openUrl } from '@tauri-apps/plugin-opener'
-import { FilePlus2, FolderOpen, LoaderCircle, Settings } from 'lucide-react'
+import { FilePlus2, FolderOpen, LoaderCircle, Settings, Trash2 } from 'lucide-react'
 import Image from 'next/image'
 import { useState, type ComponentProps } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { AboutDialog } from '@/components/app/AboutDialog'
+import { DeleteAllPagesDialog } from '@/components/app/DeleteAllPagesDialog'
 import { useMacOS, WindowControls } from '@/components/app/WindowChrome'
 import { call } from '@/lib/backend'
 import { selectableLayer } from '@/lib/geometry'
+import { enqueueHistory } from '@/lib/history'
 import {
   pageKey,
   pagesKey,
@@ -39,6 +41,8 @@ import { cn } from '@koharu/ui/lib/utils'
 export function TitleBar() {
   const { t } = useTranslation()
   const [aboutOpen, setAboutOpen] = useState(false)
+  const [clearProjectOpen, setClearProjectOpen] = useState(false)
+  const [clearingProject, setClearingProject] = useState(false)
   const macOS = useMacOS()
   const project = useProject().data
   const pagesQuery = usePages(Boolean(project))
@@ -47,6 +51,7 @@ export function TitleBar() {
   const page = project ? (pageQuery.data ?? null) : null
   const selectedPages = useKoharuStore((state) => state.selectedPages)
   const selectedLayers = useKoharuStore((state) => state.selectedLayers)
+  const selectPages = useKoharuStore((state) => state.selectPages)
   const selectLayers = useKoharuStore((state) => state.selectLayers)
   const setSettingsOpen = useKoharuStore((state) => state.setSettingsOpen)
   const requestCanvasFit = useKoharuStore((state) => state.requestCanvasFit)
@@ -56,6 +61,23 @@ export function TitleBar() {
     void call(commands.process, scope, operation).catch(() => undefined)
 
   const closeProject = () => void call(commands.closeProject).catch(() => undefined)
+
+  const clearProject = async () => {
+    if (clearingProject || pages.length === 0) return
+    setClearingProject(true)
+    try {
+      await call(
+        commands.deletePages,
+        pages.map((page) => page.id),
+      )
+      selectPages([])
+      selectLayers([])
+      await refresh(projectKey, pagesKey, pageKey)
+      setClearProjectOpen(false)
+    } finally {
+      setClearingProject(false)
+    }
+  }
 
   return (
     <>
@@ -119,6 +141,14 @@ export function TitleBar() {
                 {t('menu.exportPsd')}
               </MenubarItem>
               <MenubarSeparator />
+              <MenubarItem
+                disabled={!project || pages.length === 0 || importing}
+                variant='destructive'
+                onClick={() => setClearProjectOpen(true)}
+              >
+                <Trash2 />
+                {t('menu.clearProject')}
+              </MenubarItem>
               <MenubarItem disabled={!project} onClick={closeProject}>
                 {t('menu.closeProject')}
               </MenubarItem>
@@ -135,25 +165,17 @@ export function TitleBar() {
             <MenubarContent>
               <MenubarItem
                 disabled={!project?.can_undo}
-                onClick={() =>
-                  void call(commands.undo)
-                    .then(() => refresh(projectKey, pagesKey, pageKey))
-                    .catch(() => undefined)
-                }
+                onClick={() => void enqueueHistory('undo').catch(() => undefined)}
               >
                 {t('menu.undo')}
                 <MenubarShortcut>Ctrl+Z</MenubarShortcut>
               </MenubarItem>
               <MenubarItem
                 disabled={!project?.can_redo}
-                onClick={() =>
-                  void call(commands.redo)
-                    .then(() => refresh(projectKey, pagesKey, pageKey))
-                    .catch(() => undefined)
-                }
+                onClick={() => void enqueueHistory('redo').catch(() => undefined)}
               >
                 {t('menu.redo')}
-                <MenubarShortcut>Ctrl+Shift+Z</MenubarShortcut>
+                <MenubarShortcut>Ctrl+Y</MenubarShortcut>
               </MenubarItem>
               <MenubarSeparator />
               <MenubarItem
@@ -271,6 +293,15 @@ export function TitleBar() {
         {!macOS && <WindowControls />}
       </header>
       <AboutDialog open={aboutOpen} onOpenChange={setAboutOpen} />
+      <DeleteAllPagesDialog
+        open={clearProjectOpen}
+        count={pages.length}
+        busy={clearingProject}
+        onOpenChange={(open) => {
+          if (!clearingProject) setClearProjectOpen(open)
+        }}
+        onConfirm={() => void clearProject().catch(() => undefined)}
+      />
     </>
   )
 }

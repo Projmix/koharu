@@ -208,6 +208,38 @@ describe('canvas interaction adapter', () => {
     input.remove()
   })
 
+  it('activates tools only through Ctrl plus the physical shortcut key', () => {
+    installProject()
+    renderWorkspace()
+
+    fireEvent.keyDown(window, { key: 'o', code: 'KeyO' })
+    expect(useKoharuStore.getState().tool).toBe('select')
+
+    fireEvent.keyDown(window, { key: 'щ', code: 'KeyO', ctrlKey: true })
+    expect(useKoharuStore.getState().tool).toBe('ocr')
+  })
+
+  it('leaves an editor field and resets the canvas interaction on Escape', () => {
+    installProject()
+    renderWorkspace()
+    useKoharuStore.setState({ tool: 'draw', selectedLayers: ['element'] })
+    const input = document.body.appendChild(document.createElement('input'))
+    input.addEventListener('keydown', (event) => event.stopPropagation())
+    input.focus()
+
+    const event = new KeyboardEvent('keydown', {
+      key: 'Escape',
+      bubbles: true,
+      cancelable: true,
+    })
+    input.dispatchEvent(event)
+
+    expect(event.defaultPrevented).toBe(true)
+    expect(input).not.toHaveFocus()
+    expect(useKoharuStore.getState()).toMatchObject({ tool: 'select', selectedLayers: [] })
+    input.remove()
+  })
+
   it('announces WebGPU startup failures and offers recovery', () => {
     installProject()
     canvasState.status = 'error'
@@ -246,6 +278,20 @@ describe('canvas interaction adapter', () => {
       diameter: 48,
       color: [255, 255, 255, 255],
     })
+  })
+
+  it('temporarily samples the drawing color with the middle mouse button', async () => {
+    installProject()
+    useKoharuStore.setState({ tool: 'draw', brush: { diameter: 48, color: '#FFFFFF' } })
+    canvas.sampleColor.mockResolvedValue([17, 34, 51, 255])
+    const surface = renderWorkspace()
+
+    fireEvent.pointerDown(surface, { button: 1, pointerId: 71, clientX: 30, clientY: 40 })
+    fireEvent.pointerUp(surface, { button: 1, pointerId: 71, clientX: 30, clientY: 40 })
+
+    await waitFor(() => expect(useKoharuStore.getState().brush.color).toBe('#112233'))
+    expect(canvas.sampleColor).toHaveBeenCalledWith({ x: 20, y: 20 })
+    expect(canvas.beginStroke).not.toHaveBeenCalled()
   })
 
   it.each([
@@ -334,6 +380,304 @@ describe('canvas interaction adapter', () => {
         }),
       ]),
     )
+  })
+
+  it('selects a text layer through its detected text and bubble regions', () => {
+    installProject()
+    queryClient.setQueryData(pageKey, (page: { layers: Layer[] }) => ({
+      ...page,
+      layers: [
+        {
+          type: 'text',
+          id: 'dialogue',
+          parent: 'page',
+          geometry: null,
+          visibility: { visible: true, opacity: 1 },
+          content: {
+            id: 'content',
+            source: { text: '原文', language: 'ja' },
+            translation: null,
+            role: 'dialogue',
+            source_region: 'text-region',
+          },
+          typography: null,
+          layout: 'paragraph',
+          automatic_region: 'bubble-region',
+        },
+      ],
+      regions: [
+        {
+          id: 'bubble-region',
+          parent: 'page',
+          geometry: {
+            points: [
+              { x: 10, y: 10 },
+              { x: 100, y: 10 },
+              { x: 100, y: 100 },
+              { x: 10, y: 100 },
+            ],
+          },
+          kind: 'bubble',
+          label: 'bubble',
+        },
+        {
+          id: 'text-region',
+          parent: 'page',
+          geometry: {
+            points: [
+              { x: 20, y: 20 },
+              { x: 40, y: 20 },
+              { x: 40, y: 40 },
+              { x: 20, y: 40 },
+            ],
+          },
+          kind: 'text',
+          label: 'text',
+        },
+      ],
+    }))
+    const surface = renderWorkspace()
+
+    fireEvent.pointerDown(surface, { button: 0, pointerId: 20, clientX: 35, clientY: 45 })
+    fireEvent.pointerUp(surface, { pointerId: 20, clientX: 35, clientY: 45 })
+    expect(useKoharuStore.getState().selectedLayers).toEqual(['dialogue'])
+
+    act(() => useKoharuStore.getState().selectLayers([]))
+    fireEvent.pointerDown(surface, { button: 0, pointerId: 21, clientX: 90, clientY: 90 })
+    fireEvent.pointerUp(surface, { pointerId: 21, clientX: 90, clientY: 90 })
+    expect(useKoharuStore.getState().selectedLayers).toEqual(['dialogue'])
+  })
+
+  it('shift-selects and moves multiple detected text regions together', async () => {
+    installProject()
+    const ocrLayer = (id: string, region: string): Layer => ({
+      type: 'text',
+      id,
+      parent: 'page',
+      geometry: null,
+      visibility: { visible: true, opacity: 1 },
+      content: {
+        id: `${id}-content`,
+        source: { text: id, language: 'ja' },
+        translation: null,
+        role: 'dialogue',
+        source_region: region,
+      },
+      typography: null,
+      layout: 'paragraph',
+      automatic_region: null,
+    })
+    queryClient.setQueryData(pageKey, (page: { layers: Layer[] }) => ({
+      ...page,
+      layers: [ocrLayer('first', 'first-region'), ocrLayer('second', 'second-region')],
+      regions: [
+        {
+          id: 'first-region',
+          parent: 'page',
+          geometry: {
+            points: [
+              { x: 20, y: 20 },
+              { x: 40, y: 20 },
+              { x: 40, y: 40 },
+              { x: 20, y: 40 },
+            ],
+          },
+          kind: 'dev.koharu.region.text',
+          label: null,
+        },
+        {
+          id: 'second-region',
+          parent: 'page',
+          geometry: {
+            points: [
+              { x: 80, y: 20 },
+              { x: 100, y: 20 },
+              { x: 100, y: 40 },
+              { x: 80, y: 40 },
+            ],
+          },
+          kind: 'dev.koharu.region.text',
+          label: null,
+        },
+      ],
+    }))
+    const setGeometry = vi.spyOn(commands, 'setGeometry').mockResolvedValue(null)
+    const surface = renderWorkspace()
+
+    fireEvent.pointerDown(surface, { button: 0, pointerId: 22, clientX: 35, clientY: 45 })
+    fireEvent.pointerUp(surface, { pointerId: 22, clientX: 35, clientY: 45 })
+    fireEvent.pointerDown(surface, {
+      button: 0,
+      pointerId: 23,
+      clientX: 95,
+      clientY: 45,
+      shiftKey: true,
+    })
+    fireEvent.pointerUp(surface, { pointerId: 23, clientX: 95, clientY: 45 })
+
+    expect(useKoharuStore.getState().selectedLayers).toEqual(['first', 'second'])
+
+    fireEvent.pointerDown(surface, { button: 0, pointerId: 24, clientX: 95, clientY: 45 })
+    fireEvent.pointerMove(surface, { pointerId: 24, clientX: 115, clientY: 65 })
+    fireEvent.pointerUp(surface, { pointerId: 24, clientX: 115, clientY: 65 })
+
+    await waitFor(() => expect(setGeometry).toHaveBeenCalledOnce())
+    expect(setGeometry).toHaveBeenCalledWith([
+      expect.objectContaining({ layer: 'first-region', points: expect.any(Array) }),
+      expect.objectContaining({ layer: 'second-region', points: expect.any(Array) }),
+    ])
+  })
+
+  it('shows detected regions only while the select tool is active', () => {
+    installProject()
+    queryClient.setQueryData(pageKey, (page: { layers: Layer[] }) => ({
+      ...page,
+      layers: [
+        ...page.layers,
+        {
+          type: 'text',
+          id: 'ocr-layer',
+          parent: 'page',
+          geometry: null,
+          visibility: { visible: true, opacity: 1 },
+          content: {
+            id: 'ocr-content',
+            source: { text: 'Source', language: 'ja' },
+            translation: null,
+            role: 'dialogue',
+            source_region: 'text-region',
+          },
+          typography: null,
+          layout: 'paragraph',
+          automatic_region: null,
+        } satisfies Layer,
+      ],
+      regions: [
+        {
+          id: 'text-region',
+          parent: 'page',
+          geometry: {
+            points: [
+              { x: 20, y: 20 },
+              { x: 40, y: 20 },
+              { x: 40, y: 40 },
+              { x: 20, y: 40 },
+            ],
+          },
+          kind: 'dev.koharu.region.text',
+          label: null,
+        },
+        {
+          id: 'bubble-region',
+          parent: 'page',
+          geometry: {
+            points: [
+              { x: 10, y: 10 },
+              { x: 100, y: 10 },
+              { x: 100, y: 100 },
+              { x: 10, y: 100 },
+            ],
+          },
+          kind: 'dev.koharu.region.bubble',
+          label: null,
+        },
+      ],
+    }))
+    renderWorkspace()
+
+    expect(screen.getByTestId('detection-regions').querySelectorAll('polygon')).toHaveLength(2)
+    expect(screen.getByTestId('ocr-region-number-text-region')).toHaveTextContent('1')
+
+    act(() => useKoharuStore.getState().setTool('eraser'))
+    expect(screen.queryByTestId('detection-regions')).not.toBeInTheDocument()
+
+    act(() => useKoharuStore.getState().setTool('ocr'))
+    expect(screen.getByTestId('detection-regions')).toBeInTheDocument()
+  })
+
+  it('edits the selected text region with move, resize, and rotate controls', async () => {
+    installProject()
+    const region = {
+      id: 'text-region',
+      parent: 'page',
+      geometry: {
+        points: [
+          { x: 20, y: 20 },
+          { x: 60, y: 20 },
+          { x: 60, y: 40 },
+          { x: 20, y: 40 },
+        ],
+      },
+      kind: 'dev.koharu.region.text',
+      label: null,
+    }
+    queryClient.setQueryData(pageKey, (page: { layers: Layer[]; regions: unknown[] }) => ({
+      ...page,
+      layers: [
+        {
+          type: 'text',
+          id: 'dialogue',
+          parent: 'page',
+          geometry: region.geometry,
+          visibility: { visible: true, opacity: 1 },
+          content: {
+            id: 'content',
+            source: { text: 'Source', language: 'ja' },
+            translation: null,
+            role: 'dialogue',
+            source_region: 'text-region',
+          },
+          typography: null,
+          layout: 'paragraph',
+          automatic_region: null,
+        },
+      ],
+      regions: [region],
+    }))
+    useKoharuStore.setState({ selectedLayers: ['dialogue'], tool: 'select' })
+    const setGeometry = vi.spyOn(commands, 'setGeometry').mockResolvedValue(null)
+    const surface = renderWorkspace()
+
+    fireEvent.pointerDown(surface, { button: 0, pointerId: 34, clientX: 35, clientY: 45 })
+    fireEvent.pointerMove(surface, { pointerId: 34, clientX: 55, clientY: 65 })
+    fireEvent.pointerUp(surface, { pointerId: 34, clientX: 55, clientY: 65 })
+    await waitFor(() => expect(setGeometry).toHaveBeenCalledOnce())
+    expect(setGeometry.mock.calls[0][0][0]).toMatchObject({
+      layer: 'text-region',
+      points: expect.any(Array),
+    })
+
+    const handle = document.querySelector<HTMLElement>('[data-resize-handle="e"]')!
+    fireEvent.pointerDown(handle, { button: 0, pointerId: 35, clientX: 70, clientY: 40 })
+    fireEvent.pointerMove(handle, { pointerId: 35, clientX: 90, clientY: 40 })
+    fireEvent.pointerUp(handle, { pointerId: 35, clientX: 90, clientY: 40 })
+
+    await waitFor(() => expect(setGeometry).toHaveBeenCalledTimes(2))
+    expect(setGeometry).toHaveBeenCalledWith([
+      expect.objectContaining({ layer: 'text-region', points: expect.any(Array) }),
+    ])
+    expect(setGeometry.mock.calls[0][0][0].points).toHaveLength(4)
+  })
+
+  it('queues repeated undo commands and supports Ctrl+Y redo globally', async () => {
+    installProject()
+    const firstUndo = deferred<null>()
+    const undo = vi
+      .spyOn(commands, 'undo')
+      .mockImplementationOnce(() => firstUndo.promise)
+      .mockResolvedValue(null)
+    const redo = vi.spyOn(commands, 'redo').mockResolvedValue(null)
+    renderWorkspace()
+
+    fireEvent.keyDown(window, { key: 'z', ctrlKey: true })
+    fireEvent.keyDown(window, { key: 'z', ctrlKey: true })
+    await waitFor(() => expect(undo).toHaveBeenCalledOnce())
+
+    firstUndo.resolve(null)
+    await waitFor(() => expect(undo).toHaveBeenCalledTimes(2))
+
+    fireEvent.keyDown(window, { key: 'y', ctrlKey: true })
+    await waitFor(() => expect(redo).toHaveBeenCalledOnce())
   })
 
   it('resizes a selected layer through Koharu selection controls', async () => {
@@ -499,4 +843,119 @@ describe('canvas interaction adapter', () => {
       angle_degrees: 0,
     })
   })
+
+  it('creates a manual OCR region and runs only OCR for that region', async () => {
+    installProject()
+    const addRegion = vi
+      .spyOn(commands, 'addOcrRegion')
+      .mockResolvedValue({ revision: 2, layer: 'ocr-layer', region: 'ocr-region' })
+    const process = vi.spyOn(commands, 'process').mockResolvedValue('ocr-job')
+    const surface = renderWorkspace()
+
+    fireEvent.keyDown(window, { key: 'o', code: 'KeyO', ctrlKey: true })
+    expect(useKoharuStore.getState().tool).toBe('ocr')
+
+    fireEvent.pointerDown(surface, { button: 0, pointerId: 30, clientX: 40, clientY: 50 })
+    fireEvent.pointerMove(surface, { pointerId: 30, clientX: 140, clientY: 110 })
+    fireEvent.pointerUp(surface, { pointerId: 30, clientX: 140, clientY: 110 })
+
+    await waitFor(() => expect(process).toHaveBeenCalledOnce())
+    expect(addRegion).toHaveBeenCalledWith({
+      x: 30,
+      y: 30,
+      width: 100,
+      height: 60,
+      angle_degrees: 0,
+    })
+    expect(process).toHaveBeenCalledWith(
+      { scope: 'entities', value: ['ocr-region'] },
+      { operation: 'stages', stages: ['ocr'] },
+    )
+    expect(useKoharuStore.getState().selectedLayers).toEqual(['ocr-layer'])
+    expect(useKoharuStore.getState().tool).toBe('ocr')
+  })
+
+  it('clamps an OCR rectangle to the page', async () => {
+    installProject()
+    useKoharuStore.setState({ tool: 'ocr' })
+    const addRegion = vi
+      .spyOn(commands, 'addOcrRegion')
+      .mockResolvedValue({ revision: 2, layer: 'ocr-layer', region: 'ocr-region' })
+    vi.spyOn(commands, 'process').mockResolvedValue('ocr-job')
+    const surface = renderWorkspace()
+
+    fireEvent.pointerDown(surface, { button: 0, pointerId: 31, clientX: 0, clientY: 0 })
+    fireEvent.pointerMove(surface, { pointerId: 31, clientX: 1200, clientY: 1200 })
+    fireEvent.pointerUp(surface, { pointerId: 31, clientX: 1200, clientY: 1200 })
+
+    await waitFor(() => expect(addRegion).toHaveBeenCalledOnce())
+    expect(addRegion).toHaveBeenCalledWith({
+      x: 0,
+      y: 0,
+      width: 1000,
+      height: 1000,
+      angle_degrees: 0,
+    })
+  })
+
+  it('ignores a tiny OCR rectangle and input while another job is running', () => {
+    installProject()
+    useKoharuStore.setState({ tool: 'ocr' })
+    const addRegion = vi.spyOn(commands, 'addOcrRegion')
+    const surface = renderWorkspace()
+
+    fireEvent.pointerDown(surface, { button: 0, pointerId: 32, clientX: 40, clientY: 50 })
+    fireEvent.pointerMove(surface, { pointerId: 32, clientX: 42, clientY: 150 })
+    fireEvent.pointerUp(surface, { pointerId: 32, clientX: 42, clientY: 150 })
+    expect(addRegion).not.toHaveBeenCalled()
+
+    act(() =>
+      useKoharuStore.setState({
+        jobs: {
+          active: {
+            id: 'active',
+            state: 'running',
+            completed: 0,
+            total: 1,
+            target: null,
+            stage: 'ocr',
+            model: 'ocr-model',
+            error: null,
+          },
+        },
+      }),
+    )
+    fireEvent.pointerDown(surface, { button: 0, pointerId: 33, clientX: 40, clientY: 50 })
+    fireEvent.pointerMove(surface, { pointerId: 33, clientX: 140, clientY: 150 })
+    fireEvent.pointerUp(surface, { pointerId: 33, clientX: 140, clientY: 150 })
+    expect(addRegion).not.toHaveBeenCalled()
+  })
+
+  it('keeps a failed manual OCR region selected for retry or deletion', async () => {
+    installProject()
+    useKoharuStore.setState({ tool: 'ocr' })
+    vi.spyOn(commands, 'addOcrRegion').mockResolvedValue({
+      revision: 2,
+      layer: 'failed-ocr-layer',
+      region: 'failed-ocr-region',
+    })
+    const process = vi.spyOn(commands, 'process').mockRejectedValue(new Error('OCR failed'))
+    const surface = renderWorkspace()
+
+    fireEvent.pointerDown(surface, { button: 0, pointerId: 34, clientX: 40, clientY: 50 })
+    fireEvent.pointerMove(surface, { pointerId: 34, clientX: 140, clientY: 110 })
+    fireEvent.pointerUp(surface, { pointerId: 34, clientX: 140, clientY: 110 })
+
+    await waitFor(() => expect(process).toHaveBeenCalledOnce())
+    expect(useKoharuStore.getState().selectedLayers).toEqual(['failed-ocr-layer'])
+    expect(useKoharuStore.getState().tool).toBe('ocr')
+  })
 })
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((done) => {
+    resolve = done
+  })
+  return { promise, resolve }
+}

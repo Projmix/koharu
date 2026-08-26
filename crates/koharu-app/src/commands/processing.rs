@@ -2,14 +2,18 @@ use std::{collections::HashMap, fmt, sync::Arc};
 
 use anyhow::{Context as _, Result};
 use koharu_pipeline::{Committer, Progress, RunStatus, StageOutput, StopToken};
-use koharu_scene::Snapshot;
+use koharu_scene::{EntityId, ProjectId, Snapshot};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use tauri::{AppHandle, Cef, Manager as _, State, ipc::Channel};
 use uuid::Uuid;
 
-use super::{ChannelExt as _, Error, canvas::CanvasChannel, project::CurrentProject};
+use super::{
+    ChannelExt as _, Error,
+    canvas::CanvasChannel,
+    project::{CurrentProject, PageWarning},
+};
 use koharu_desktop::Desktop;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize, Type)]
@@ -43,7 +47,7 @@ pub struct Job {
     pub completed: usize,
     #[specta(type = f64)]
     pub total: usize,
-    pub page: Option<koharu_scene::EntityId>,
+    pub target: Option<koharu_pipeline::StageTarget>,
     pub stage: Option<koharu_pipeline::Stage>,
     pub model: Option<String>,
     pub error: Option<String>,
@@ -63,6 +67,101 @@ pub(crate) struct Processing {
     pub(crate) stops: Mutex<HashMap<JobId, StopToken>>,
     pub(crate) jobs: Mutex<HashMap<JobId, Job>>,
     pub(crate) inpainting_mask: Mutex<Option<koharu_pipeline::InpaintingMask>>,
+    pub(crate) warnings: Mutex<HashMap<(ProjectId, EntityId), PageWarning>>,
+    resume: Mutex<Option<ProcessingRequest>>,
+}
+
+impl Processing {
+    pub(crate) fn clear_warnings(&self) {
+        self.warnings.lock().clear();
+    }
+
+    pub(crate) fn warning(&self, project: ProjectId, page: EntityId) -> Option<PageWarning> {
+        self.warnings.lock().get(&(project, page)).cloned()
+    }
+
+    fn clear_warning(&self, project: ProjectId, page: EntityId) {
+        self.warnings.lock().remove(&(project, page));
+    }
+
+    fn record_warning(&self, project: ProjectId, page: EntityId, warning: PageWarning) {
+        self.warnings.lock().insert((project, page), warning);
+    }
+
+    fn clear_inpainting_warnings(
+        &self,
+        project: ProjectId,
+        snapshot: &Snapshot,
+        scope: &koharu_pipeline::Scope,
+        operation: &koharu_pipeline::Operation,
+    ) {
+        if !requests_inpainting(operation) {
+            return;
+        }
+        let pages = match scope {
+            koharu_pipeline::Scope::Project => snapshot.pages().map(|page| page.id()).collect(),
+            koharu_pipeline::Scope::Pages(pages) => pages.clone(),
+            koharu_pipeline::Scope::Region { page, .. } => vec![*page],
+            koharu_pipeline::Scope::Entities(_) => Vec::new(),
+        };
+        let mut warnings = self.warnings.lock();
+        for page in pages {
+            warnings.remove(&(project, page));
+        }
+    }
+}
+
+#[derive(Clone)]
+struct ProcessingRequest {
+    project: koharu_scene::ProjectId,
+    scope: koharu_pipeline::Scope,
+    operation: koharu_pipeline::Operation,
+    inpainting_mask: Option<koharu_pipeline::InpaintingMask>,
+}
+
+impl Processing {
+    fn select_request(&self, request: ProcessingRequest) -> ProcessingRequest {
+        if !matches!(request.operation, koharu_pipeline::Operation::Stages { .. }) {
+            return request;
+        }
+        // A stopped/failed run is only a retry for the same explicit selection.
+        // Reusing it for a different scope or stage set makes a later Run appear
+        // to start at a random stage (for example Translation after OCR was
+        // deleted).  The current UI selection is authoritative in that case.
+        self.resume
+            .lock()
+            .take()
+            .filter(|resume| {
+                resume.project == request.project
+                    && resume.scope == request.scope
+                    && resume.operation == request.operation
+            })
+            .unwrap_or(request)
+    }
+
+    fn finish(&self, request: ProcessingRequest, interrupted: bool) {
+        if interrupted && matches!(request.operation, koharu_pipeline::Operation::Stages { .. }) {
+            *self.resume.lock() = Some(request);
+        }
+    }
+}
+
+fn requests_inpainting(operation: &koharu_pipeline::Operation) -> bool {
+    match operation {
+        koharu_pipeline::Operation::Full
+        | koharu_pipeline::Operation::Through {
+            stage: koharu_pipeline::Stage::Inpainting,
+        }
+        | koharu_pipeline::Operation::Only {
+            stage: koharu_pipeline::Stage::Inpainting,
+        } => true,
+        koharu_pipeline::Operation::Through { .. } | koharu_pipeline::Operation::Only { .. } => {
+            false
+        }
+        koharu_pipeline::Operation::Stages { stages } => {
+            stages.contains(&koharu_pipeline::Stage::Inpainting)
+        }
+    }
 }
 
 #[derive(Default)]
@@ -102,7 +201,7 @@ pub(crate) async fn process(
         state: JobState::Running,
         completed: 0,
         total: 0,
-        page: None,
+        target: None,
         stage: None,
         model: None,
         error: None,
@@ -110,22 +209,54 @@ pub(crate) async fn process(
     processing.jobs.lock().insert(id, job.clone());
     job_channel.channel.publish(job);
 
+    let inpainting_mask = processing.inpainting_mask.lock().take();
+    let request = processing.select_request(ProcessingRequest {
+        project: snapshot.project_id(),
+        scope,
+        operation,
+        inpainting_mask,
+    });
+    processing.clear_inpainting_warnings(
+        snapshot.project_id(),
+        &snapshot,
+        &request.scope,
+        &request.operation,
+    );
+    let retry = request.clone();
+    let project_id = snapshot.project_id();
     let pipeline = handle.state::<koharu_pipeline::Pipeline>().inner().clone();
     let task_handle = handle.clone();
-    let inpainting_mask = processing.inpainting_mask.lock().take();
     drop(tokio::spawn(async move {
         let progress = Arc::new(Mutex::new((0_usize, 0_usize)));
         let progress_handle = task_handle.clone();
         let mut request = koharu_pipeline::Request {
-            operation,
-            scope,
+            operation: request.operation,
+            scope: request.scope,
             stop: stop.clone(),
             progress: None,
-            inpainting_mask,
+            inpainting_mask: request.inpainting_mask,
         };
         request.progress = Some(Arc::new(move |event| {
+            enum JobUpdate {
+                Replace {
+                    completed: usize,
+                    total: usize,
+                    target: Option<koharu_pipeline::StageTarget>,
+                    stage: Option<koharu_pipeline::Stage>,
+                    model: Option<String>,
+                },
+                CountOnly {
+                    completed: usize,
+                    total: usize,
+                },
+            }
+
             let update = match event {
-                Progress::Started { pages, stages } => {
+                Progress::Started {
+                    pages,
+                    stages,
+                    total,
+                } => {
                     tracing::info!(
                         target: "koharu_metrics",
                         metric = "pipeline_start",
@@ -133,10 +264,20 @@ pub(crate) async fn process(
                         stage_count = stages.len(),
                     );
                     let mut progress = progress.lock();
-                    *progress = (0, pages.len().saturating_mul(stages.len()));
-                    Some((0, progress.1, None, None, None))
+                    *progress = (0, total);
+                    Some(JobUpdate::Replace {
+                        completed: 0,
+                        total: progress.1,
+                        target: None,
+                        stage: None,
+                        model: None,
+                    })
                 }
-                Progress::Loading { page, stage, model } => {
+                Progress::Loading {
+                    target,
+                    stage,
+                    model,
+                } => {
                     tracing::info!(
                         target: "koharu_metrics",
                         metric = "stage_loading",
@@ -144,10 +285,16 @@ pub(crate) async fn process(
                         model,
                     );
                     let progress = progress.lock();
-                    Some((progress.0, progress.1, Some(page), Some(stage), Some(model)))
+                    Some(JobUpdate::Replace {
+                        completed: progress.0,
+                        total: progress.1,
+                        target: Some(target),
+                        stage: Some(stage),
+                        model: Some(model),
+                    })
                 }
                 Progress::Finished {
-                    page,
+                    target,
                     stage,
                     model,
                     elapsed,
@@ -161,11 +308,24 @@ pub(crate) async fn process(
                             duration_ms = elapsed.as_secs_f64() * 1000.0,
                         );
                     }
+                    if stage == koharu_pipeline::Stage::Inpainting
+                        && let Some(page) = target.page()
+                    {
+                        progress_handle
+                            .state::<Processing>()
+                            .clear_warning(project_id, page);
+                    }
                     let mut progress = progress.lock();
                     progress.0 = progress.0.saturating_add(1).min(progress.1);
-                    Some((progress.0, progress.1, Some(page), Some(stage), Some(model)))
+                    Some(JobUpdate::Replace {
+                        completed: progress.0,
+                        total: progress.1,
+                        target: Some(target),
+                        stage: Some(stage),
+                        model: Some(model),
+                    })
                 }
-                Progress::Skipped { page, stage } => {
+                Progress::Skipped { target, stage } => {
                     tracing::info!(
                         target: "koharu_metrics",
                         metric = "stage_skip",
@@ -173,7 +333,52 @@ pub(crate) async fn process(
                     );
                     let mut progress = progress.lock();
                     progress.0 = progress.0.saturating_add(1).min(progress.1);
-                    Some((progress.0, progress.1, Some(page), Some(stage), None))
+                    if stage == koharu_pipeline::Stage::Inpainting
+                        && let Some(page) = target.page()
+                    {
+                        progress_handle
+                            .state::<Processing>()
+                            .clear_warning(project_id, page);
+                    }
+                    // A skipped stage is not active. Keep the last loading or
+                    // finished stage visible while concurrent work continues.
+                    let _ = target;
+                    Some(JobUpdate::CountOnly {
+                        completed: progress.0,
+                        total: progress.1,
+                    })
+                }
+                Progress::Warning {
+                    target,
+                    stage,
+                    model,
+                    error,
+                } => {
+                    let mut progress = progress.lock();
+                    progress.0 = progress.0.saturating_add(1).min(progress.1);
+                    let active_job = progress_handle
+                        .state::<Processing>()
+                        .jobs
+                        .lock()
+                        .contains_key(&id);
+                    if active_job && let Some(page) = target.page() {
+                        progress_handle.state::<Processing>().record_warning(
+                            project_id,
+                            page,
+                            PageWarning {
+                                stage,
+                                model: model.clone(),
+                                message: error.clone(),
+                            },
+                        );
+                    }
+                    Some(JobUpdate::Replace {
+                        completed: progress.0,
+                        total: progress.1,
+                        target: Some(target),
+                        stage: Some(stage),
+                        model: Some(model),
+                    })
                 }
                 Progress::Running { stage, model, .. } => {
                     tracing::info!(
@@ -185,16 +390,30 @@ pub(crate) async fn process(
                     None
                 }
             };
-            if let Some((completed, total, page, stage, model)) = update {
+            if let Some(update) = update {
                 let job = {
                     let processing = progress_handle.state::<Processing>();
                     let mut jobs = processing.jobs.lock();
                     jobs.get_mut(&id).map(|job| {
-                        job.completed = completed;
-                        job.total = total;
-                        job.page = page;
-                        job.stage = stage;
-                        job.model = model;
+                        match update {
+                            JobUpdate::Replace {
+                                completed,
+                                total,
+                                target,
+                                stage,
+                                model,
+                            } => {
+                                job.completed = completed;
+                                job.total = total;
+                                job.target = target;
+                                job.stage = stage;
+                                job.model = model;
+                            }
+                            JobUpdate::CountOnly { completed, total } => {
+                                job.completed = completed;
+                                job.total = total;
+                            }
+                        }
                         job.clone()
                     })
                 };
@@ -253,6 +472,9 @@ pub(crate) async fn process(
                 "completed"
             },
         );
+        task_handle
+            .state::<Processing>()
+            .finish(retry, stopped || error.is_some());
         task_handle.state::<Processing>().stops.lock().remove(&id);
         let job = task_handle
             .state::<Processing>()
@@ -275,6 +497,216 @@ pub(crate) async fn process(
         }
     }));
     Ok(id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn retry_uses_the_original_scope_and_stages_when_selection_matches() {
+        let processing = Processing::default();
+        let project = koharu_scene::Session::memory()
+            .await
+            .unwrap()
+            .snapshot()
+            .project_id();
+        let original_page = koharu_scene::EntityId::new();
+        let original = ProcessingRequest {
+            project,
+            scope: koharu_pipeline::Scope::Pages(vec![original_page]),
+            operation: koharu_pipeline::Operation::Stages {
+                stages: vec![
+                    koharu_pipeline::Stage::Detection,
+                    koharu_pipeline::Stage::Ocr,
+                    koharu_pipeline::Stage::Translation,
+                    koharu_pipeline::Stage::Inpainting,
+                ],
+            },
+            inpainting_mask: None,
+        };
+        processing.finish(original, true);
+
+        let selected = processing.select_request(ProcessingRequest {
+            project,
+            scope: koharu_pipeline::Scope::Pages(vec![original_page]),
+            operation: koharu_pipeline::Operation::Stages {
+                stages: vec![
+                    koharu_pipeline::Stage::Detection,
+                    koharu_pipeline::Stage::Ocr,
+                    koharu_pipeline::Stage::Translation,
+                    koharu_pipeline::Stage::Inpainting,
+                ],
+            },
+            inpainting_mask: None,
+        });
+
+        assert_eq!(
+            selected.scope,
+            koharu_pipeline::Scope::Pages(vec![original_page])
+        );
+        assert_eq!(
+            selected.operation,
+            koharu_pipeline::Operation::Stages {
+                stages: vec![
+                    koharu_pipeline::Stage::Detection,
+                    koharu_pipeline::Stage::Ocr,
+                    koharu_pipeline::Stage::Translation,
+                    koharu_pipeline::Stage::Inpainting,
+                ],
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn a_changed_selection_does_not_consume_an_old_retry() {
+        let processing = Processing::default();
+        let project = koharu_scene::Session::memory()
+            .await
+            .unwrap()
+            .snapshot()
+            .project_id();
+        let old_page = koharu_scene::EntityId::new();
+        processing.finish(
+            ProcessingRequest {
+                project,
+                scope: koharu_pipeline::Scope::Pages(vec![old_page]),
+                operation: koharu_pipeline::Operation::Stages {
+                    stages: vec![koharu_pipeline::Stage::Translation],
+                },
+                inpainting_mask: None,
+            },
+            true,
+        );
+
+        let new_page = koharu_scene::EntityId::new();
+        let selected = processing.select_request(ProcessingRequest {
+            project,
+            scope: koharu_pipeline::Scope::Pages(vec![new_page]),
+            operation: koharu_pipeline::Operation::Stages {
+                stages: vec![koharu_pipeline::Stage::Ocr],
+            },
+            inpainting_mask: None,
+        });
+
+        assert_eq!(
+            selected.scope,
+            koharu_pipeline::Scope::Pages(vec![new_page])
+        );
+        assert_eq!(
+            selected.operation,
+            koharu_pipeline::Operation::Stages {
+                stages: vec![koharu_pipeline::Stage::Ocr],
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn manual_inpainting_does_not_replace_a_pipeline_retry() {
+        let processing = Processing::default();
+        let project = koharu_scene::Session::memory()
+            .await
+            .unwrap()
+            .snapshot()
+            .project_id();
+        let original_page = koharu_scene::EntityId::new();
+        processing.finish(
+            ProcessingRequest {
+                project,
+                scope: koharu_pipeline::Scope::Pages(vec![original_page]),
+                operation: koharu_pipeline::Operation::Stages {
+                    stages: vec![koharu_pipeline::Stage::Detection],
+                },
+                inpainting_mask: None,
+            },
+            true,
+        );
+        processing.finish(
+            ProcessingRequest {
+                project,
+                scope: koharu_pipeline::Scope::Region {
+                    page: koharu_scene::EntityId::new(),
+                    bounds: koharu_pipeline::Bounds {
+                        x: 0.0,
+                        y: 0.0,
+                        width: 1.0,
+                        height: 1.0,
+                    },
+                },
+                operation: koharu_pipeline::Operation::Only {
+                    stage: koharu_pipeline::Stage::Inpainting,
+                },
+                inpainting_mask: None,
+            },
+            true,
+        );
+
+        let selected = processing.select_request(ProcessingRequest {
+            project,
+            scope: koharu_pipeline::Scope::Pages(vec![original_page]),
+            operation: koharu_pipeline::Operation::Stages {
+                stages: vec![koharu_pipeline::Stage::Detection],
+            },
+            inpainting_mask: None,
+        });
+
+        assert_eq!(
+            selected.scope,
+            koharu_pipeline::Scope::Pages(vec![original_page])
+        );
+        assert_eq!(
+            selected.operation,
+            koharu_pipeline::Operation::Stages {
+                stages: vec![koharu_pipeline::Stage::Detection],
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn page_warning_is_replaced_and_cleared_by_page() {
+        let processing = Processing::default();
+        let project = koharu_scene::Session::memory()
+            .await
+            .unwrap()
+            .snapshot()
+            .project_id();
+        let page = koharu_scene::EntityId::new();
+        let warning = PageWarning {
+            stage: koharu_pipeline::Stage::Inpainting,
+            model: "fal-model".to_owned(),
+            message: "content policy".to_owned(),
+        };
+
+        processing.record_warning(project, page, warning.clone());
+        assert_eq!(processing.warning(project, page), Some(warning));
+
+        processing.clear_warning(project, page);
+        assert_eq!(processing.warning(project, page), None);
+    }
+
+    #[tokio::test]
+    async fn warnings_are_cleared_when_processing_state_is_reset() {
+        let processing = Processing::default();
+        let project = koharu_scene::Session::memory()
+            .await
+            .unwrap()
+            .snapshot()
+            .project_id();
+        let page = koharu_scene::EntityId::new();
+        processing.record_warning(
+            project,
+            page,
+            PageWarning {
+                stage: koharu_pipeline::Stage::Inpainting,
+                model: "lama".to_owned(),
+                message: "failed".to_owned(),
+            },
+        );
+
+        processing.clear_warnings();
+
+        assert_eq!(processing.warning(project, page), None);
+    }
 }
 
 #[tracing::instrument(

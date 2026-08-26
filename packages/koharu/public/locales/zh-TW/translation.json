@@ -6,6 +6,7 @@
     "version": "版本"
   },
   "activity": {
+    "chapter": "章節",
     "dismiss": "關閉",
     "downloadFailed": "下載失敗。",
     "downloadingFiles": "正在下載 {{count}} 個檔案",
@@ -125,12 +126,16 @@
   "inference": {
     "currentPage": "目前頁面",
     "currentPageDescription": "只處理畫布中的頁面。",
+    "automatic": "自動",
+    "compactMode": "使用精簡處理控制項",
     "entireProject": "整個專案",
     "entireProjectDescription": "處理此專案中的每個頁面。",
+    "expandedMode": "使用展開處理控制項",
     "model": "模型",
     "noModel": "無模型",
     "notSet": "未設定",
     "output": "輸出",
+    "pageProfile": "頁面設定檔",
     "pipelineStages": "處理流程階段",
     "providerDefault": "提供者預設值",
     "run": "執行",
@@ -153,7 +158,8 @@
     "stageCount_other": "{{count}} 個階段",
     "stages": "階段",
     "stop": "停止",
-    "stopProcessing": "停止處理"
+    "stopProcessing": "停止處理",
+    "typing": "排版"
   },
   "inspector": {
     "alignBottom": "底端對齊",
@@ -221,6 +227,7 @@
       "cleanup": "清理",
       "dialogue": "對話",
       "freeText": "自由文字",
+      "onomatopoeia": "音效",
       "group": "群組",
       "image": "影像",
       "paint": "繪製",
@@ -232,6 +239,7 @@
     "moveDown": "下移 {{name}}",
     "moveUp": "上移 {{name}}",
     "opacityLabel": "{{name}} 不透明度",
+    "roleLabel": "{{name}} 的文字類型",
     "originalArtwork": "原始圖稿",
     "show": "顯示 {{name}}",
     "sourceLabel": "{{name}} 的原文",
@@ -241,6 +249,7 @@
   },
   "menu": {
     "about": "關於",
+    "clearProject": "清空專案",
     "closeProject": "關閉專案",
     "delete": "刪除所選項目",
     "discord": "Discord",
@@ -280,6 +289,10 @@
   "navigator": {
     "actionsFor": "{{page}} 的操作",
     "delete": "刪除",
+    "deleteAllAction": "刪除所有頁面",
+    "deleteAllDescription": "這會從專案中刪除所有頁面（共 {{count}} 頁）及其內容。您可以復原此操作。",
+    "deleteAllTitle": "刪除所有頁面？",
+    "deletingPages": "正在刪除頁面…",
     "emptyDescription": "匯入影像檔案或資料夾以新增頁面。",
     "emptyTitle": "尚無頁面",
     "filter": "篩選頁面",
@@ -308,6 +321,12 @@
   "phase": {
     "detection": "偵測",
     "inpainting": "修補",
+    "ocr": "OCR",
+    "translation": "翻譯"
+  },
+  "phaseShort": {
+    "detection": "偵測",
+    "inpainting": "修復",
     "ocr": "OCR",
     "translation": "翻譯"
   },
@@ -385,9 +404,36 @@
       "options": {
         "bubbleThreshold": "對話框閾值",
         "negativePrompt": "負面提示詞",
+        "applyMode": "套用模式",
+        "fullPage": "整頁",
+        "mask": "遮罩",
         "panelThreshold": "分鏡閾值",
         "prompt": "提示詞",
         "textThreshold": "文字閾值"
+      },
+      "ocr": {
+        "api": "API / 雲端",
+        "apiModel": "視覺 API 模型",
+        "instructions": "OCR 指令",
+        "instructionsDescription": "用於精確轉錄、閱讀順序、注音或擬聲詞的說明。",
+        "instructionsPlaceholder": "可選的 OCR 專用說明",
+        "local": "本機（CPU）",
+        "localModel": "本機 OCR 模型",
+        "method": "OCR 方法"
+      },
+      "inpainting": {
+        "apiModel": "影像編輯模型",
+        "localModel": "本機修復模型",
+        "method": "修復方式",
+        "options": "API 修復選項",
+        "promptPreset": "提示詞預設",
+        "promptPresets": {
+          "cleanup-all": "移除全部文字和浮水印",
+          "cleanup-text": "僅移除文字",
+          "custom": "自訂提示詞",
+          "translate-russian": "將文字替換為俄語"
+        },
+        "provider": "影像供應商"
       },
       "processing": "正在處理",
       "stages": {
@@ -411,6 +457,7 @@
       "configured": "已設定",
       "connections": "連線",
       "connectionsDescription": "認證資訊會安全地儲存在此裝置上。",
+      "falDescription": "Fal.ai 圖像編輯模型使用的認證資訊。",
       "credential": "認證資訊",
       "credentialLabel": "{{provider}} 認證資訊",
       "description": "連線翻譯和語言模型提供者。",
@@ -418,7 +465,7 @@
       "title": "提供者"
     },
     "shortcuts": {
-      "description": "當文字欄位未取得焦點時，可以使用單鍵快捷鍵。",
+      "description": "當文字欄位未取得焦點時，請使用 Ctrl 加上已設定的按鍵。",
       "inputLabel": "{{action}} 快速鍵",
       "title": "快捷鍵",
       "tools": "工具"
@@ -433,17 +480,22 @@
     },
     "title": "設定",
     "translation": {
-      "description": "選擇任一已設定提供者的模型，然後套用一組共用的翻譯和產生選項。",
-      "instructionsDescription": "關於名稱、語氣、術語或格式的說明。",
+      "description": "分別設定頁面與章節翻譯設定檔。",
+      "chapterProfile": "章節",
+      "instructions": "指示",
+      "instructionsDescription": "內建提示指定語言與 JSON 格式。留白即可使用；填寫內容會作為額外指引。",
       "instructionsLabel": "翻譯說明",
       "instructionsPlaceholder": "選用的專案層級說明",
       "model": "模型",
+      "pageProfile": "頁面",
       "modelDescription": "提供者標籤表示各模型的執行位置；連線需另行設定。",
       "modelQuantization": "模型量化",
       "output": "輸出",
       "quantization": "量化",
       "quantizationDescription": "較小的格式使用較少記憶體，但通常會犧牲一些品質。",
       "selectQuantization": "選擇量化方式",
+      "sourceLanguage": "來源語言",
+      "sourceLanguageDescription": "選擇原始頁面使用的語言。此設定會同時提供給 OCR 與翻譯作為提示。",
       "targetLanguageDescription": "選擇文字要翻譯成的語言。",
       "title": "譯文",
       "translationModel": "翻譯模型",
@@ -503,6 +555,7 @@
     "draw": "繪圖",
     "eraser": "橡皮擦",
     "increaseBrushSize": "增加筆刷大小",
+    "ocr": "OCR 區域",
     "pan": "平移",
     "remove": "移除",
     "select": "選取",

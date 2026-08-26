@@ -4,12 +4,13 @@ use anyhow::{Context as _, Result, anyhow, bail};
 use image::{DynamicImage, ImageFormat, RgbaImage};
 use koharu_desktop::Frame;
 use koharu_scene::{
-    AssetInput, AssetMetadata, AssetRole, At, Authored, Commit, EntityId, EntityOrigin,
-    Geometry as SceneGeometry, Group as SceneGroup, Origin, PageDraft, Point as ScenePoint,
-    Presents, RasterLayer as SceneRasterLayer, RasterLayerKind, Region as SceneRegion,
-    RemovePolicy, Revision, Session, Snapshot, SourceText as SceneSourceText,
-    TextGroup as SceneTextGroup, TextLayout as SceneTextLayout, TextLayoutKind,
-    Translation as SceneTranslation, Typography as SceneTypography, Visibility as SceneVisibility,
+    AssetInput, AssetMetadata, AssetRole, At, Authored, BubbleRegion, Commit, EntityId,
+    EntityOrigin, FitsTo, FlowsIn, Geometry as SceneGeometry, Group as SceneGroup, Inside, Origin,
+    PageDraft, Point as ScenePoint, Presents, RasterLayer as SceneRasterLayer, RasterLayerKind,
+    RecognizedFrom, Region as SceneRegion, RegionSpec, RemovePolicy, Revision, Session, Snapshot,
+    SourceText as SceneSourceText, TextGroup as SceneTextGroup, TextLayout as SceneTextLayout,
+    TextLayoutKind, TextRegion, TextRole as SceneTextRole, Translation as SceneTranslation,
+    Typography as SceneTypography, Visibility as SceneVisibility,
 };
 use serde::Serialize;
 use specta::Type;
@@ -19,6 +20,10 @@ use super::{
     canvas::Point,
     editing::{GeometryUpdate, TypographyUpdate},
 };
+
+const FREE_TEXT_ROLE: &str = "dev.koharu.text.free-text";
+const DIALOGUE_ROLE: &str = "dev.koharu.text.dialogue";
+const ONOMATOPOEIA_ROLE: &str = "dev.koharu.text.onomatopoeia";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RasterStrokeMode {
@@ -46,6 +51,13 @@ pub struct PageSize {
     pub height: f64,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Type)]
+pub struct PageWarning {
+    pub stage: koharu_pipeline::Stage,
+    pub model: String,
+    pub message: String,
+}
+
 #[derive(Clone, Debug, Serialize, Type)]
 pub struct PageSummary {
     pub id: EntityId,
@@ -54,6 +66,7 @@ pub struct PageSummary {
     pub source_asset: Option<String>,
     #[specta(type = f64)]
     pub layer_count: usize,
+    pub warning: Option<PageWarning>,
 }
 
 #[derive(Clone, Debug, Serialize, Type)]
@@ -345,6 +358,7 @@ impl Project {
                     },
                     source_asset,
                     layer_count,
+                    warning: None,
                 })
             })
             .collect()
@@ -411,6 +425,89 @@ impl Project {
         frame: Frame,
     ) -> Result<(Commit, EntityId)> {
         self.add_text(page, frame, TextLayoutKind::Paragraph).await
+    }
+
+    pub(crate) async fn add_ocr_region(
+        &mut self,
+        page: EntityId,
+        frame: Frame,
+        source_language: koharu_translator::Language,
+    ) -> Result<(Commit, EntityId, EntityId)> {
+        let snapshot = self.snapshot();
+        let geometry = Self::geometry_from_frame(frame)?;
+        let page_value = snapshot.page(page)?.page()?;
+        if geometry.points.iter().any(|point| {
+            point.x < 0.0
+                || point.y < 0.0
+                || point.x > page_value.width
+                || point.y > page_value.height
+        }) {
+            bail!("OCR region must be inside the page");
+        }
+        let bubble = Self::containing_bubble(&snapshot, page, &geometry)?;
+        let placement =
+            koharu_pipeline::text_layer_placement(&snapshot, page, &geometry, source_language)?;
+        let mut added = None;
+        let patch = snapshot.patch(|edit| {
+            let region = edit.add_analysis_region::<TextRegion>(
+                page,
+                At::End,
+                &geometry,
+                Some("text".to_owned()),
+            )?;
+            let content = edit.add_text_content(page, At::End)?;
+            let layer = edit.add_text_layer(
+                page,
+                placement,
+                content,
+                &SceneTextLayout {
+                    origin: Origin::User,
+                    kind: TextLayoutKind::Paragraph,
+                },
+            )?;
+            edit.set(
+                layer,
+                &SceneTypography {
+                    origin: Origin::User,
+                    preferred_font: None,
+                    font_weight: None,
+                    font_style: None,
+                    size: None,
+                    auto_fit: true,
+                    color: None,
+                    stroke_color: None,
+                    stroke_width: None,
+                    alignment: None,
+                    writing_mode: None,
+                    extensions: Default::default(),
+                },
+            )?;
+            edit.set(
+                content,
+                &SceneTextRole {
+                    origin: Origin::User,
+                    role: if bubble.is_some() {
+                        DIALOGUE_ROLE
+                    } else {
+                        FREE_TEXT_ROLE
+                    }
+                    .to_owned(),
+                },
+            )?;
+            edit.relate::<RecognizedFrom>(content, region)?;
+            if let Some(bubble) = bubble {
+                edit.relate::<Inside>(region, bubble)?;
+                edit.relate::<FlowsIn>(layer, bubble)?;
+            } else {
+                edit.relate::<FitsTo>(layer, region)?;
+            }
+            added = Some((layer, region));
+            Ok(())
+        })?;
+        let commit = self.commit(patch).await?;
+        let (layer, region) =
+            added.expect("OCR layer and region were added while building the patch");
+        Ok((commit, layer, region))
     }
 
     async fn add_text(
@@ -494,6 +591,29 @@ impl Project {
         self.commit(patch).await
     }
 
+    pub(crate) async fn set_text_role(&mut self, layer: EntityId, role: String) -> Result<Commit> {
+        if !matches!(
+            role.as_str(),
+            DIALOGUE_ROLE | FREE_TEXT_ROLE | ONOMATOPOEIA_ROLE
+        ) {
+            bail!("unsupported text role");
+        }
+        let snapshot = self.snapshot();
+        let content = Self::text_content(&snapshot, layer)?;
+        let patch = snapshot.patch(|edit| {
+            edit.promote_entity_to_user(layer)?;
+            edit.promote_entity_to_user(content)?;
+            edit.set(
+                content,
+                &SceneTextRole {
+                    origin: Origin::User,
+                    role,
+                },
+            )
+        })?;
+        self.commit(patch).await
+    }
+
     pub(crate) async fn set_translation(
         &mut self,
         layer: EntityId,
@@ -565,11 +685,17 @@ impl Project {
         let updates = updates
             .into_iter()
             .map(|update| {
+                if snapshot.component::<SceneRegion>(update.layer)?.is_some() {
+                    if update.points.is_none() {
+                        bail!("analysis regions require explicit geometry");
+                    }
+                    return Ok((update, None));
+                }
                 if snapshot
                     .component::<SceneTextLayout>(update.layer)?
                     .is_none()
                 {
-                    bail!("only text layers can change geometry");
+                    bail!("only text layers or analysis regions can change geometry");
                 }
                 let content = Self::text_content(&snapshot, update.layer)?;
                 if update.points.is_none()
@@ -580,13 +706,15 @@ impl Project {
                 {
                     bail!("only automatically placed text can reset its geometry");
                 }
-                Ok((update, content))
+                Ok((update, Some(content)))
             })
             .collect::<Result<Vec<_>>>()?;
         let patch = snapshot.patch(|edit| {
             for (update, content) in updates {
                 edit.promote_entity_to_user(update.layer)?;
-                edit.promote_entity_to_user(content)?;
+                if let Some(content) = content {
+                    edit.promote_entity_to_user(content)?;
+                }
                 match update.points {
                     Some(points) => edit.set(
                         update.layer,
@@ -651,14 +779,44 @@ impl Project {
             }
         }
         let layers = Self::unique_roots(&snapshot, expanded)?;
-        let mut orphaned_contents = Vec::new();
+        let mut deleted_entities = HashSet::new();
+        for layer in &layers {
+            deleted_entities.extend(snapshot.subtree(*layer)?.map(|entity| entity.id()));
+        }
+        let mut orphaned_contents = HashSet::new();
         for layer in &layers {
             let Some(relation) = snapshot.relation_from::<Presents>(*layer)? else {
                 continue;
             };
             let content = relation.value().target;
-            if snapshot.relations_to_as::<Presents>(content).count() == 1 {
-                orphaned_contents.push(content);
+            if snapshot
+                .relations_to_as::<Presents>(content)
+                .all(|relation| deleted_entities.contains(&relation.value().source))
+            {
+                orphaned_contents.insert(content);
+            }
+        }
+        let mut orphaned_regions = HashSet::new();
+        for content in &orphaned_contents {
+            let Some(relation) = snapshot.relation_from::<RecognizedFrom>(*content)? else {
+                continue;
+            };
+            let region = relation.value().target;
+            let is_text_region = snapshot
+                .component::<SceneRegion>(region)?
+                .is_some_and(|value| value.kind == TextRegion::kind());
+            let has_live_content = snapshot
+                .relations_to_as::<RecognizedFrom>(region)
+                .filter(|relation| !orphaned_contents.contains(&relation.value().source))
+                .any(|relation| {
+                    snapshot
+                        .relations_to_as::<Presents>(relation.value().source)
+                        .any(|presentation| {
+                            !deleted_entities.contains(&presentation.value().source)
+                        })
+                });
+            if is_text_region && !has_live_content {
+                orphaned_regions.insert(region);
             }
         }
         let patch = snapshot.patch(|edit| {
@@ -673,6 +831,11 @@ impl Project {
             for content in orphaned_contents {
                 if snapshot.entity(content).is_ok() {
                     edit.remove_entity(content, RemovePolicy::Cascade)?;
+                }
+            }
+            for region in orphaned_regions {
+                if snapshot.entity(region).is_ok() {
+                    edit.remove_entity(region, RemovePolicy::Cascade)?;
                 }
             }
             Ok(())
@@ -702,6 +865,63 @@ impl Project {
                 edit.promote_entity_to_user(parent)?;
             }
             edit.move_entity(layer, Some(parent), at)
+        })?;
+        self.commit(patch).await
+    }
+
+    pub(crate) async fn reorder_layers(
+        &mut self,
+        parent: EntityId,
+        order: Vec<EntityId>,
+    ) -> Result<Commit> {
+        if order.is_empty() {
+            bail!("layer order must not be empty");
+        }
+        let snapshot = self.snapshot();
+        let siblings = snapshot
+            .children(parent)?
+            .map(|candidate| Ok(Self::is_layer(&snapshot, candidate)?.then_some(candidate)))
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+        let moving = order.iter().copied().collect::<HashSet<_>>();
+        if moving.len() != order.len() || !moving.iter().all(|layer| siblings.contains(layer)) {
+            bail!("layer order must contain unique children of the requested parent");
+        }
+        let mut replacements = order.iter().copied();
+        let desired = siblings
+            .iter()
+            .map(|layer| {
+                if moving.contains(layer) {
+                    replacements
+                        .next()
+                        .expect("the replacement order has the same number of layers")
+                } else {
+                    *layer
+                }
+            })
+            .collect::<Vec<_>>();
+        let patch = snapshot.patch(|edit| {
+            let mut current = siblings.clone();
+            for (index, layer) in desired.iter().copied().enumerate() {
+                if current[index] == layer {
+                    continue;
+                }
+                let anchor = current[index];
+                edit.promote_entity_to_user(layer)?;
+                edit.move_entity(layer, Some(parent), At::Before(anchor))?;
+                let source = current
+                    .iter()
+                    .position(|candidate| *candidate == layer)
+                    .expect("the desired order contains the same sibling layers");
+                current.remove(source);
+                current.insert(index, layer);
+            }
+            if snapshot.component::<SceneTextGroup>(parent)?.is_some() {
+                edit.promote_entity_to_user(parent)?;
+            }
+            Ok(())
         })?;
         self.commit(patch).await
     }
@@ -1229,6 +1449,84 @@ impl Project {
             .into(),
         })
     }
+
+    fn containing_bubble(
+        snapshot: &Snapshot,
+        page: EntityId,
+        geometry: &SceneGeometry,
+    ) -> Result<Option<EntityId>> {
+        let mut smallest = None;
+        for entity in snapshot.descendants(page)? {
+            let id = entity.id();
+            let is_bubble = snapshot
+                .component::<SceneRegion>(id)?
+                .is_some_and(|region| region.kind == BubbleRegion::kind());
+            if !is_bubble {
+                continue;
+            }
+            let Some(candidate) = snapshot.component::<SceneGeometry>(id)? else {
+                continue;
+            };
+            if !geometry_contains(&candidate, geometry) {
+                continue;
+            }
+            let area = polygon_area(&candidate);
+            if smallest.is_none_or(|(_, smallest_area)| area < smallest_area) {
+                smallest = Some((id, area));
+            }
+        }
+        Ok(smallest.map(|(id, _)| id))
+    }
+}
+
+fn geometry_contains(parent: &SceneGeometry, child: &SceneGeometry) -> bool {
+    child
+        .points
+        .iter()
+        .all(|point| point_in_geometry(point, parent))
+}
+
+fn polygon_area(geometry: &SceneGeometry) -> f64 {
+    if geometry.points.len() < 3 {
+        return 0.0;
+    }
+    geometry
+        .points
+        .iter()
+        .zip(geometry.points.iter().cycle().skip(1))
+        .map(|(left, right)| left.x * right.y - right.x * left.y)
+        .sum::<f64>()
+        .abs()
+        * 0.5
+}
+
+fn point_in_geometry(point: &ScenePoint, geometry: &SceneGeometry) -> bool {
+    if geometry.points.len() < 3 {
+        return false;
+    }
+    let mut inside = false;
+    let mut previous = geometry.points.last().expect("geometry is non-empty");
+    for current in &geometry.points {
+        let cross = (point.x - current.x) * (previous.y - current.y)
+            - (point.y - current.y) * (previous.x - current.x);
+        let on_segment = cross.abs() <= 1e-6
+            && point.x >= current.x.min(previous.x) - 1e-6
+            && point.x <= current.x.max(previous.x) + 1e-6
+            && point.y >= current.y.min(previous.y) - 1e-6
+            && point.y <= current.y.max(previous.y) + 1e-6;
+        if on_segment {
+            return true;
+        }
+        if (current.y > point.y) != (previous.y > point.y)
+            && point.x
+                < (previous.x - current.x) * (point.y - current.y) / (previous.y - current.y)
+                    + current.x
+        {
+            inside = !inside;
+        }
+        previous = current;
+    }
+    inside
 }
 
 fn validate_project_name(name: &str) -> Result<String> {
@@ -1326,7 +1624,10 @@ fn rasterize_stroke(
 
 #[cfg(test)]
 mod tests {
-    use koharu_scene::{Generation, ProducerId, WritingMode};
+    use koharu_scene::{
+        BubbleRegion, DetectionAnalysis, FitsTo, FlowsIn, Generation, Inside, ProducerId,
+        RecognizedFrom, TextRegion, TextRole, WritingMode,
+    };
 
     use super::*;
 
@@ -1357,6 +1658,68 @@ mod tests {
         assert_eq!(
             Project::typography_view(typography).writing_mode,
             Some(WritingMode::Vertical)
+        );
+    }
+
+    #[tokio::test]
+    async fn reordering_layers_moves_a_group_atomically_and_preserves_its_internal_order() {
+        let mut session = Session::memory().await.unwrap();
+        let mut setup = session.snapshot().edit();
+        let page = setup
+            .add_page(PageDraft::new("page", 100.0, 100.0), At::End)
+            .unwrap();
+        let layout = SceneTextLayout {
+            origin: Origin::User,
+            kind: TextLayoutKind::Paragraph,
+        };
+        let mut layers = Vec::new();
+        for _ in 0..4 {
+            let content = setup.add_text_content(page, At::End).unwrap();
+            layers.push(
+                setup
+                    .add_text_layer(page, At::End, content, &layout)
+                    .unwrap(),
+            );
+        }
+        session.commit(setup.finish().unwrap()).await.unwrap();
+        let mut project = Project::new(session, "test".to_owned());
+        let group = project
+            .snapshot()
+            .page(page)
+            .unwrap()
+            .text_group()
+            .unwrap()
+            .unwrap()
+            .id();
+
+        let commit = project
+            .reorder_layers(group, vec![layers[2], layers[3], layers[0], layers[1]])
+            .await
+            .unwrap();
+        project.record_commit(&commit);
+        let text_order = |snapshot: &Snapshot| {
+            snapshot
+                .page(page)
+                .unwrap()
+                .text_group()
+                .unwrap()
+                .unwrap()
+                .text_layers()
+                .unwrap()
+                .map(|layer| layer.id())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            text_order(&project.snapshot()),
+            [layers[2], layers[3], layers[0], layers[1]]
+        );
+
+        project.undo().await.unwrap();
+        assert_eq!(text_order(&project.snapshot()), layers);
+        project.redo().await.unwrap();
+        assert_eq!(
+            text_order(&project.snapshot()),
+            [layers[2], layers[3], layers[0], layers[1]]
         );
     }
 
@@ -1435,6 +1798,337 @@ mod tests {
                 .unwrap()
                 .label,
             "latest manual"
+        );
+    }
+
+    #[tokio::test]
+    async fn deleting_the_last_ocr_layer_removes_its_text_region_but_keeps_the_bubble() {
+        let mut session = Session::memory().await.unwrap();
+        let mut setup = session.snapshot().edit();
+        let page = setup
+            .add_page(PageDraft::new("page", 100.0, 100.0), At::End)
+            .unwrap();
+        let bubble = setup
+            .add_analysis_region::<BubbleRegion>(
+                page,
+                At::End,
+                &SceneGeometry::rectangle(5.0, 5.0, 90.0, 90.0),
+                None,
+            )
+            .unwrap();
+        let region = setup
+            .add_analysis_region::<TextRegion>(
+                page,
+                At::End,
+                &SceneGeometry::rectangle(20.0, 20.0, 30.0, 20.0),
+                None,
+            )
+            .unwrap();
+        let content = setup.add_text_content(page, At::End).unwrap();
+        let layer = setup
+            .add_text_layer(
+                page,
+                At::End,
+                content,
+                &SceneTextLayout {
+                    origin: Origin::User,
+                    kind: TextLayoutKind::Paragraph,
+                },
+            )
+            .unwrap();
+        setup.relate::<RecognizedFrom>(content, region).unwrap();
+        setup.relate::<Inside>(region, bubble).unwrap();
+        setup.relate::<FlowsIn>(layer, bubble).unwrap();
+        session.commit(setup.finish().unwrap()).await.unwrap();
+        let mut project = Project::new(session, "test".to_owned());
+
+        let deletion = project.delete_layers(vec![layer]).await.unwrap();
+        project.record_commit(&deletion);
+
+        let snapshot = project.snapshot();
+        assert!(snapshot.entity(layer).is_err());
+        assert!(snapshot.entity(content).is_err());
+        assert!(snapshot.entity(region).is_err());
+        assert!(snapshot.entity(bubble).is_ok());
+
+        project.undo().await.unwrap();
+        let snapshot = project.snapshot();
+        assert!(snapshot.entity(layer).is_ok());
+        assert!(snapshot.entity(content).is_ok());
+        assert!(snapshot.entity(region).is_ok());
+        assert!(snapshot.entity(bubble).is_ok());
+
+        project.redo().await.unwrap();
+        let snapshot = project.snapshot();
+        assert!(snapshot.entity(layer).is_err());
+        assert!(snapshot.entity(content).is_err());
+        assert!(snapshot.entity(region).is_err());
+        assert!(snapshot.entity(bubble).is_ok());
+    }
+
+    #[tokio::test]
+    async fn deleting_one_of_multiple_presentations_keeps_the_content_and_region() {
+        let mut session = Session::memory().await.unwrap();
+        let mut setup = session.snapshot().edit();
+        let page = setup
+            .add_page(PageDraft::new("page", 100.0, 100.0), At::End)
+            .unwrap();
+        let region = setup
+            .add_analysis_region::<TextRegion>(
+                page,
+                At::End,
+                &SceneGeometry::rectangle(20.0, 20.0, 30.0, 20.0),
+                None,
+            )
+            .unwrap();
+        let content = setup.add_text_content(page, At::End).unwrap();
+        let layout = SceneTextLayout {
+            origin: Origin::User,
+            kind: TextLayoutKind::Paragraph,
+        };
+        let first = setup
+            .add_text_layer(page, At::End, content, &layout)
+            .unwrap();
+        let second = setup
+            .add_text_layer(page, At::End, content, &layout)
+            .unwrap();
+        setup.relate::<RecognizedFrom>(content, region).unwrap();
+        session.commit(setup.finish().unwrap()).await.unwrap();
+        let mut project = Project::new(session, "test".to_owned());
+
+        project.delete_layers(vec![first]).await.unwrap();
+
+        let snapshot = project.snapshot();
+        assert!(snapshot.entity(first).is_err());
+        assert!(snapshot.entity(second).is_ok());
+        assert!(snapshot.entity(content).is_ok());
+        assert!(snapshot.entity(region).is_ok());
+    }
+
+    #[tokio::test]
+    async fn manual_ocr_region_is_empty_until_ocr_and_uses_bubble_semantics_when_contained() {
+        let mut session = Session::memory().await.unwrap();
+        let mut setup = session.snapshot().edit();
+        let page = setup
+            .add_page(PageDraft::new("page", 100.0, 100.0), At::End)
+            .unwrap();
+        let bubble = setup
+            .add_analysis_region::<BubbleRegion>(
+                page,
+                At::End,
+                &SceneGeometry::rectangle(5.0, 5.0, 55.0, 55.0),
+                None,
+            )
+            .unwrap();
+        session.commit(setup.finish().unwrap()).await.unwrap();
+        let mut project = Project::new(session, "test".to_owned());
+
+        let (_, dialogue_layer, dialogue_region) = project
+            .add_ocr_region(
+                page,
+                Frame {
+                    x: 15.0,
+                    y: 15.0,
+                    width: 20.0,
+                    height: 20.0,
+                    angle_degrees: 0.0,
+                },
+                koharu_translator::Language::Japanese,
+            )
+            .await
+            .unwrap();
+        let (_, free_layer, free_region) = project
+            .add_ocr_region(
+                page,
+                Frame {
+                    x: 70.0,
+                    y: 70.0,
+                    width: 20.0,
+                    height: 20.0,
+                    angle_degrees: 0.0,
+                },
+                koharu_translator::Language::Japanese,
+            )
+            .await
+            .unwrap();
+
+        let snapshot = project.snapshot();
+        assert_eq!(
+            snapshot
+                .page(page)
+                .unwrap()
+                .text_group()
+                .unwrap()
+                .unwrap()
+                .text_layers()
+                .unwrap()
+                .map(|layer| layer.id())
+                .collect::<Vec<_>>(),
+            [free_layer, dialogue_layer]
+        );
+        let dialogue_content = snapshot
+            .relation_from::<Presents>(dialogue_layer)
+            .unwrap()
+            .unwrap()
+            .value()
+            .target;
+        assert!(
+            snapshot
+                .component::<SceneSourceText>(dialogue_content)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            snapshot
+                .component::<DetectionAnalysis>(dialogue_region)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            snapshot
+                .component::<TextRole>(dialogue_content)
+                .unwrap()
+                .unwrap()
+                .role,
+            DIALOGUE_ROLE
+        );
+        assert_eq!(
+            snapshot
+                .relation_from::<RecognizedFrom>(dialogue_content)
+                .unwrap()
+                .unwrap()
+                .value()
+                .target,
+            dialogue_region
+        );
+        assert_eq!(
+            snapshot
+                .relations_from_as::<Inside>(dialogue_region)
+                .next()
+                .unwrap()
+                .value()
+                .target,
+            bubble
+        );
+        assert_eq!(
+            snapshot
+                .relation_from::<FlowsIn>(dialogue_layer)
+                .unwrap()
+                .unwrap()
+                .value()
+                .target,
+            bubble
+        );
+
+        let free_content = snapshot
+            .relation_from::<Presents>(free_layer)
+            .unwrap()
+            .unwrap()
+            .value()
+            .target;
+        assert_eq!(
+            snapshot
+                .component::<TextRole>(free_content)
+                .unwrap()
+                .unwrap()
+                .role,
+            FREE_TEXT_ROLE
+        );
+        assert_eq!(
+            snapshot
+                .relation_from::<FitsTo>(free_layer)
+                .unwrap()
+                .unwrap()
+                .value()
+                .target,
+            free_region
+        );
+
+        project
+            .set_geometry(vec![GeometryUpdate {
+                layer: free_region,
+                points: Some(vec![
+                    Point { x: 68.0, y: 68.0 },
+                    Point { x: 95.0, y: 75.0 },
+                    Point { x: 88.0, y: 98.0 },
+                    Point { x: 61.0, y: 91.0 },
+                ]),
+            }])
+            .await
+            .unwrap();
+        let geometry = project
+            .snapshot()
+            .component::<SceneGeometry>(free_region)
+            .unwrap()
+            .unwrap();
+        assert_eq!(geometry.points[0].x, 68.0);
+        assert_eq!(geometry.points[3].y, 91.0);
+    }
+
+    #[tokio::test]
+    async fn changing_an_ocr_text_role_is_undoable_and_rejects_unknown_roles() {
+        let mut session = Session::memory().await.unwrap();
+        let mut setup = session.snapshot().edit();
+        let page = setup
+            .add_page(PageDraft::new("page", 100.0, 100.0), At::End)
+            .unwrap();
+        session.commit(setup.finish().unwrap()).await.unwrap();
+        let mut project = Project::new(session, "test".to_owned());
+        let (_, layer, _) = project
+            .add_ocr_region(
+                page,
+                Frame {
+                    x: 10.0,
+                    y: 10.0,
+                    width: 30.0,
+                    height: 20.0,
+                    angle_degrees: 0.0,
+                },
+                koharu_translator::Language::Japanese,
+            )
+            .await
+            .unwrap();
+        let content = Project::text_content(&project.snapshot(), layer).unwrap();
+
+        assert!(
+            project
+                .set_text_role(layer, "dev.koharu.text.unknown".to_owned())
+                .await
+                .is_err()
+        );
+        let commit = project
+            .set_text_role(layer, ONOMATOPOEIA_ROLE.to_owned())
+            .await
+            .unwrap();
+        project.record_commit(&commit);
+        let role = project
+            .snapshot()
+            .component::<TextRole>(content)
+            .unwrap()
+            .unwrap();
+        assert_eq!(role.role, ONOMATOPOEIA_ROLE);
+        assert_eq!(role.origin, Origin::User);
+
+        project.undo().await.unwrap();
+        assert_eq!(
+            project
+                .snapshot()
+                .component::<TextRole>(content)
+                .unwrap()
+                .unwrap()
+                .role,
+            FREE_TEXT_ROLE
+        );
+
+        project.redo().await.unwrap();
+        assert_eq!(
+            project
+                .snapshot()
+                .component::<TextRole>(content)
+                .unwrap()
+                .unwrap()
+                .role,
+            ONOMATOPOEIA_ROLE
         );
     }
 

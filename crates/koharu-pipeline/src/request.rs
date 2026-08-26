@@ -82,16 +82,69 @@ impl Default for Request {
     }
 }
 
-#[derive(Clone, Default)]
-pub struct StopToken(Arc<AtomicBool>);
+struct StopState {
+    stopped: AtomicBool,
+    notify: tokio::sync::Notify,
+}
+
+#[derive(Clone)]
+pub struct StopToken(Arc<StopState>);
+
+impl Default for StopToken {
+    fn default() -> Self {
+        Self(Arc::new(StopState {
+            stopped: AtomicBool::new(false),
+            notify: tokio::sync::Notify::new(),
+        }))
+    }
+}
 
 impl StopToken {
     pub fn stop(&self) {
-        self.0.store(true, Ordering::Release);
+        if !self.0.stopped.swap(true, Ordering::AcqRel) {
+            self.0.notify.notify_waiters();
+        }
     }
 
     #[must_use]
     pub fn stopped(&self) -> bool {
-        self.0.load(Ordering::Acquire)
+        self.0.stopped.load(Ordering::Acquire)
+    }
+
+    pub async fn cancelled(&self) {
+        if self.stopped() {
+            return;
+        }
+        let notified = self.0.notify.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        if self.stopped() {
+            return;
+        }
+        notified.await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn stop_wakes_all_async_waiters() {
+        let stop = StopToken::default();
+        let first = tokio::spawn({
+            let stop = stop.clone();
+            async move { stop.cancelled().await }
+        });
+        let second = tokio::spawn({
+            let stop = stop.clone();
+            async move { stop.cancelled().await }
+        });
+
+        tokio::task::yield_now().await;
+        stop.stop();
+        first.await.unwrap();
+        second.await.unwrap();
+        stop.cancelled().await;
     }
 }

@@ -95,7 +95,10 @@ function JobItem({ job }: { job: Job }) {
               ? t(`phase.${job.stage}`, { defaultValue: job.stage })
               : t('activity.processing')}
           </span>
-          <p className='mt-0.5 truncate text-[10px] text-muted-foreground'>{job.model}</p>
+          <p className='mt-0.5 truncate text-[10px] text-muted-foreground'>
+            {job.target?.target === 'chapter' ? `${t('activity.chapter')} · ` : ''}
+            {job.model}
+          </p>
         </div>
         <span className='pt-0.5 text-right text-[10px] tabular-nums'>
           {percent !== null ? `${percent}%` : null}

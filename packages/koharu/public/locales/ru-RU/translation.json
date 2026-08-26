@@ -6,6 +6,7 @@
     "version": "Версия"
   },
   "activity": {
+    "chapter": "Глава",
     "dismiss": "Закрыть",
     "downloadFailed": "Не удалось скачать.",
     "downloadingFiles": "Скачивание файлов: {{count}}",
@@ -125,12 +126,16 @@
   "inference": {
     "currentPage": "Текущая страница",
     "currentPageDescription": "Обработать только страницу на холсте.",
+    "automatic": "Автоматически",
+    "compactMode": "Свернуть панель обработки",
     "entireProject": "Весь проект",
     "entireProjectDescription": "Обработать все страницы проекта.",
+    "expandedMode": "Развернуть панель обработки",
     "model": "Модель",
     "noModel": "Нет модели",
     "notSet": "Не задано",
     "output": "Результат",
+    "pageProfile": "Профиль страницы",
     "pipelineStages": "Этапы конвейера",
     "providerDefault": "По умолчанию у провайдера",
     "run": "Запустить",
@@ -153,7 +158,8 @@
     "stageCount_other": "Этапов: {{count}}",
     "stages": "Этапы",
     "stop": "Остановить",
-    "stopProcessing": "Остановить обработку"
+    "stopProcessing": "Остановить обработку",
+    "typing": "Тайпинг"
   },
   "inspector": {
     "alignBottom": "Выровнять по нижнему краю",
@@ -220,7 +226,8 @@
     "kinds": {
       "cleanup": "Очистка",
       "dialogue": "Диалог",
-      "freeText": "Свободный текст",
+      "freeText": "Надпись",
+      "onomatopoeia": "Звук",
       "group": "Группа",
       "image": "Изображение",
       "paint": "Рисование",
@@ -232,6 +239,7 @@
     "moveDown": "Переместить {{name}} вниз",
     "moveUp": "Переместить {{name}} вверх",
     "opacityLabel": "Непрозрачность {{name}}",
+    "roleLabel": "Тип текста {{name}}",
     "originalArtwork": "Исходное изображение",
     "show": "Показать {{name}}",
     "sourceLabel": "Исходный текст {{name}}",
@@ -241,6 +249,7 @@
   },
   "menu": {
     "about": "О программе",
+    "clearProject": "Очистить проект",
     "closeProject": "Закрыть проект",
     "delete": "Удалить выбранное",
     "discord": "Discord",
@@ -280,6 +289,10 @@
   "navigator": {
     "actionsFor": "Действия для {{page}}",
     "delete": "Удалить",
+    "deleteAllAction": "Удалить все страницы",
+    "deleteAllDescription": "Все страницы проекта ({{count}} шт.) и их содержимое будут удалены. Это действие можно отменить.",
+    "deleteAllTitle": "Удалить все страницы?",
+    "deletingPages": "Удаление страниц…",
     "emptyDescription": "Импортируйте изображения или папку, чтобы добавить страницы.",
     "emptyTitle": "Страниц пока нет",
     "filter": "Фильтровать страницы",
@@ -308,6 +321,12 @@
   "phase": {
     "detection": "Обнаружение",
     "inpainting": "Восстановление",
+    "ocr": "OCR",
+    "translation": "Перевод"
+  },
+  "phaseShort": {
+    "detection": "Детект",
+    "inpainting": "Клининг",
     "ocr": "OCR",
     "translation": "Перевод"
   },
@@ -385,9 +404,36 @@
       "options": {
         "bubbleThreshold": "Порог пузыря",
         "negativePrompt": "Негативный промпт",
+        "applyMode": "Режим применения",
+        "fullPage": "Вся страница",
+        "mask": "По маске",
         "panelThreshold": "Порог панели",
         "prompt": "Промпт",
         "textThreshold": "Порог текста"
+      },
+      "ocr": {
+        "api": "API / облако",
+        "apiModel": "Vision-модель API",
+        "instructions": "Инструкции OCR",
+        "instructionsDescription": "Указания для точной транскрипции, порядка чтения, фуриганы и звуковых эффектов.",
+        "instructionsPlaceholder": "Необязательные инструкции только для OCR",
+        "local": "Локально (CPU)",
+        "localModel": "Локальная OCR-модель",
+        "method": "Метод OCR"
+      },
+      "inpainting": {
+        "apiModel": "Модель редактирования изображения",
+        "localModel": "Локальная модель восстановления",
+        "method": "Метод восстановления",
+        "options": "Параметры API-восстановления",
+        "promptPreset": "Пресет промпта",
+        "promptPresets": {
+          "cleanup-all": "Убрать весь текст и водяные знаки",
+          "cleanup-text": "Убрать только текст",
+          "custom": "Свой промпт",
+          "translate-russian": "Заменить надписи на русский"
+        },
+        "provider": "Провайдер изображений"
       },
       "processing": "Обработка",
       "stages": {
@@ -411,6 +457,7 @@
       "configured": "Настроено",
       "connections": "Подключения",
       "connectionsDescription": "Учётные данные безопасно хранятся на этом устройстве.",
+      "falDescription": "Ключ доступа для моделей редактирования изображений Fal.ai.",
       "credential": "Учётные данные",
       "credentialLabel": "Учётные данные {{provider}}",
       "description": "Подключите провайдеров перевода и языковых моделей.",
@@ -418,7 +465,7 @@
       "title": "Провайдеры"
     },
     "shortcuts": {
-      "description": "Одноклавишные сочетания доступны, когда поле ввода текста не в фокусе.",
+      "description": "Используйте Ctrl и настроенную клавишу, когда поле ввода текста не в фокусе.",
       "inputLabel": "Сочетание для «{{action}}»",
       "title": "Сочетания клавиш",
       "tools": "Инструменты"
@@ -433,21 +480,36 @@
     },
     "title": "Настройки",
     "translation": {
-      "description": "Выберите модель настроенного провайдера и примените общие параметры перевода и генерации.",
-      "instructionsDescription": "Указания по именам, тону, терминологии или форматированию.",
+      "description": "Настройте отдельные профили перевода страницы и главы.",
+      "chapterProfile": "Глава",
+      "instructions": "Инструкции",
+      "instructionsDescription": "Встроенный prompt задаёт языки и формат JSON. Выберите пресет главы выше или отредактируйте дополнительные инструкции здесь.",
       "instructionsLabel": "Инструкции по переводу",
       "instructionsPlaceholder": "Необязательные указания для всего проекта",
+      "promptPreset": "Пресет prompt главы",
+      "promptPresetDescription": "Загрузить готовые правила стиля и терминологии в профиль главы.",
+      "presetCustom": "Свои инструкции",
+      "presetBnhaBakugoMidoriya": "BNHA — Бакуго / Мидория",
+      "presetBnhaDoujinshi": "BNHA — додзинси",
+      "presetMangaAdaptive": "Манга — adaptive chapter",
       "model": "Модель",
+      "pageProfile": "Страница",
       "modelDescription": "Метки провайдеров показывают, где работает модель; подключения настраиваются отдельно.",
       "modelQuantization": "Квантование модели",
       "output": "Результат",
       "quantization": "Квантование",
       "quantizationDescription": "Меньшие форматы используют меньше памяти, обычно за счёт качества.",
       "selectQuantization": "Выбрать квантование",
+      "sourceLanguage": "Исходный язык",
+      "sourceLanguageDescription": "Выберите язык текста на исходных страницах. Он используется как подсказка для OCR и перевода.",
       "targetLanguageDescription": "Выберите язык, на который нужно перевести текст.",
       "title": "Перевод",
       "translationModel": "Модель перевода",
-      "translationModelDescription": "Выберите модель для перевода текста."
+      "translationModelDescription": "Выберите модель для перевода текста.",
+      "unitPolicy": "Группировка перевода",
+      "unitPolicyDescription": "Выберите, как группировать текст главы перед переводом.",
+      "pageOnly": "Только страница",
+      "adaptiveV1": "Adaptive v1 (контекст главы)"
     },
     "typesetting": {
       "addFamily": "Добавить семейство шрифтов",
@@ -503,6 +565,7 @@
     "draw": "Рисование",
     "eraser": "Ластик",
     "increaseBrushSize": "Увеличить размер кисти",
+    "ocr": "OCR-область",
     "pan": "Перемещение",
     "remove": "Удаление",
     "select": "Выбор",

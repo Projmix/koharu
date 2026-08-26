@@ -3,9 +3,22 @@
 import { useMemo, useRef } from 'react'
 
 import { SelectionControls } from '@/components/editor/SelectionControls'
-import { effectiveLayerVisibility, expandLayerSelection, isTextLayer } from '@/lib/document'
-import { controlFrame, cssFrame, selectableLayer, type Camera } from '@/lib/geometry'
+import {
+  effectiveLayerVisibility,
+  expandLayerSelection,
+  isTextLayer,
+  ocrNumbering,
+} from '@/lib/document'
+import {
+  controlFrame,
+  cssFrame,
+  framePoints,
+  geometryFrame,
+  selectableLayer,
+  type Camera,
+} from '@/lib/geometry'
 import type {
+  AnalysisRegion,
   EntityId,
   Frame,
   Geometry,
@@ -25,6 +38,7 @@ interface CanvasOverlayProps {
   cursor: Point | null
   brushSize: number
   showBrushCursor: boolean
+  showDetectionRegions: boolean
   onTransformStart: (elements: TransformFrame[]) => void
   onTransformFrame: (elements: TransformFrame[]) => void
   onTransformEnd: () => void
@@ -41,6 +55,7 @@ export function CanvasOverlay({
   cursor,
   brushSize,
   showBrushCursor,
+  showDetectionRegions,
   onTransformStart,
   onTransformFrame,
   onTransformEnd,
@@ -51,6 +66,7 @@ export function CanvasOverlay({
     [page.layers, selected],
   )
   const selectedIds = useMemo(() => new Set(expandedSelection), [expandedSelection])
+  const { regionNumbers } = useMemo(() => ocrNumbering(page.layers), [page.layers])
   const multipleSelected = expandedSelection.length > 1
   const layers = useMemo(
     () =>
@@ -70,9 +86,19 @@ export function CanvasOverlay({
   const automaticRegion = selectedTextLayer?.automatic_region
     ? page.regions.find((region) => region.id === selectedTextLayer.automatic_region)
     : undefined
+  const sourceRegion = selectedTextLayer?.content.source_region
+    ? page.regions.find((region) => region.id === selectedTextLayer.content.source_region)
+    : undefined
+  const sourceRegionFrame = sourceRegion
+    ? (previews[sourceRegion.id] ?? geometryFrame(sourceRegion.geometry))
+    : undefined
   const selectionControl = multipleSelected
     ? undefined
-    : layers.find(({ layer }) => selectedIds.has(layer.id) && selectableLayer(layer))
+    : sourceRegion && sourceRegionFrame
+      ? { element: sourceRegion.id, frame: sourceRegionFrame }
+      : layers
+          .filter(({ layer }) => selectedIds.has(layer.id) && selectableLayer(layer))
+          .map(({ layer, frame }) => ({ element: layer.id, frame }))[0]
   const scale = camera.zoom / window.devicePixelRatio
 
   return (
@@ -82,6 +108,14 @@ export function CanvasOverlay({
       className='pointer-events-none absolute inset-0 overflow-hidden'
       aria-hidden
     >
+      {showDetectionRegions && (
+        <DetectionRegions
+          regions={page.regions}
+          camera={camera}
+          previews={previews}
+          numbers={regionNumbers}
+        />
+      )}
       {automaticRegion && (
         <AutomaticRegionOverlay geometry={automaticRegion.geometry} camera={camera} />
       )}
@@ -128,10 +162,10 @@ export function CanvasOverlay({
       {selectionControl && (
         <SelectionControls
           container={root}
-          element={selectionControl.layer.id}
+          element={selectionControl.element}
           frame={selectionControl.frame}
           camera={camera}
-          edgesOnly={Boolean(selectedTextLayer)}
+          edgesOnly={Boolean(selectedTextLayer && !sourceRegion)}
           onTransformStart={onTransformStart}
           onTransformFrame={onTransformFrame}
           onTransformEnd={onTransformEnd}
@@ -141,14 +175,96 @@ export function CanvasOverlay({
   )
 }
 
-function AutomaticRegionOverlay({ geometry, camera }: { geometry: Geometry; camera: Camera }) {
+function DetectionRegions({
+  regions,
+  camera,
+  previews,
+  numbers,
+}: {
+  regions: AnalysisRegion[]
+  camera: Camera
+  previews: Readonly<Record<EntityId, Frame>>
+  numbers: ReadonlyMap<EntityId, number>
+}) {
+  if (!regions.length) return null
+
+  return (
+    <svg className='absolute inset-0 size-full overflow-hidden' data-testid='detection-regions'>
+      {regions.map((region) => {
+        const frame = previews[region.id] ?? geometryFrame(region.geometry)
+        const points = previews[region.id]
+          ? geometryPointsFromPoints(framePoints(previews[region.id]), camera)
+          : geometryPoints(region.geometry, camera)
+        if (!points) return null
+        const number = numbers.get(region.id)
+        const position = frame ? cssFrame(frame, camera) : null
+        const numberX = position ? position.left + 7 : 0
+        const numberY = position
+          ? position.top >= 18
+            ? position.top - 9
+            : position.top + position.height + 9
+          : 0
+        const color = regionColor(region.kind)
+        return (
+          <g key={region.id}>
+            <polygon
+              data-region-kind={region.kind}
+              points={points}
+              fill='none'
+              stroke={color}
+              strokeWidth='2'
+              strokeDasharray={region.kind.endsWith('.panel') ? undefined : '6 4'}
+              strokeLinejoin='round'
+              opacity='0.8'
+              vectorEffect='non-scaling-stroke'
+            />
+            {number !== undefined && position && (
+              <g
+                data-testid={`ocr-region-number-${region.id}`}
+                transform={`translate(${numberX} ${numberY})`}
+              >
+                <circle r='7' fill={color} opacity='0.95' />
+                <text
+                  fill='white'
+                  fontSize='9'
+                  fontWeight='700'
+                  textAnchor='middle'
+                  dominantBaseline='central'
+                >
+                  {number}
+                </text>
+              </g>
+            )}
+          </g>
+        )
+      })}
+    </svg>
+  )
+}
+
+function regionColor(kind: string) {
+  if (kind === 'text' || kind.endsWith('.text')) return '#22c55e'
+  if (kind === 'bubble' || kind.endsWith('.bubble')) return '#f59e0b'
+  if (kind === 'panel' || kind.endsWith('.panel')) return '#a855f7'
+  return 'var(--canvas-region-stroke)'
+}
+
+function geometryPoints(geometry: Geometry, camera: Camera) {
+  return geometryPointsFromPoints(geometry.points, camera)
+}
+
+function geometryPointsFromPoints(points: Point[], camera: Camera) {
   const dpr = window.devicePixelRatio
-  const points = geometry.points
+  return points
     .map(
       (point) =>
         `${(point.x * camera.zoom + camera.translation[0]) / dpr},${(point.y * camera.zoom + camera.translation[1]) / dpr}`,
     )
     .join(' ')
+}
+
+function AutomaticRegionOverlay({ geometry, camera }: { geometry: Geometry; camera: Camera }) {
+  const points = geometryPoints(geometry, camera)
   if (!points) return null
 
   return (

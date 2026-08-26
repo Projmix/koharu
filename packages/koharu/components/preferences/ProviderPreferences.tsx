@@ -46,6 +46,17 @@ export function ProviderPreferences({
         title={t('settings.providers.connections')}
         description={t('settings.providers.connectionsDescription')}
       >
+        <PreferenceRow
+          title='Fal.ai'
+          description={t('settings.providers.falDescription')}
+          align='start'
+        >
+          <CredentialField
+            label='Fal.ai'
+            value={value.fal}
+            onChange={(fal) => onChange({ ...value, fal })}
+          />
+        </PreferenceRow>
         {value.entries.filter(isConfigurable).map((entry) => (
           <PreferenceRow
             key={entry.config.provider}
@@ -101,11 +112,22 @@ function CredentialField({
     else if (!value.configured || value.clear) setDraftValue('')
   }, [value.clear, value.configured, value.value])
   const configured = !value.clear && (value.configured || Boolean(draftValue))
+  const persisted = !value.clear && value.configured && value.value === null
   return (
     <div className='grid gap-1'>
-      <label htmlFor={inputId} className='text-[10px] text-muted-foreground'>
-        {t('settings.providers.credential')}
-      </label>
+      <div className='flex items-center justify-between gap-2'>
+        <label htmlFor={inputId} className='text-[10px] text-muted-foreground'>
+          {t('settings.providers.credential')}
+        </label>
+        {persisted && (
+          <span
+            role='status'
+            className='text-[10px] font-medium text-emerald-600 dark:text-emerald-400'
+          >
+            {t('settings.providers.configured')}
+          </span>
+        )}
+      </div>
       <div className='flex gap-2'>
         <Input
           id={inputId}
@@ -165,6 +187,7 @@ function replaceEntry(
   replacement: ProviderPreference,
 ): ProviderSettings {
   return {
+    ...preferences,
     entries: preferences.entries.map((entry) =>
       entry.config.provider === replacement.config.provider ? replacement : entry,
     ),

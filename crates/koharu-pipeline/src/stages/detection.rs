@@ -24,9 +24,10 @@ use koharu_ml::koharu_layout_rfdetr_seg_2xl::{
 use koharu_scene::{
     AssetInput, AssetMetadata, AssetRole, At, BubbleRegion, DetectionAnalysis, DetectionLabel,
     EntityId, EntityOrigin, FitsTo, FlowsIn, Generation, Geometry, Inside, Origin, PanelRegion,
-    Point, RecognizedFrom, Region, RegionKind, RegionSpec, RemovePolicy, TextLayout,
-    TextLayoutKind, TextRegion, TextRole, Typography, WritingMode,
+    Point, Presents, RecognizedFrom, Region, RegionKind, RegionSpec, RemovePolicy, TextContent,
+    TextLayout, TextLayoutKind, TextRegion, TextRole, Typography, WritingMode,
 };
+use koharu_translator::Language;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -34,7 +35,9 @@ use specta::Type;
 use super::{StageInput, StageProcessor, finish, generation};
 use crate::{DetectionModel, ModelCell};
 
-const MODEL_ID: &str = "mayocream/koharu-layout-rfdetr-seg-2xl-1152";
+const OUTPUT_MODEL_ID: &str = "mayocream/koharu-layout-rfdetr-seg-2xl-1152#postprocess-2";
+#[cfg(test)]
+const LEGACY_OUTPUT_MODEL_ID: &str = "mayocream/koharu-layout-rfdetr-seg-2xl-1152";
 const MODEL_NAME: &str = "koharu-layout-rfdetr-seg-2xl";
 const PRODUCER: &str = "dev.koharu.pipeline.detection";
 const ANGLE_SNAP_DEGREES: f32 = 3.0;
@@ -48,6 +51,12 @@ const COLOR_CLUSTER_COUNT: usize = 4;
 const MIN_EXTREME_COLOR_PIXELS: u32 = 4;
 const MIN_MEASURED_STROKE_WIDTH: u8 = 2;
 const DIALOGUE_MASK_CONTAINMENT_THRESHOLD: f32 = 0.9;
+const TEXT_DUPLICATE_IOU_THRESHOLD: f32 = 0.95;
+const TEXT_DUPLICATE_AREA_RATIO_THRESHOLD: f32 = 0.9;
+const NESTED_TEXT_CONTAINMENT_THRESHOLD: f32 = 0.8;
+const FREE_TEXT_ROLE: &str = "dev.koharu.text.free-text";
+const DIALOGUE_ROLE: &str = "dev.koharu.text.dialogue";
+const ONOMATOPOEIA_ROLE: &str = "dev.koharu.text.onomatopoeia";
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, Type)]
 #[serde(default)]
@@ -59,12 +68,17 @@ pub struct KoharuLayoutRFDetrSeg2XLConfig {
 
 pub(super) struct Processor {
     config: DetectionModel,
+    source_language: Language,
     device: koharu_ml::Device,
     model: ModelCell<Model>,
 }
 
 impl Processor {
-    pub(super) fn new(mut config: DetectionModel, device: koharu_ml::Device) -> Self {
+    pub(super) fn new(
+        mut config: DetectionModel,
+        source_language: Language,
+        device: koharu_ml::Device,
+    ) -> Self {
         let DetectionModel::KoharuLayoutRFDetrSeg2XL(settings) = &mut config;
         for (name, value) in [
             ("text", &mut settings.text_threshold),
@@ -87,6 +101,7 @@ impl Processor {
 
         Self {
             config,
+            source_language,
             device,
             model: ModelCell::new(),
         }
@@ -95,29 +110,90 @@ impl Processor {
 
 #[async_trait]
 impl StageProcessor for Processor {
-    fn model(&self) -> &'static str {
-        MODEL_NAME
+    fn model(&self, _input: &StageInput) -> String {
+        MODEL_NAME.to_owned()
+    }
+
+    fn recovers_from_memory_pressure(&self, _input: &StageInput) -> bool {
+        true
     }
 
     fn skip(&self, input: &StageInput) -> Result<bool> {
-        for entity in input.scene.descendants(input.page)? {
+        let current_generation = generation(PRODUCER, OUTPUT_MODEL_ID)?;
+        let mut cached_text_bounds = Vec::new();
+        for entity in input.scene.descendants(input.page()?)? {
             let id = entity.id();
-            if input.contains_entity(id)?
-                && entity
+            if !input.contains_entity(id)?
+                || !entity
                     .component::<Region>()?
                     .is_some_and(|region| region.kind == TextRegion::kind())
             {
-                return Ok(true);
+                continue;
             }
+            let Some(EntityOrigin {
+                origin: Origin::Generated(owner),
+            }) = entity.component::<EntityOrigin>()?
+            else {
+                return Ok(true);
+            };
+            if owner.producer == current_generation.producer
+                && owner.model != current_generation.model
+            {
+                return Ok(false);
+            }
+            if input
+                .scene
+                .relations_to_as::<RecognizedFrom>(id)
+                .next()
+                .is_none()
+            {
+                return Ok(false);
+            }
+            let content = input
+                .scene
+                .relations_to_as::<RecognizedFrom>(id)
+                .next()
+                .expect("recognized text relation was checked above")
+                .value()
+                .source;
+            if input.scene.component::<TextContent>(content)?.is_none() {
+                return Ok(false);
+            }
+            let mut has_presentation = false;
+            for relation in input.scene.relations_to_as::<Presents>(content) {
+                let layer = relation.value().source;
+                if input.contains_entity(layer)?
+                    && input.scene.component::<TextLayout>(layer)?.is_some()
+                {
+                    has_presentation = true;
+                    break;
+                }
+            }
+            if !has_presentation {
+                return Ok(false);
+            }
+            let Some(geometry) = entity.component::<Geometry>()? else {
+                return Ok(false);
+            };
+            let Some((left, top, right, bottom)) = crate::scope::geometry_extents(&geometry) else {
+                return Ok(false);
+            };
+            let bounds = [left as f32, top as f32, right as f32, bottom as f32];
+            if cached_text_bounds.iter().any(|existing| {
+                intersection_over_union(*existing, bounds) >= TEXT_DUPLICATE_IOU_THRESHOLD
+            }) {
+                return Ok(false);
+            }
+            cached_text_bounds.push(bounds);
         }
-        Ok(false)
+        Ok(!cached_text_bounds.is_empty())
     }
 
     fn unload(&self) -> bool {
         self.model.unload()
     }
 
-    async fn load(&self) -> Result<()> {
+    async fn load(&self, _input: &StageInput) -> Result<()> {
         self.model
             .ensure(|| Model::load(self.device.clone(), &self.config))
             .await
@@ -129,7 +205,7 @@ impl StageProcessor for Processor {
             .await
             .as_ref()
             .ok_or_else(|| anyhow!("detection model is not loaded"))?
-            .run(input)
+            .run(input, self.source_language)
             .await
     }
 }
@@ -153,15 +229,26 @@ impl Model {
         })
     }
 
-    async fn run(&self, input: StageInput) -> Result<koharu_scene::Patch> {
-        let page = input.page;
+    async fn run(
+        &self,
+        input: StageInput,
+        source_language: Language,
+    ) -> Result<koharu_scene::Patch> {
+        let page = input.page()?;
         let image = input
             .images
             .get(&input.scene, page, "source")
             .await?
             .ok_or_else(|| anyhow!("page {page} has no source image"))?;
         let output = self.detect(image.clone()).await?;
-        build_patch(&input, &image, output, &generation(PRODUCER, MODEL_ID)?).await
+        build_patch(
+            &input,
+            &image,
+            output,
+            &generation(PRODUCER, OUTPUT_MODEL_ID)?,
+            source_language,
+        )
+        .await
     }
 
     async fn detect(&self, image: Arc<DynamicImage>) -> Result<KoharuLayoutDetections> {
@@ -190,6 +277,7 @@ struct DetectedText<'a> {
     bounds: [f32; 4],
     content: EntityId,
     layer: EntityId,
+    role: &'static str,
 }
 
 enum RegionOutput<'a> {
@@ -215,15 +303,24 @@ async fn build_patch(
     image: &DynamicImage,
     output: KoharuLayoutDetections,
     generation: &Generation,
+    source_language: Language,
 ) -> Result<koharu_scene::Patch> {
-    let page = input.page;
+    let page = input.page()?;
     let mut edit = input.scene.edit_as(generation.clone());
     edit.observe_subtree(page)?;
     remove_previous_regions(input, &mut edit, generation)
         .context("failed to replace the previous detection regions")?;
-    write_page(input, &mut edit, page, image, output, generation)
-        .await
-        .context("failed to write detection output")?;
+    write_page(
+        input,
+        &mut edit,
+        page,
+        image,
+        output,
+        generation,
+        source_language,
+    )
+    .await
+    .context("failed to write detection output")?;
     finish(edit)
 }
 
@@ -233,7 +330,7 @@ fn remove_previous_regions(
     generation: &Generation,
 ) -> Result<()> {
     let mut remove = Vec::new();
-    for entity in input.scene.descendants(input.page)? {
+    for entity in input.scene.descendants(input.page()?)? {
         let id = entity.id();
         if !input.contains_entity(id)? {
             continue;
@@ -263,6 +360,7 @@ async fn write_page(
     image: &DynamicImage,
     output: KoharuLayoutDetections,
     generation: &Generation,
+    source_language: Language,
 ) -> Result<()> {
     let KoharuLayoutDetections {
         mut detections,
@@ -277,7 +375,8 @@ async fn write_page(
         detections.retain(|detection| intersects(detection.bbox, region));
     }
     non_maximum_suppression(&mut detections, 0.5);
-    sort_by_layout(&mut detections);
+    remove_nested_text_detections(&mut detections);
+    sort_by_layout(&mut detections, source_language);
 
     let image = image.to_rgb8();
     let regions = write_regions(&input.scene, edit, page, &image, &detections, generation)
@@ -301,7 +400,7 @@ fn write_regions<'a>(
     let inferred = detections
         .par_iter()
         .map(|detection| {
-            (detection.label == "text")
+            matches!(detection.label.as_str(), "text" | "onomatopoeia")
                 .then(|| infer_typography(image, detection))
                 .flatten()
         })
@@ -340,13 +439,18 @@ fn write_region<'a>(
     inferred: Option<InferredTypography>,
     generation: &Generation,
 ) -> Result<RegionOutput<'a>> {
+    let text_role = match detection.label.as_str() {
+        "text" => Some(FREE_TEXT_ROLE),
+        "onomatopoeia" => Some(ONOMATOPOEIA_ROLE),
+        _ => None,
+    };
     let entity = edit
         .add_entity(page, At::End)
         .context("failed to create a detected region")?;
     let kind = region_kind(&detection.label)?;
     let geometry = if detection.label == "bubble" {
         mask_geometry(&detection.mask).unwrap_or_else(|| rectangle_geometry(detection.bbox))
-    } else if detection.label == "text" {
+    } else if text_role.is_some() {
         inferred.map_or_else(
             || rectangle_geometry(detection.bbox),
             |typography| rotated_rectangle_geometry(detection.bbox, typography.angle_degrees),
@@ -376,7 +480,7 @@ fn write_region<'a>(
         },
     )
     .context("failed to set detection analysis")?;
-    if detection.label != "text" {
+    let Some(text_role) = text_role else {
         return Ok(if detection.label == "bubble" {
             RegionOutput::Bubble(DetectedRegion {
                 entity,
@@ -386,7 +490,7 @@ fn write_region<'a>(
         } else {
             RegionOutput::Other
         });
-    }
+    };
 
     let content = edit.add_text_content(page, At::End)?;
     let layer = edit.add_text_layer(
@@ -398,7 +502,7 @@ fn write_region<'a>(
             kind: TextLayoutKind::Paragraph,
         },
     )?;
-    write_text_role(edit, content, "dev.koharu.text.free-text", generation)
+    write_text_role(edit, content, text_role, generation)
         .context("failed to set the detected text role")?;
     edit.set(
         layer,
@@ -429,6 +533,7 @@ fn write_region<'a>(
         bounds: detection.bbox,
         content,
         layer,
+        role: text_role,
     }))
 }
 
@@ -438,11 +543,15 @@ fn link_dialogue_regions(
     generation: &Generation,
 ) -> Result<()> {
     for text in &regions.texts {
+        if text.role == ONOMATOPOEIA_ROLE {
+            edit.relate::<FitsTo>(text.layer, text.entity)?;
+            continue;
+        }
         let bubble = containing_bubble(&regions.bubbles, text);
         if let Some(bubble) = bubble {
             edit.relate::<Inside>(text.entity, bubble.entity)?;
             edit.relate::<FlowsIn>(text.layer, bubble.entity)?;
-            write_text_role(edit, text.content, "dev.koharu.text.dialogue", generation)?;
+            write_text_role(edit, text.content, DIALOGUE_ROLE, generation)?;
         } else {
             edit.relate::<FitsTo>(text.layer, text.entity)?;
         }
@@ -1442,7 +1551,7 @@ async fn preserve_mask_outside_region(
 
 fn region_kind(label: &str) -> Result<RegionKind> {
     RegionKind::new(match label {
-        "text" => TextRegion::KIND,
+        "text" | "onomatopoeia" => TextRegion::KIND,
         "bubble" => BubbleRegion::KIND,
         "panel" => PanelRegion::KIND,
         _ => "dev.koharu.region.unknown",
@@ -1452,10 +1561,21 @@ fn region_kind(label: &str) -> Result<RegionKind> {
 
 fn mask_for(detections: &[KoharuLayoutDetection], label: &str, size: ImageSize) -> GrayImage {
     let mut mask = GrayImage::new(size.width, size.height);
-    for detection in detections.iter().filter(|value| value.label == label) {
+    for detection in detections
+        .iter()
+        .filter(|detection| matches_mask_label(detection, label))
+    {
         stamp_mask(&mut mask, &detection.mask, 0, 0);
     }
     mask
+}
+
+fn matches_mask_label(detection: &KoharuLayoutDetection, label: &str) -> bool {
+    if label == "text" {
+        is_text_detection(detection)
+    } else {
+        detection.label == label
+    }
 }
 
 fn closed_mask_for(
@@ -1466,7 +1586,7 @@ fn closed_mask_for(
 ) -> GrayImage {
     let masks = detections
         .iter()
-        .filter(|detection| detection.label == label)
+        .filter(|detection| matches_mask_label(detection, label))
         .map(|detection| &detection.mask)
         .filter(|mask| valid_mask(mask) && mask.width > 0 && mask.height > 0)
         .collect::<Vec<_>>();
@@ -1640,8 +1760,22 @@ fn non_maximum_suppression(detections: &mut Vec<KoharuLayoutDetection>, threshol
     let mut kept = Vec::with_capacity(detections.len());
     for candidate in detections.drain(..) {
         let suppressed = kept.iter().any(|existing: &KoharuLayoutDetection| {
-            existing.label == candidate.label
-                && intersection_over_union(existing.bbox, candidate.bbox) >= threshold
+            let same_label = existing.label == candidate.label;
+            if is_text_detection(existing) && is_text_detection(&candidate) {
+                let smaller = area(existing.bbox).min(area(candidate.bbox));
+                let larger = area(existing.bbox).max(area(candidate.bbox));
+                if larger <= 0.0 || smaller / larger < TEXT_DUPLICATE_AREA_RATIO_THRESHOLD {
+                    return false;
+                }
+            } else if !same_label {
+                return false;
+            }
+            let threshold = if same_label {
+                threshold
+            } else {
+                TEXT_DUPLICATE_IOU_THRESHOLD
+            };
+            intersection_over_union(existing.bbox, candidate.bbox) >= threshold
         });
         if !suppressed {
             kept.push(candidate);
@@ -1650,8 +1784,68 @@ fn non_maximum_suppression(detections: &mut Vec<KoharuLayoutDetection>, threshol
     *detections = kept;
 }
 
-fn sort_by_layout(detections: &mut Vec<KoharuLayoutDetection>) {
-    let order = layout_order(detections);
+fn remove_nested_text_detections(detections: &mut Vec<KoharuLayoutDetection>) {
+    let nested = detections
+        .iter()
+        .enumerate()
+        .map(|(child_index, child)| {
+            let child_area = area(child.bbox);
+            is_text_detection(child)
+                && child_area > 0.0
+                && detections.iter().enumerate().any(|(parent_index, parent)| {
+                    parent_index != child_index
+                        && is_text_detection(parent)
+                        && area(parent.bbox) > child_area
+                        && mask_containment(&parent.mask, &child.mask, child.bbox)
+                            >= NESTED_TEXT_CONTAINMENT_THRESHOLD
+                })
+        })
+        .collect::<Vec<_>>();
+    let mut index = 0usize;
+    detections.retain(|_| {
+        let keep = !nested[index];
+        index += 1;
+        keep
+    });
+}
+
+fn is_text_detection(detection: &KoharuLayoutDetection) -> bool {
+    matches!(detection.label.as_str(), "text" | "onomatopoeia")
+}
+
+#[derive(Clone, Copy)]
+enum ReadingOrder {
+    RowMajor,
+    ColumnMajor,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum LayoutKind {
+    Panel,
+    Bubble,
+    Text,
+    Other,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct LayoutItem {
+    pub kind: LayoutKind,
+    pub bounds: [f64; 4],
+}
+
+impl ReadingOrder {
+    fn for_language(language: Language) -> Self {
+        match language {
+            Language::Japanese | Language::ChineseSimplified | Language::ChineseTraditional => {
+                Self::ColumnMajor
+            }
+            _ => Self::RowMajor,
+        }
+    }
+}
+
+fn sort_by_layout(detections: &mut Vec<KoharuLayoutDetection>, source_language: Language) {
+    let order = layout_order(detections, source_language);
     let mut values = std::mem::take(detections)
         .into_iter()
         .map(Some)
@@ -1666,26 +1860,43 @@ fn sort_by_layout(detections: &mut Vec<KoharuLayoutDetection>) {
         .collect();
 }
 
-fn layout_order(detections: &[KoharuLayoutDetection]) -> Vec<usize> {
-    let panels = indices_with_label(detections, "panel");
-    let bubbles = indices_with_label(detections, "bubble");
-    let texts = indices_with_label(detections, "text");
+fn layout_order(detections: &[KoharuLayoutDetection], source_language: Language) -> Vec<usize> {
+    let items = detections
+        .iter()
+        .map(|detection| LayoutItem {
+            kind: match detection.label.as_str() {
+                "panel" => LayoutKind::Panel,
+                "bubble" => LayoutKind::Bubble,
+                "text" | "onomatopoeia" => LayoutKind::Text,
+                _ => LayoutKind::Other,
+            },
+            bounds: detection.bbox.map(f64::from),
+        })
+        .collect::<Vec<_>>();
+    reading_order(&items, source_language)
+}
 
-    let mut panel_for_bubble = vec![None; detections.len()];
+pub(super) fn reading_order(items: &[LayoutItem], source_language: Language) -> Vec<usize> {
+    let reading_order = ReadingOrder::for_language(source_language);
+    let panels = indices_with_kind(items, LayoutKind::Panel);
+    let bubbles = indices_with_kind(items, LayoutKind::Bubble);
+    let texts = indices_with_kind(items, LayoutKind::Text);
+
+    let mut panel_for_bubble = vec![None; items.len()];
     for &bubble in &bubbles {
-        panel_for_bubble[bubble] = best_container(detections, bubble, &panels);
+        panel_for_bubble[bubble] = best_container(items, bubble, &panels);
     }
-    let mut bubble_for_text = vec![None; detections.len()];
-    let mut panel_for_text = vec![None; detections.len()];
+    let mut bubble_for_text = vec![None; items.len()];
+    let mut panel_for_text = vec![None; items.len()];
     for &text in &texts {
-        let bubble = best_container(detections, text, &bubbles);
+        let bubble = best_container(items, text, &bubbles);
         bubble_for_text[text] = bubble;
         panel_for_text[text] = bubble
             .and_then(|bubble| panel_for_bubble[bubble])
-            .or_else(|| best_container(detections, text, &panels));
+            .or_else(|| best_container(items, text, &panels));
     }
 
-    let mut parent = vec![None; detections.len()];
+    let mut parent = vec![None; items.len()];
     for bubble in bubbles {
         parent[bubble] = panel_for_bubble[bubble];
     }
@@ -1694,7 +1905,7 @@ fn layout_order(detections: &[KoharuLayoutDetection]) -> Vec<usize> {
     }
 
     let mut roots = Vec::new();
-    let mut children = vec![Vec::new(); detections.len()];
+    let mut children = vec![Vec::new(); items.len()];
     for (index, parent) in parent.into_iter().enumerate() {
         if let Some(parent) = parent {
             children[parent].push(index);
@@ -1702,23 +1913,98 @@ fn layout_order(detections: &[KoharuLayoutDetection]) -> Vec<usize> {
             roots.push(index);
         }
     }
-    sort_spatial(detections, &mut roots);
+    sort_spatial(items, &mut roots, reading_order);
     for siblings in &mut children {
-        sort_spatial(detections, siblings);
+        sort_spatial(items, siblings, reading_order);
     }
 
-    let mut order = Vec::with_capacity(detections.len());
+    let mut order = Vec::with_capacity(items.len());
     for root in roots {
         append_layout_subtree(root, &children, &mut order);
     }
     order
 }
 
-fn indices_with_label(detections: &[KoharuLayoutDetection], label: &str) -> Vec<usize> {
-    detections
+pub fn text_layer_placement(
+    snapshot: &koharu_scene::Snapshot,
+    page: EntityId,
+    geometry: &Geometry,
+    source_language: Language,
+) -> Result<At> {
+    let Some(group) = snapshot.page(page)?.text_group()? else {
+        return Ok(At::End);
+    };
+    let mut items = Vec::new();
+    let mut layers = Vec::new();
+
+    for entity in snapshot.descendants(page)? {
+        let Some(region) = snapshot.component::<Region>(entity.id())? else {
+            continue;
+        };
+        let kind = if region.kind == PanelRegion::kind() {
+            LayoutKind::Panel
+        } else if region.kind == BubbleRegion::kind() {
+            LayoutKind::Bubble
+        } else {
+            continue;
+        };
+        let Some(geometry) = snapshot.component::<Geometry>(entity.id())? else {
+            continue;
+        };
+        let Some((left, top, right, bottom)) = crate::scope::geometry_extents(&geometry) else {
+            continue;
+        };
+        items.push(LayoutItem {
+            kind,
+            bounds: [left, top, right, bottom],
+        });
+        layers.push(None);
+    }
+
+    for layer in group.text_layers()? {
+        let Some(region) = layer.content()?.source_region()? else {
+            continue;
+        };
+        let Some((left, top, right, bottom)) = crate::scope::geometry_extents(&region.geometry()?)
+        else {
+            continue;
+        };
+        items.push(LayoutItem {
+            kind: LayoutKind::Text,
+            bounds: [left, top, right, bottom],
+        });
+        layers.push(Some(layer.id()));
+    }
+
+    let Some((left, top, right, bottom)) = crate::scope::geometry_extents(geometry) else {
+        return Ok(At::End);
+    };
+    let inserted = items.len();
+    items.push(LayoutItem {
+        kind: LayoutKind::Text,
+        bounds: [left, top, right, bottom],
+    });
+    layers.push(None);
+
+    let mut after_inserted = false;
+    for index in reading_order(&items, source_language) {
+        if index == inserted {
+            after_inserted = true;
+        } else if after_inserted
+            && items[index].kind == LayoutKind::Text
+            && let Some(layer) = layers[index]
+        {
+            return Ok(At::Before(layer));
+        }
+    }
+    Ok(At::End)
+}
+
+fn indices_with_kind(items: &[LayoutItem], kind: LayoutKind) -> Vec<usize> {
+    items
         .iter()
         .enumerate()
-        .filter_map(|(index, detection)| (detection.label == label).then_some(index))
+        .filter_map(|(index, item)| (item.kind == kind).then_some(index))
         .collect()
 }
 
@@ -1729,37 +2015,250 @@ fn append_layout_subtree(index: usize, children: &[Vec<usize>], order: &mut Vec<
     }
 }
 
-fn sort_spatial(detections: &[KoharuLayoutDetection], indices: &mut [usize]) {
-    indices.sort_by(|&left, &right| {
-        detection_order(&detections[left], &detections[right])
-            .then_with(|| detections[right].score.total_cmp(&detections[left].score))
+fn sort_spatial(items: &[LayoutItem], indices: &mut [usize], reading_order: ReadingOrder) {
+    if indices.len() < 2 {
+        return;
+    }
+
+    let ordered_panels = {
+        let mut panels = indices
+            .iter()
+            .copied()
+            .filter(|&index| items[index].kind == LayoutKind::Panel)
+            .collect::<Vec<_>>();
+        if panels.len() > 1 && panels.len() < indices.len() {
+            sort_spatial(items, &mut panels, reading_order);
+            Some(panels)
+        } else {
+            None
+        }
+    };
+
+    if indices
+        .iter()
+        .all(|&index| items[index].kind == LayoutKind::Panel)
+        && let Some(groups) = panel_gap_groups(items, indices, reading_order)
+    {
+        let mut result = Vec::with_capacity(indices.len());
+        for mut group in groups {
+            sort_spatial(items, &mut group, reading_order);
+            result.extend(group);
+        }
+        indices.copy_from_slice(&result);
+        return;
+    }
+
+    let axis = match reading_order {
+        ReadingOrder::ColumnMajor => SpatialAxis::X,
+        ReadingOrder::RowMajor => SpatialAxis::Y,
+    };
+    let mut ordered = indices.to_vec();
+    ordered.sort_by(|&left, &right| {
+        let left_center = axis_center(&items[left], axis);
+        let right_center = axis_center(&items[right], axis);
+        let center_order = match reading_order {
+            ReadingOrder::ColumnMajor => right_center.total_cmp(&left_center),
+            ReadingOrder::RowMajor => left_center.total_cmp(&right_center),
+        };
+        center_order
+            .then_with(|| {
+                let left_cross = cross_axis_start(&items[left], axis);
+                let right_cross = cross_axis_start(&items[right], axis);
+                left_cross.total_cmp(&right_cross)
+            })
             .then_with(|| left.cmp(&right))
     });
+
+    let tolerance = grouping_tolerance(items, &ordered, axis);
+    let mut groups: Vec<Vec<usize>> = Vec::new();
+    for index in ordered {
+        let center = axis_center(&items[index], axis);
+        let group = groups.iter().position(|group| {
+            (center - group_center(items, group, axis)).abs() <= tolerance
+                || group.iter().any(|&item| {
+                    ranges_overlap(
+                        axis_bounds(&items[index], axis),
+                        axis_bounds(&items[item], axis),
+                    )
+                })
+        });
+        if let Some(group) = group {
+            groups[group].push(index);
+        } else {
+            groups.push(vec![index]);
+        }
+    }
+
+    groups.sort_by(|left, right| {
+        let left_center = group_center(items, left, axis);
+        let right_center = group_center(items, right, axis);
+        let center_order = match reading_order {
+            ReadingOrder::ColumnMajor => right_center.total_cmp(&left_center),
+            ReadingOrder::RowMajor => left_center.total_cmp(&right_center),
+        };
+        center_order.then_with(|| left.iter().min().cmp(&right.iter().min()))
+    });
+
+    let mut result = Vec::with_capacity(indices.len());
+    for group in &mut groups {
+        group.sort_by(|&left, &right| {
+            let left_cross = cross_axis_start(&items[left], axis);
+            let right_cross = cross_axis_start(&items[right], axis);
+            left_cross
+                .total_cmp(&right_cross)
+                .then_with(|| {
+                    axis_start(&items[left], axis).total_cmp(&axis_start(&items[right], axis))
+                })
+                .then_with(|| left.cmp(&right))
+        });
+        result.extend(group.iter().copied());
+    }
+    if let Some(panels) = ordered_panels {
+        let mut panels = panels.into_iter();
+        for index in &mut result {
+            if items[*index].kind == LayoutKind::Panel {
+                *index = panels.next().expect("panel order has matching length");
+            }
+        }
+    }
+    indices.copy_from_slice(&result);
 }
 
-fn best_container(
-    detections: &[KoharuLayoutDetection],
-    value: usize,
-    candidates: &[usize],
-) -> Option<usize> {
+#[derive(Clone, Copy)]
+enum SpatialAxis {
+    X,
+    Y,
+}
+
+fn panel_gap_groups(
+    items: &[LayoutItem],
+    indices: &[usize],
+    reading_order: ReadingOrder,
+) -> Option<Vec<Vec<usize>>> {
+    let axes = match reading_order {
+        ReadingOrder::ColumnMajor => [SpatialAxis::X, SpatialAxis::Y],
+        ReadingOrder::RowMajor => [SpatialAxis::Y, SpatialAxis::X],
+    };
+    for axis in axes {
+        let mut ordered = indices.to_vec();
+        ordered.sort_by(|&left, &right| {
+            axis_start(&items[left], axis)
+                .total_cmp(&axis_start(&items[right], axis))
+                .then_with(|| left.cmp(&right))
+        });
+
+        let mut groups = Vec::<Vec<usize>>::new();
+        let mut group_start = f64::NEG_INFINITY;
+        let mut end = f64::NEG_INFINITY;
+        for index in ordered {
+            let (start, item_end) = axis_bounds(&items[index], axis);
+            // Detector boxes can bleed a few pixels across an otherwise visible panel gutter.
+            let seam_tolerance = (end - group_start).min(item_end - start).max(0.0) * 0.02;
+            let starts_new_group =
+                groups.is_empty() || start >= end || end - start <= seam_tolerance;
+            if starts_new_group {
+                groups.push(Vec::new());
+                group_start = start;
+                end = item_end;
+            } else {
+                end = end.max(item_end);
+            }
+            groups.last_mut().expect("panel group exists").push(index);
+        }
+        if groups.len() > 1 {
+            if matches!(
+                (reading_order, axis),
+                (ReadingOrder::ColumnMajor, SpatialAxis::X)
+            ) {
+                groups.reverse();
+            }
+            return Some(groups);
+        }
+    }
+    None
+}
+
+fn axis_bounds(item: &LayoutItem, axis: SpatialAxis) -> (f64, f64) {
+    match axis {
+        SpatialAxis::X => (item.bounds[0], item.bounds[2]),
+        SpatialAxis::Y => (item.bounds[1], item.bounds[3]),
+    }
+}
+
+fn axis_start(item: &LayoutItem, axis: SpatialAxis) -> f64 {
+    axis_bounds(item, axis).0
+}
+
+fn axis_center(item: &LayoutItem, axis: SpatialAxis) -> f64 {
+    let (start, end) = axis_bounds(item, axis);
+    (start + end) * 0.5
+}
+
+fn cross_axis_start(item: &LayoutItem, axis: SpatialAxis) -> f64 {
+    match axis {
+        SpatialAxis::X => item.bounds[1],
+        SpatialAxis::Y => item.bounds[0],
+    }
+}
+
+fn grouping_tolerance(items: &[LayoutItem], indices: &[usize], axis: SpatialAxis) -> f64 {
+    let average_span = indices
+        .iter()
+        .map(|&index| {
+            let (start, end) = axis_bounds(&items[index], axis);
+            (end - start).max(1.0)
+        })
+        .sum::<f64>()
+        / indices.len() as f64;
+    (average_span * 0.85).max(24.0)
+}
+
+fn group_center(items: &[LayoutItem], group: &[usize], axis: SpatialAxis) -> f64 {
+    group
+        .iter()
+        .map(|&index| axis_center(&items[index], axis))
+        .sum::<f64>()
+        / group.len().max(1) as f64
+}
+
+fn ranges_overlap(left: (f64, f64), right: (f64, f64)) -> bool {
+    left.1.min(right.1) > left.0.max(right.0)
+}
+
+fn best_container(items: &[LayoutItem], value: usize, candidates: &[usize]) -> Option<usize> {
     candidates
         .iter()
         .copied()
-        .filter(|&candidate| containment(detections[candidate].bbox, detections[value].bbox) >= 0.5)
-        .min_by(|&left, &right| {
-            area(detections[left].bbox)
-                .total_cmp(&area(detections[right].bbox))
-                .then_with(|| detection_order(&detections[left], &detections[right]))
+        .filter_map(|candidate| {
+            let containment = containment(items[candidate].bounds, items[value].bounds);
+            (containment >= 0.5).then_some((candidate, containment))
+        })
+        .min_by(|&(left, left_containment), &(right, right_containment)| {
+            right_containment
+                .total_cmp(&left_containment)
+                .then_with(|| {
+                    layout_area(items[left].bounds).total_cmp(&layout_area(items[right].bounds))
+                })
                 .then_with(|| left.cmp(&right))
         })
+        .map(|(candidate, _)| candidate)
 }
 
-fn containment(container: [f32; 4], value: [f32; 4]) -> f32 {
-    let value_area = area(value);
+fn containment(container: [f64; 4], value: [f64; 4]) -> f64 {
+    let value_area = layout_area(value);
     if value_area <= 0.0 {
         return 0.0;
     }
-    intersection_area(container, value) / value_area
+    layout_intersection_area(container, value) / value_area
+}
+
+fn layout_intersection_area(left: [f64; 4], right: [f64; 4]) -> f64 {
+    (left[2].min(right[2]) - left[0].max(right[0])).max(0.0)
+        * (left[3].min(right[3]) - left[1].max(right[1])).max(0.0)
+}
+
+fn layout_area(bounds: [f64; 4]) -> f64 {
+    (bounds[2] - bounds[0]).max(0.0) * (bounds[3] - bounds[1]).max(0.0)
 }
 
 fn mask_containment(
@@ -1839,16 +2338,19 @@ mod tests {
     };
     use koharu_ml::koharu_layout_rfdetr_seg_2xl::{KoharuLayoutDetection, KoharuLayoutMask};
     use koharu_scene::{
-        At, BubbleRegion, FitsTo, FlowsIn, Geometry, Inside, Origin, PageDraft, Session,
-        TextLayout, TextLayoutKind, TextRegion, Typography, WritingMode,
+        At, BubbleRegion, FitsTo, FlowsIn, Geometry, Inside, Origin, PageDraft, Region, RegionSpec,
+        Session, TextLayout, TextLayoutKind, TextRegion, TextRole, Typography, WritingMode,
     };
+    use koharu_translator::Language;
 
     use super::{
         DIALOGUE_MASK_CONTAINMENT_THRESHOLD, DetectedRegion, DetectedText, DetectionModel,
-        ImageSize, KoharuLayoutRFDetrSeg2XLConfig, MaskPixel, PageRegions, Processor, RegionOutput,
-        StageInput, StageProcessor, closed_mask_for, color_palette, generation, infer_typography,
-        layout_order, link_dialogue_regions, mask_containment, mask_for, mask_geometry,
-        non_maximum_suppression, normalize_text_color, write_region,
+        FREE_TEXT_ROLE, ImageSize, KoharuLayoutRFDetrSeg2XLConfig, LayoutItem, LayoutKind,
+        MaskPixel, ONOMATOPOEIA_ROLE, PageRegions, Processor, RecognizedFrom, RegionOutput,
+        StageInput, StageProcessor, best_container, closed_mask_for, color_palette, generation,
+        infer_typography, layout_order, link_dialogue_regions, mask_containment, mask_for,
+        mask_geometry, non_maximum_suppression, normalize_text_color,
+        remove_nested_text_detections, write_region,
     };
 
     #[test]
@@ -1859,6 +2361,7 @@ mod tests {
                 bubble_threshold: Some(f32::NAN),
                 panel_threshold: Some(0.55),
             }),
+            Language::English,
             koharu_ml::Device::cpu(),
         );
 
@@ -1898,10 +2401,198 @@ mod tests {
         );
         let processor = Processor::new(
             DetectionModel::KoharuLayoutRFDetrSeg2XL(KoharuLayoutRFDetrSeg2XLConfig::default()),
+            Language::English,
             koharu_ml::Device::cpu(),
         );
 
         assert!(processor.skip(&input).unwrap());
+    }
+
+    #[tokio::test]
+    async fn detection_does_not_skip_an_orphaned_generated_text_region() {
+        let mut session = Session::memory().await.unwrap();
+        let mut edit = session.snapshot().edit();
+        let page = edit
+            .add_page(PageDraft::new("page", 100.0, 100.0), At::End)
+            .unwrap();
+        session.commit(edit.finish().unwrap()).await.unwrap();
+
+        let owner = generation(super::PRODUCER, super::OUTPUT_MODEL_ID).unwrap();
+        let mut edit = session.snapshot().edit_as(owner);
+        edit.add_analysis_region::<TextRegion>(
+            page,
+            At::End,
+            &Geometry::rectangle(10.0, 10.0, 20.0, 20.0),
+            None,
+        )
+        .unwrap();
+        let snapshot = session
+            .commit(edit.finish().unwrap())
+            .await
+            .unwrap()
+            .snapshot;
+        let input = StageInput::new(
+            snapshot,
+            page,
+            None,
+            None,
+            std::sync::Arc::new(crate::ImageCache::default()),
+            None,
+        );
+        let processor = Processor::new(
+            DetectionModel::KoharuLayoutRFDetrSeg2XL(KoharuLayoutRFDetrSeg2XLConfig::default()),
+            Language::English,
+            koharu_ml::Device::cpu(),
+        );
+
+        assert!(!processor.skip(&input).unwrap());
+    }
+
+    #[tokio::test]
+    async fn detection_does_not_skip_generated_region_without_text_presentation() {
+        let mut session = Session::memory().await.unwrap();
+        let mut edit = session.snapshot().edit();
+        let page = edit
+            .add_page(PageDraft::new("page", 100.0, 100.0), At::End)
+            .unwrap();
+        session.commit(edit.finish().unwrap()).await.unwrap();
+
+        let owner = generation(super::PRODUCER, super::OUTPUT_MODEL_ID).unwrap();
+        let mut edit = session.snapshot().edit_as(owner);
+        let region = edit
+            .add_analysis_region::<TextRegion>(
+                page,
+                At::End,
+                &Geometry::rectangle(10.0, 10.0, 20.0, 20.0),
+                None,
+            )
+            .unwrap();
+        let content = edit.add_text_content(page, At::End).unwrap();
+        edit.relate::<RecognizedFrom>(content, region).unwrap();
+        let snapshot = session
+            .commit(edit.finish().unwrap())
+            .await
+            .unwrap()
+            .snapshot;
+        let input = StageInput::new(
+            snapshot,
+            page,
+            None,
+            None,
+            std::sync::Arc::new(crate::ImageCache::default()),
+            None,
+        );
+        let processor = Processor::new(
+            DetectionModel::KoharuLayoutRFDetrSeg2XL(KoharuLayoutRFDetrSeg2XLConfig::default()),
+            Language::English,
+            koharu_ml::Device::cpu(),
+        );
+
+        assert!(!processor.skip(&input).unwrap());
+    }
+
+    #[tokio::test]
+    async fn detection_rebuilds_cached_exact_text_duplicates() {
+        let mut session = Session::memory().await.unwrap();
+        let mut edit = session.snapshot().edit();
+        let page = edit
+            .add_page(PageDraft::new("page", 100.0, 100.0), At::End)
+            .unwrap();
+        session.commit(edit.finish().unwrap()).await.unwrap();
+
+        let owner = generation(super::PRODUCER, super::OUTPUT_MODEL_ID).unwrap();
+        let detected = |label: &str, score| KoharuLayoutDetection {
+            label_id: 0,
+            label: label.to_owned(),
+            score,
+            bbox: [10.0, 10.0, 30.0, 30.0],
+            area: 400,
+            mask: KoharuLayoutMask {
+                x: 10,
+                y: 10,
+                width: 20,
+                height: 20,
+                pixels: vec![u8::MAX; 400],
+            },
+        };
+        let mut edit = session.snapshot().edit_as(owner.clone());
+        write_region(&mut edit, page, &detected("text", 0.9), None, &owner).unwrap();
+        session.commit(edit.finish().unwrap()).await.unwrap();
+
+        let processor = Processor::new(
+            DetectionModel::KoharuLayoutRFDetrSeg2XL(KoharuLayoutRFDetrSeg2XLConfig::default()),
+            Language::Japanese,
+            koharu_ml::Device::cpu(),
+        );
+        let input = |session: &Session| {
+            StageInput::new(
+                session.snapshot(),
+                page,
+                None,
+                None,
+                std::sync::Arc::new(crate::ImageCache::default()),
+                None,
+            )
+        };
+        assert!(processor.skip(&input(&session)).unwrap());
+
+        let mut edit = session.snapshot().edit_as(owner.clone());
+        write_region(
+            &mut edit,
+            page,
+            &detected("onomatopoeia", 0.8),
+            None,
+            &owner,
+        )
+        .unwrap();
+        session.commit(edit.finish().unwrap()).await.unwrap();
+
+        assert!(!processor.skip(&input(&session)).unwrap());
+    }
+
+    #[tokio::test]
+    async fn detection_rebuilds_results_from_the_older_nested_region_postprocessor() {
+        let mut session = Session::memory().await.unwrap();
+        let mut edit = session.snapshot().edit();
+        let page = edit
+            .add_page(PageDraft::new("page", 100.0, 100.0), At::End)
+            .unwrap();
+        session.commit(edit.finish().unwrap()).await.unwrap();
+
+        let owner = generation(super::PRODUCER, super::LEGACY_OUTPUT_MODEL_ID).unwrap();
+        let detection = KoharuLayoutDetection {
+            label_id: 0,
+            label: "text".to_owned(),
+            score: 0.9,
+            bbox: [10.0, 10.0, 30.0, 30.0],
+            area: 400,
+            mask: KoharuLayoutMask {
+                x: 10,
+                y: 10,
+                width: 20,
+                height: 20,
+                pixels: vec![u8::MAX; 400],
+            },
+        };
+        let mut edit = session.snapshot().edit_as(owner.clone());
+        write_region(&mut edit, page, &detection, None, &owner).unwrap();
+        session.commit(edit.finish().unwrap()).await.unwrap();
+
+        let processor = Processor::new(
+            DetectionModel::KoharuLayoutRFDetrSeg2XL(KoharuLayoutRFDetrSeg2XLConfig::default()),
+            Language::Japanese,
+            koharu_ml::Device::cpu(),
+        );
+        let input = StageInput::new(
+            session.snapshot(),
+            page,
+            None,
+            None,
+            std::sync::Arc::new(crate::ImageCache::default()),
+            None,
+        );
+
+        assert!(!processor.skip(&input).unwrap());
     }
 
     #[tokio::test]
@@ -1915,7 +2606,7 @@ mod tests {
             pixels: vec![u8::MAX],
         };
         let text_mask = bubble_mask.clone();
-        let generation = generation(super::PRODUCER, super::MODEL_ID).unwrap();
+        let generation = generation(super::PRODUCER, super::OUTPUT_MODEL_ID).unwrap();
         let mut ids = None;
         let patch = session
             .snapshot()
@@ -1957,6 +2648,7 @@ mod tests {
                             bounds: [0.0, 0.0, 1.0, 1.0],
                             content,
                             layer,
+                            role: FREE_TEXT_ROLE,
                         }],
                     },
                     &generation,
@@ -1987,6 +2679,81 @@ mod tests {
                 .value()
                 .target,
             bubble
+        );
+    }
+
+    #[tokio::test]
+    async fn onomatopoeia_is_ocr_text_but_not_balloon_dialogue() {
+        let mut session = Session::memory().await.unwrap();
+        let detected = |label: &str| KoharuLayoutDetection {
+            label_id: 0,
+            label: label.to_owned(),
+            score: 1.0,
+            bbox: [10.0, 10.0, 20.0, 20.0],
+            area: 1,
+            mask: KoharuLayoutMask {
+                x: 0,
+                y: 0,
+                width: 1,
+                height: 1,
+                pixels: vec![u8::MAX],
+            },
+        };
+        let bubble_detection = detected("bubble");
+        let sound_effect_detection = detected("onomatopoeia");
+        let generation = generation(super::PRODUCER, super::OUTPUT_MODEL_ID).unwrap();
+        let mut ids = None;
+        let patch = session
+            .snapshot()
+            .patch(|edit| {
+                let page = edit.add_page(PageDraft::new("page", 100.0, 100.0), At::End)?;
+                let RegionOutput::Bubble(bubble) =
+                    write_region(edit, page, &bubble_detection, None, &generation).unwrap()
+                else {
+                    panic!("expected a bubble region");
+                };
+                let RegionOutput::Text(text) =
+                    write_region(edit, page, &sound_effect_detection, None, &generation).unwrap()
+                else {
+                    panic!("expected an OCR text region");
+                };
+                ids = Some((text.entity, text.content, text.layer));
+                link_dialogue_regions(
+                    edit,
+                    &PageRegions {
+                        bubbles: vec![bubble],
+                        texts: vec![text],
+                    },
+                    &generation,
+                )
+                .unwrap();
+                Ok(())
+            })
+            .unwrap();
+        let snapshot = session.commit(patch).await.unwrap().snapshot;
+        let (region, content, layer) = ids.unwrap();
+
+        assert_eq!(
+            snapshot.component::<Region>(region).unwrap().unwrap().kind,
+            TextRegion::kind()
+        );
+        assert_eq!(
+            snapshot
+                .component::<TextRole>(content)
+                .unwrap()
+                .unwrap()
+                .role,
+            ONOMATOPOEIA_ROLE
+        );
+        assert!(snapshot.relation_from::<FlowsIn>(layer).unwrap().is_none());
+        assert_eq!(
+            snapshot
+                .relation_from::<FitsTo>(layer)
+                .unwrap()
+                .unwrap()
+                .value()
+                .target,
+            region
         );
     }
 
@@ -2241,7 +3008,7 @@ mod tests {
         let page = page.unwrap();
         let (image, detection) = outlined_text(3, [0, 0, 0], [255, 255, 255]);
         let inferred = infer_typography(&image, &detection);
-        let generation = generation(super::PRODUCER, super::MODEL_ID).unwrap();
+        let generation = generation(super::PRODUCER, super::OUTPUT_MODEL_ID).unwrap();
         let mut layer = None;
         let patch = snapshot
             .patch(|edit| {
@@ -2290,7 +3057,198 @@ mod tests {
     }
 
     #[test]
-    fn text_mask_excludes_onomatopoeia() {
+    fn nms_merges_exact_text_and_onomatopoeia_duplicates() {
+        let mut detections = vec![
+            detection("text", 0.7, [10.0, 20.0, 40.0, 60.0]),
+            detection("onomatopoeia", 0.9, [10.0, 20.0, 40.0, 60.0]),
+            detection("bubble", 0.8, [10.0, 20.0, 40.0, 60.0]),
+        ];
+
+        non_maximum_suppression(&mut detections, 0.5);
+
+        assert_eq!(detections.len(), 2);
+        assert!(
+            detections
+                .iter()
+                .any(|detection| detection.label == "onomatopoeia")
+        );
+        assert!(
+            detections
+                .iter()
+                .any(|detection| detection.label == "bubble")
+        );
+    }
+
+    #[test]
+    fn nms_preserves_nested_cross_class_text_regions() {
+        let mut detections = vec![
+            detection("text", 0.9, [0.0, 0.0, 100.0, 100.0]),
+            detection("onomatopoeia", 0.8, [10.0, 10.0, 90.0, 90.0]),
+        ];
+
+        non_maximum_suppression(&mut detections, 0.5);
+
+        assert_eq!(detections.len(), 2);
+    }
+
+    #[test]
+    fn nms_preserves_nested_same_class_text_regions() {
+        let mut detections = vec![
+            detection("text", 0.9, [0.0, 0.0, 100.0, 100.0]),
+            detection("text", 0.8, [10.0, 10.0, 90.0, 90.0]),
+        ];
+
+        non_maximum_suppression(&mut detections, 0.5);
+
+        assert_eq!(detections.len(), 2);
+    }
+
+    #[test]
+    fn nested_text_detection_is_removed_from_its_parent_region() {
+        let mut parent = detection("text", 0.8, [0.0, 0.0, 6.0, 6.0]);
+        parent.area = 36;
+        parent.mask = KoharuLayoutMask {
+            x: 0,
+            y: 0,
+            width: 6,
+            height: 6,
+            pixels: vec![u8::MAX; 36],
+        };
+        let mut child = detection("onomatopoeia", 0.9, [2.0, 2.0, 4.0, 4.0]);
+        child.area = 4;
+        child.mask = KoharuLayoutMask {
+            x: 2,
+            y: 2,
+            width: 2,
+            height: 2,
+            pixels: vec![u8::MAX; 4],
+        };
+        let mut detections = vec![parent, child];
+
+        remove_nested_text_detections(&mut detections);
+
+        assert_eq!(detections.len(), 1);
+        assert_eq!(detections[0].label, "text");
+        assert_eq!(detections[0].area, 36);
+        assert!(detections[0].mask.pixels.iter().all(|pixel| *pixel != 0));
+    }
+
+    #[test]
+    fn text_detection_contained_by_eighty_percent_is_removed() {
+        let mut parent = detection("text", 0.8, [0.0, 0.0, 10.0, 10.0]);
+        parent.area = 100;
+        parent.mask = KoharuLayoutMask {
+            x: 0,
+            y: 0,
+            width: 10,
+            height: 10,
+            pixels: vec![u8::MAX; 100],
+        };
+        let mut child = detection("onomatopoeia", 0.9, [6.0, 2.0, 11.0, 7.0]);
+        child.area = 25;
+        child.mask = KoharuLayoutMask {
+            x: 6,
+            y: 2,
+            width: 5,
+            height: 5,
+            pixels: vec![u8::MAX; 25],
+        };
+        let mut detections = vec![parent, child];
+
+        remove_nested_text_detections(&mut detections);
+
+        assert_eq!(detections.len(), 1);
+        assert_eq!(detections[0].label, "text");
+        assert_eq!(detections[0].area, 100);
+    }
+
+    #[test]
+    fn overlapping_masks_are_not_nested_from_bounding_boxes_alone() {
+        let mut parent = detection("text", 0.8, [0.0, 0.0, 6.0, 6.0]);
+        let mut parent_pixels = vec![0; 36];
+        for y in 0..6 {
+            parent_pixels[y * 6] = u8::MAX;
+        }
+        parent_pixels[7] = u8::MAX;
+        parent.area = 7;
+        parent.mask = KoharuLayoutMask {
+            x: 0,
+            y: 0,
+            width: 6,
+            height: 6,
+            pixels: parent_pixels,
+        };
+        let mut child = detection("onomatopoeia", 0.9, [1.0, 1.0, 5.0, 5.0]);
+        child.area = 16;
+        child.mask = KoharuLayoutMask {
+            x: 1,
+            y: 1,
+            width: 4,
+            height: 4,
+            pixels: vec![u8::MAX; 16],
+        };
+        let mut detections = vec![parent, child];
+
+        remove_nested_text_detections(&mut detections);
+
+        assert_eq!(detections.len(), 2);
+        assert_eq!(detections[0].area, 7);
+        assert!(detections[0].mask.contains(1, 1));
+    }
+
+    #[test]
+    fn nested_bubbles_do_not_remove_text_detections() {
+        let mut text = detection("text", 0.8, [0.0, 0.0, 4.0, 4.0]);
+        text.area = 16;
+        text.mask = KoharuLayoutMask {
+            x: 0,
+            y: 0,
+            width: 4,
+            height: 4,
+            pixels: vec![u8::MAX; 16],
+        };
+        let mut bubble = detection("bubble", 0.9, [1.0, 1.0, 3.0, 3.0]);
+        bubble.area = 4;
+        bubble.mask = KoharuLayoutMask {
+            x: 1,
+            y: 1,
+            width: 2,
+            height: 2,
+            pixels: vec![u8::MAX; 4],
+        };
+        let mut detections = vec![text, bubble];
+
+        remove_nested_text_detections(&mut detections);
+
+        assert_eq!(detections.len(), 2);
+        assert_eq!(detections[0].area, 16);
+        assert!(detections[0].mask.pixels.iter().all(|pixel| *pixel != 0));
+    }
+
+    #[test]
+    fn almost_contained_real_page_text_removes_the_inner_detection() {
+        let mut parent = detection("text", 0.8, [394.544, 925.362, 955.329, 1119.854]);
+        parent.area = 1;
+        parent.mask = KoharuLayoutMask {
+            x: 400,
+            y: 930,
+            width: 1,
+            height: 1,
+            pixels: vec![u8::MAX],
+        };
+        let mut child = detection("onomatopoeia", 0.9, [384.731, 923.990, 593.175, 1119.575]);
+        child.area = 1;
+        child.mask = parent.mask.clone();
+        let mut detections = vec![parent, child];
+
+        remove_nested_text_detections(&mut detections);
+
+        assert_eq!(detections.len(), 1);
+        assert_eq!(detections[0].label, "text");
+    }
+
+    #[test]
+    fn text_mask_includes_onomatopoeia() {
         let detection = |label: &str, x: u32, value: u8| KoharuLayoutDetection {
             label_id: 0,
             label: label.to_owned(),
@@ -2321,7 +3279,7 @@ mod tests {
             },
         );
 
-        assert_eq!(mask.as_raw(), &[0, 255, 0, 0]);
+        assert_eq!(mask.as_raw(), &[255, 255, 0, 255]);
     }
 
     #[test]
@@ -2470,7 +3428,7 @@ mod tests {
     }
 
     #[test]
-    fn layout_order_follows_panels_then_bubbles_then_their_text() {
+    fn layout_order_follows_ltr_panels_then_bubbles_then_their_text() {
         let detections = vec![
             detection("text", 0.63, [20.0, 30.0, 70.0, 70.0]),
             detection("bubble", 0.7, [10.0, 20.0, 80.0, 80.0]),
@@ -2482,7 +3440,62 @@ mod tests {
             detection("bubble", 0.7, [120.0, 100.0, 190.0, 160.0]),
         ];
 
-        let text_scores = layout_order(&detections)
+        let text_scores = layout_order(&detections, Language::English)
+            .into_iter()
+            .filter_map(|index| {
+                (detections[index].label == "text").then_some(detections[index].score)
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(text_scores, [0.63, 0.61, 0.62]);
+    }
+
+    #[test]
+    fn layout_order_reads_japanese_columns_right_to_left_then_top_to_bottom() {
+        let detections = vec![
+            detection("text", 0.4, [20.0, 100.0, 70.0, 140.0]),
+            detection("text", 0.2, [120.0, 120.0, 170.0, 160.0]),
+            detection("text", 0.3, [20.0, 0.0, 70.0, 40.0]),
+            detection("text", 0.1, [120.0, 20.0, 170.0, 60.0]),
+        ];
+
+        let text_scores = layout_order(&detections, Language::Japanese)
+            .into_iter()
+            .map(|index| detections[index].score)
+            .collect::<Vec<_>>();
+
+        assert_eq!(text_scores, [0.1, 0.2, 0.3, 0.4]);
+    }
+
+    #[test]
+    fn layout_order_merges_staggered_overlapping_fragments_in_one_cjk_column() {
+        let detections = vec![
+            detection("text", 0.1, [20.0, 0.0, 120.0, 40.0]),
+            detection("text", 0.2, [100.0, 100.0, 200.0, 140.0]),
+        ];
+
+        let text_scores = layout_order(&detections, Language::Japanese)
+            .into_iter()
+            .map(|index| detections[index].score)
+            .collect::<Vec<_>>();
+
+        assert_eq!(text_scores, [0.1, 0.2]);
+    }
+
+    #[test]
+    fn layout_order_preserves_panel_hierarchy_for_cjk_columns() {
+        let detections = vec![
+            detection("text", 0.63, [20.0, 30.0, 70.0, 70.0]),
+            detection("bubble", 0.7, [10.0, 20.0, 80.0, 80.0]),
+            detection("panel", 0.9, [100.0, 0.0, 200.0, 200.0]),
+            detection("text", 0.62, [130.0, 110.0, 180.0, 150.0]),
+            detection("bubble", 0.8, [120.0, 20.0, 190.0, 80.0]),
+            detection("panel", 0.9, [0.0, 0.0, 95.0, 200.0]),
+            detection("text", 0.61, [130.0, 30.0, 180.0, 70.0]),
+            detection("bubble", 0.7, [120.0, 100.0, 190.0, 160.0]),
+        ];
+
+        let text_scores = layout_order(&detections, Language::Japanese)
             .into_iter()
             .filter_map(|index| {
                 (detections[index].label == "text").then_some(detections[index].score)
@@ -2490,6 +3503,108 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(text_scores, [0.61, 0.62, 0.63]);
+    }
+
+    #[test]
+    fn layout_order_reads_top_spanning_panel_before_cjk_columns_below() {
+        let detections = vec![
+            detection("panel", 0.9, [0.0, 0.0, 200.0, 80.0]),
+            detection("text", 0.1, [80.0, 20.0, 120.0, 60.0]),
+            detection("panel", 0.9, [0.0, 100.0, 90.0, 200.0]),
+            detection("text", 0.3, [20.0, 120.0, 70.0, 160.0]),
+            detection("panel", 0.9, [110.0, 100.0, 200.0, 200.0]),
+            detection("text", 0.2, [130.0, 120.0, 180.0, 160.0]),
+        ];
+
+        let text_scores = layout_order(&detections, Language::Japanese)
+            .into_iter()
+            .filter_map(|index| {
+                (detections[index].label == "text").then_some(detections[index].score)
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(text_scores, [0.1, 0.2, 0.3]);
+    }
+
+    #[test]
+    fn uncontained_sfx_does_not_change_japanese_t_panel_order() {
+        let detections = vec![
+            detection("panel", 0.9, [0.0, 0.0, 200.0, 80.0]),
+            detection("text", 0.1, [80.0, 20.0, 120.0, 60.0]),
+            detection("panel", 0.9, [0.0, 100.0, 90.0, 200.0]),
+            detection("text", 0.3, [20.0, 120.0, 70.0, 160.0]),
+            detection("panel", 0.9, [110.0, 100.0, 200.0, 200.0]),
+            detection("text", 0.2, [130.0, 120.0, 180.0, 160.0]),
+            detection("onomatopoeia", 0.4, [210.0, 20.0, 240.0, 60.0]),
+        ];
+
+        let text_scores = layout_order(&detections, Language::Japanese)
+            .into_iter()
+            .filter_map(|index| {
+                (detections[index].label == "text").then_some(detections[index].score)
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(text_scores, [0.1, 0.2, 0.3]);
+    }
+
+    #[test]
+    fn uncontained_sfx_preserves_real_right_left_then_spanning_panel_order() {
+        let detections = vec![
+            detection("panel", 0.9, [103.53, 0.86, 680.85, 757.97]),
+            detection("text", 0.2, [537.63, 430.70, 587.76, 575.53]),
+            detection("panel", 0.9, [693.52, 1.93, 1280.82, 757.30]),
+            detection("text", 0.1, [1106.99, 70.47, 1189.22, 218.39]),
+            detection("panel", 0.9, [4.24, 752.93, 1278.80, 1211.98]),
+            detection("text", 0.3, [560.91, 875.24, 613.39, 945.51]),
+            detection("onomatopoeia", 0.4, [1300.0, 800.0, 1360.0, 900.0]),
+        ];
+
+        let text_scores = layout_order(&detections, Language::Japanese)
+            .into_iter()
+            .filter_map(|index| {
+                (detections[index].label == "text").then_some(detections[index].score)
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(text_scores, [0.1, 0.2, 0.3]);
+    }
+
+    #[test]
+    fn best_container_prefers_containment_before_area() {
+        let items = [
+            LayoutItem {
+                kind: LayoutKind::Panel,
+                bounds: [40.0, 0.0, 75.0, 100.0],
+            },
+            LayoutItem {
+                kind: LayoutKind::Panel,
+                bounds: [0.0, 0.0, 120.0, 100.0],
+            },
+            LayoutItem {
+                kind: LayoutKind::Text,
+                bounds: [40.0, 0.0, 100.0, 100.0],
+            },
+        ];
+
+        assert_eq!(best_container(&items, 2, &[0, 1]), Some(1));
+    }
+
+    #[test]
+    fn layout_order_reads_western_rows_top_to_bottom() {
+        let detections = vec![
+            detection("text", 0.4, [20.0, 100.0, 70.0, 140.0]),
+            detection("text", 0.2, [120.0, 120.0, 170.0, 160.0]),
+            detection("text", 0.3, [20.0, 0.0, 70.0, 40.0]),
+            detection("text", 0.1, [120.0, 20.0, 170.0, 60.0]),
+        ];
+
+        let text_scores = layout_order(&detections, Language::English)
+            .into_iter()
+            .map(|index| detections[index].score)
+            .collect::<Vec<_>>();
+
+        assert_eq!(text_scores, [0.3, 0.1, 0.4, 0.2]);
     }
 
     #[test]
@@ -2502,7 +3617,7 @@ mod tests {
             detection("text", 0.1, [20.0, 0.0, 180.0, 20.0]),
         ];
 
-        let text_scores = layout_order(&detections)
+        let text_scores = layout_order(&detections, Language::English)
             .into_iter()
             .filter_map(|index| {
                 (detections[index].label == "text").then_some(detections[index].score)

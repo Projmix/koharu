@@ -6,6 +6,7 @@
     "version": "版本"
   },
   "activity": {
+    "chapter": "章节",
     "dismiss": "关闭",
     "downloadFailed": "下载失败。",
     "downloadingFiles": "正在下载 {{count}} 个文件",
@@ -125,12 +126,16 @@
   "inference": {
     "currentPage": "当前页面",
     "currentPageDescription": "仅处理画布中的页面。",
+    "automatic": "自动",
+    "compactMode": "使用紧凑处理控件",
     "entireProject": "整个项目",
     "entireProjectDescription": "处理此项目中的每个页面。",
+    "expandedMode": "使用扩展处理控件",
     "model": "模型",
     "noModel": "无模型",
     "notSet": "未设置",
     "output": "输出",
+    "pageProfile": "页面配置",
     "pipelineStages": "处理流程阶段",
     "providerDefault": "提供商默认值",
     "run": "运行",
@@ -153,7 +158,8 @@
     "stageCount_other": "{{count}} 个阶段",
     "stages": "阶段",
     "stop": "停止",
-    "stopProcessing": "停止处理"
+    "stopProcessing": "停止处理",
+    "typing": "排版"
   },
   "inspector": {
     "alignBottom": "底端对齐",
@@ -221,6 +227,7 @@
       "cleanup": "清理",
       "dialogue": "对话",
       "freeText": "自由文本",
+      "onomatopoeia": "音效",
       "group": "组",
       "image": "图像",
       "paint": "绘制",
@@ -232,6 +239,7 @@
     "moveDown": "下移 {{name}}",
     "moveUp": "上移 {{name}}",
     "opacityLabel": "{{name}} 不透明度",
+    "roleLabel": "{{name}} 的文本类型",
     "originalArtwork": "原始图稿",
     "show": "显示 {{name}}",
     "sourceLabel": "{{name}} 的原文",
@@ -241,6 +249,7 @@
   },
   "menu": {
     "about": "关于",
+    "clearProject": "清空项目",
     "closeProject": "关闭项目",
     "delete": "删除所选项",
     "discord": "Discord",
@@ -280,6 +289,10 @@
   "navigator": {
     "actionsFor": "{{page}} 的操作",
     "delete": "删除",
+    "deleteAllAction": "删除所有页面",
+    "deleteAllDescription": "这会从项目中删除所有页面（共 {{count}} 页）及其内容。您可以撤销此操作。",
+    "deleteAllTitle": "删除所有页面？",
+    "deletingPages": "正在删除页面…",
     "emptyDescription": "导入图像文件或文件夹以添加页面。",
     "emptyTitle": "还没有页面",
     "filter": "筛选页面",
@@ -308,6 +321,12 @@
   "phase": {
     "detection": "检测",
     "inpainting": "修补",
+    "ocr": "OCR",
+    "translation": "翻译"
+  },
+  "phaseShort": {
+    "detection": "检测",
+    "inpainting": "修复",
     "ocr": "OCR",
     "translation": "翻译"
   },
@@ -385,9 +404,36 @@
       "options": {
         "bubbleThreshold": "气泡阈值",
         "negativePrompt": "负面提示词",
+        "applyMode": "应用模式",
+        "fullPage": "整页",
+        "mask": "蒙版",
         "panelThreshold": "分镜阈值",
         "prompt": "提示词",
         "textThreshold": "文本阈值"
+      },
+      "ocr": {
+        "api": "API / 云端",
+        "apiModel": "视觉 API 模型",
+        "instructions": "OCR 指令",
+        "instructionsDescription": "用于精确转录、阅读顺序、注音或拟声词的说明。",
+        "instructionsPlaceholder": "可选的 OCR 专用说明",
+        "local": "本地（CPU）",
+        "localModel": "本地 OCR 模型",
+        "method": "OCR 方法"
+      },
+      "inpainting": {
+        "apiModel": "图像编辑模型",
+        "localModel": "本地修复模型",
+        "method": "修复方式",
+        "options": "API 修复选项",
+        "promptPreset": "提示词预设",
+        "promptPresets": {
+          "cleanup-all": "移除全部文字和水印",
+          "cleanup-text": "仅移除文字",
+          "custom": "自定义提示词",
+          "translate-russian": "将文字替换为俄语"
+        },
+        "provider": "图像提供商"
       },
       "processing": "正在处理",
       "stages": {
@@ -411,6 +457,7 @@
       "configured": "已配置",
       "connections": "连接",
       "connectionsDescription": "凭据安全地存储在此设备上。",
+      "falDescription": "Fal.ai 图像编辑模型使用的凭据。",
       "credential": "凭据",
       "credentialLabel": "{{provider}} 凭据",
       "description": "连接翻译和语言模型提供商。",
@@ -418,7 +465,7 @@
       "title": "提供商"
     },
     "shortcuts": {
-      "description": "当文本字段未获得焦点时，可以使用单键快捷键。",
+      "description": "当文本字段未获得焦点时，请使用 Ctrl 加已配置的按键。",
       "inputLabel": "{{action}} 快捷键",
       "title": "快捷键",
       "tools": "工具"
@@ -433,17 +480,22 @@
     },
     "title": "设置",
     "translation": {
-      "description": "选择任意已配置提供商的模型，然后应用一组共享的翻译和生成选项。",
-      "instructionsDescription": "有关名称、语气、术语或格式的说明。",
+      "description": "分别配置页面和章节翻译配置文件。",
+      "chapterProfile": "章节",
+      "instructions": "指令",
+      "instructionsDescription": "内置提示指定语言和 JSON 格式。留空即可使用；填写内容会作为额外指导。",
       "instructionsLabel": "翻译说明",
       "instructionsPlaceholder": "可选的项目级说明",
       "model": "模型",
+      "pageProfile": "页面",
       "modelDescription": "提供商标签表示各模型的运行位置；连接需单独配置。",
       "modelQuantization": "模型量化",
       "output": "输出",
       "quantization": "量化",
       "quantizationDescription": "较小的格式占用更少内存，但通常会牺牲一些质量。",
       "selectQuantization": "选择量化方式",
+      "sourceLanguage": "源语言",
+      "sourceLanguageDescription": "选择原始页面中使用的语言。它将同时用于指导 OCR 和翻译。",
       "targetLanguageDescription": "选择文本要翻译成的语言。",
       "title": "译文",
       "translationModel": "翻译模型",
@@ -503,6 +555,7 @@
     "draw": "绘画",
     "eraser": "橡皮擦",
     "increaseBrushSize": "增大画笔大小",
+    "ocr": "OCR 区域",
     "pan": "平移",
     "remove": "移除",
     "select": "选择",

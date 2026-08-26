@@ -90,7 +90,7 @@ impl LocalTranslator {
         })
         .await
         .context("local translation task panicked")??;
-        let segments = prompt::translations("local", &output.text, &request.segments)?;
+        let segments = prompt::translations("local", &output.text, &request)?;
         Ok(segments)
     }
 
@@ -131,6 +131,7 @@ pub(crate) fn models() -> Vec<Model> {
                 .collect(),
             vision: descriptor.projector.is_some(),
             reasoning: descriptor.reasoning,
+            reasoning_required: false,
         })
         .collect()
 }

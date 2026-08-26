@@ -18,7 +18,10 @@ mod stage_runner;
 mod stages;
 
 pub use config::{
-    DetectionModel, InpaintingModel, OcrModel, PipelineConfig, ProcessorConfig, TranslationConfig,
+    ApiInpaintingConfig, ApiOcrConfig, DetectionModel, InpaintingConfig, InpaintingMethod,
+    InpaintingModelChoice, InpaintingProvider, LocalInpaintingModel, OcrConfig, OcrMethod,
+    OcrModel, PipelineConfig, ProcessorConfig, TranslationConfig, TranslationProfile,
+    TranslationUnitPolicy,
 };
 pub use error::{ErrorKind, PipelineError};
 pub use pipeline::Pipeline;
@@ -27,11 +30,18 @@ pub use report::{Committer, Report, RunStatus, StageOutput};
 pub use request::{InpaintingMask, Operation, Request, StopToken};
 pub use resources::{DeviceResources, ResourceSnapshot};
 pub use scope::{Bounds, Scope};
-pub use stage::Stage;
-pub use stages::{Flux2KleinConfig, KoharuLayoutRFDetrSeg2XLConfig, RoremMixedConfig};
+pub use stage::{Stage, StageTarget};
+pub use stages::{
+    Flux2KleinConfig, ImageEditConfig, InpaintingApplyMode, KoharuLayoutRFDetrSeg2XLConfig,
+    RoremMixedConfig, text_layer_placement,
+};
 
 use images::ImageCache;
 use model_cell::ModelCell;
+
+pub async fn inpainting_models() -> anyhow::Result<Vec<InpaintingModelChoice>> {
+    stages::inpainting_models().await
+}
 
 #[cfg(test)]
 mod tests;

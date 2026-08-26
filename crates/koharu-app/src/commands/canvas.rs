@@ -37,6 +37,13 @@ pub struct LayerCommit {
     pub layer: EntityId,
 }
 
+#[derive(Clone, Copy, Debug, Serialize, Type)]
+pub struct OcrRegionCommit {
+    pub revision: Revision,
+    pub layer: EntityId,
+    pub region: EntityId,
+}
+
 #[derive(Type)]
 #[specta(transparent)]
 pub(crate) struct CanvasBytes(#[specta(type = Vec<u8>)] Vec<u8>);
@@ -197,6 +204,43 @@ pub(crate) async fn add_text_box(
     Ok(LayerCommit {
         revision: commit.revision,
         layer,
+    })
+}
+
+#[tracing::instrument(
+    target = "koharu_metrics",
+    name = "ocr_region_added",
+    skip_all,
+    fields(origin = "user", entity_count = 1_u64)
+)]
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn add_ocr_region(
+    frame: Frame,
+    desktop: State<'_, Desktop>,
+    project: State<'_, CurrentProject>,
+    canvas_channel: State<'_, CanvasChannel>,
+) -> Result<OcrRegionCommit, Error> {
+    let source_language = koharu_pipeline::PipelineConfig::load()?
+        .read()?
+        .translation
+        .source_language;
+    let (commit, page, layer, region) = {
+        let mut project = project.project.lock().await;
+        let project = project.as_mut().context("no project is open")?;
+        let page = project
+            .active_page()
+            .context("the project has no active page")?;
+        let (commit, layer, region) = project.add_ocr_region(page, frame, source_language).await?;
+        project.record_commit(&commit);
+        (commit, project.active_page(), layer, region)
+    };
+    desktop.synchronize(&commit.snapshot, page, &commit).await?;
+    canvas_channel.channel.publish(desktop.canvas_state());
+    Ok(OcrRegionCommit {
+        revision: commit.revision,
+        layer,
+        region,
     })
 }
 

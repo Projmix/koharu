@@ -1,4 +1,4 @@
-import type { Layer } from '@koharu/bridge/protocol'
+import type { EntityId, Layer } from '@koharu/bridge/protocol'
 
 export function isTextLayer(layer: Layer): layer is Extract<Layer, { type: 'text' }> {
   return layer.type === 'text'
@@ -14,6 +14,18 @@ export function isLockedLayer(layer: Layer): boolean {
 
 export function layerChildren(layers: Layer[], parent: string): Layer[] {
   return layers.filter((layer) => layer.parent === parent)
+}
+
+export function ocrNumbering(layers: Layer[]) {
+  const layerNumbers = new Map<EntityId, number>()
+  const regionNumbers = new Map<EntityId, number>()
+  for (const layer of layers) {
+    if (!isTextLayer(layer) || !layer.content.source_region) continue
+    const number = layerNumbers.size + 1
+    layerNumbers.set(layer.id, number)
+    regionNumbers.set(layer.content.source_region, number)
+  }
+  return { layerNumbers, regionNumbers }
 }
 
 export function expandLayerSelection(layers: Layer[], selected: string[]): string[] {

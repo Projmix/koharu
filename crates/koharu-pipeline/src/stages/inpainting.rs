@@ -24,8 +24,13 @@ use koharu_scene::{
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
-use super::{StageInput, StageProcessor, finish, generation};
-use crate::{InpaintingModel, ModelCell};
+use super::{
+    StageInput, StageProcessor,
+    fal::{Fal, FalModel},
+    finish, generation,
+    openrouter_image::OpenRouterImage,
+};
+use crate::{ImageEditConfig, InpaintingApplyMode, ModelCell, config::InpaintingModel};
 
 const PRODUCER: &str = "dev.koharu.pipeline.inpainting";
 
@@ -81,6 +86,19 @@ impl Processor {
                     "RORem prompt contains NUL"
                 );
             }
+            InpaintingModel::MaiImage2_5Edit(settings)
+            | InpaintingModel::MaiImage2_5ProEdit(settings) => {
+                ensure!(
+                    !settings.prompt.contains('\0'),
+                    "Fal.ai prompt contains NUL"
+                );
+            }
+            InpaintingModel::OpenRouterImageEdit { config, .. } => {
+                ensure!(
+                    !config.prompt.contains('\0'),
+                    "OpenRouter prompt contains NUL"
+                );
+            }
         }
 
         Ok(Self {
@@ -93,13 +111,27 @@ impl Processor {
 
 #[async_trait]
 impl StageProcessor for Processor {
-    fn model(&self) -> &'static str {
-        match self.config {
+    fn model(&self, _input: &StageInput) -> String {
+        match &self.config {
             InpaintingModel::LaMa {} => "lama",
             InpaintingModel::AotInpainting {} => "aot-inpainting",
             InpaintingModel::Flux2Klein(_) => "flux2-klein",
             InpaintingModel::RoremMixed(_) => "rorem-mixed",
+            InpaintingModel::MaiImage2_5Edit(_) => "microsoft/mai-image-2.5/edit",
+            InpaintingModel::MaiImage2_5ProEdit(_) => "microsoft/mai-image-2.5-pro/edit",
+            InpaintingModel::OpenRouterImageEdit { model, .. } => model,
         }
+        .to_owned()
+    }
+
+    fn recovers_from_memory_pressure(&self, _input: &StageInput) -> bool {
+        matches!(
+            &self.config,
+            InpaintingModel::LaMa {}
+                | InpaintingModel::AotInpainting {}
+                | InpaintingModel::Flux2Klein(_)
+                | InpaintingModel::RoremMixed(_)
+        )
     }
 
     fn skip(&self, input: &StageInput) -> Result<bool> {
@@ -107,7 +139,7 @@ impl StageProcessor for Processor {
             return Ok(false);
         }
         let source = AssetRole::new("source")?;
-        for entity in input.scene.children(input.page)? {
+        for entity in input.scene.children(input.page()?)? {
             if input
                 .scene
                 .component::<RasterLayer>(entity)?
@@ -124,7 +156,7 @@ impl StageProcessor for Processor {
         self.model.unload()
     }
 
-    async fn load(&self) -> Result<()> {
+    async fn load(&self, _input: &StageInput) -> Result<()> {
         self.model
             .ensure(|| Model::load(self.device.clone(), &self.config))
             .await
@@ -152,6 +184,16 @@ enum Model {
         model: Arc<Mutex<RoremMixed>>,
         config: RoremMixedConfig,
     },
+    Fal {
+        client: Fal,
+        model: FalModel,
+        config: ImageEditConfig,
+    },
+    OpenRouter {
+        client: OpenRouterImage,
+        model: String,
+        config: ImageEditConfig,
+    },
 }
 
 impl Model {
@@ -171,12 +213,34 @@ impl Model {
                 model: Arc::new(Mutex::new(RoremMixed::load(device).await?)),
                 config: config.clone(),
             }),
+            InpaintingModel::MaiImage2_5Edit(config) => Ok(Self::Fal {
+                client: Fal::new()?,
+                model: FalModel::MaiImage2_5Edit,
+                config: config.clone(),
+            }),
+            InpaintingModel::MaiImage2_5ProEdit(config) => Ok(Self::Fal {
+                client: Fal::new()?,
+                model: FalModel::MaiImage2_5ProEdit,
+                config: config.clone(),
+            }),
+            InpaintingModel::OpenRouterImageEdit { model, config } => Ok(Self::OpenRouter {
+                client: OpenRouterImage::new()?,
+                model: model.clone(),
+                config: config.clone(),
+            }),
         }
     }
 
     async fn run(&self, input: StageInput) -> Result<koharu_scene::Patch> {
+        let manual = input.inpainting_mask.is_some();
+        let full_page = !manual
+            && matches!(
+                self,
+                Self::Fal { config, .. } | Self::OpenRouter { config, .. }
+                    if config.apply_mode == InpaintingApplyMode::FullPage
+            );
         let mut prepared = prepare(&input).await?;
-        if prepared.mask.as_raw().iter().all(|value| *value == 0) {
+        if !full_page && prepared.mask.as_raw().iter().all(|value| *value == 0) {
             return finish(input.scene.edit());
         }
         let mask = prepared.mask.clone();
@@ -290,9 +354,34 @@ impl Model {
                     .context("RORem task panicked")??,
                 )
             }
+            Self::Fal {
+                client,
+                model,
+                config,
+            } => {
+                let Some(image) = client
+                    .edit(*model, config, &prepared.image, &input.stop)
+                    .await?
+                else {
+                    return finish(input.scene.edit());
+                };
+                (model.id(), image)
+            }
+            Self::OpenRouter {
+                client,
+                model,
+                config,
+            } => {
+                let Some(image) = client
+                    .edit(model, &config.prompt, &prepared.image, &input.stop)
+                    .await?
+                else {
+                    return finish(input.scene.edit());
+                };
+                (model.as_str(), image)
+            }
         };
-        let page = input.page;
-        let manual = input.inpainting_mask.is_some();
+        let page = input.page()?;
         let mut edit = if manual {
             input.scene.edit()
         } else {
@@ -307,20 +396,7 @@ impl Model {
         if image.dimensions() != original.dimensions() || image.dimensions() != mask.dimensions() {
             bail!("inpainted image dimensions do not match page {page}");
         }
-        let mut overlay = if manual {
-            cleanup.unwrap_or_else(|| RgbaImage::new(image.width(), image.height()))
-        } else {
-            RgbaImage::new(image.width(), image.height())
-        };
-        for (x, y, target) in overlay.enumerate_pixels_mut() {
-            if mask.get_pixel(x, y)[0] < 127 {
-                continue;
-            }
-            let generated = image.get_pixel(x, y);
-            // Keep the complete cleanup mask opaque. Transparent texels next to
-            // edited pixels let linear canvas sampling reveal the artwork below.
-            *target = Rgba([generated[0], generated[1], generated[2], 255]);
-        }
+        let overlay = cleanup_overlay(&image, &mask, cleanup, manual, full_page);
         let mut bytes = Cursor::new(Vec::new());
         let width = overlay.width();
         let height = overlay.height();
@@ -372,6 +448,30 @@ impl Model {
     }
 }
 
+fn cleanup_overlay(
+    image: &RgbaImage,
+    mask: &GrayImage,
+    cleanup: Option<RgbaImage>,
+    manual: bool,
+    full_page: bool,
+) -> RgbaImage {
+    let mut overlay = if manual {
+        cleanup.unwrap_or_else(|| RgbaImage::new(image.width(), image.height()))
+    } else {
+        RgbaImage::new(image.width(), image.height())
+    };
+    for (x, y, target) in overlay.enumerate_pixels_mut() {
+        if !full_page && mask.get_pixel(x, y)[0] < 127 {
+            continue;
+        }
+        let generated = image.get_pixel(x, y);
+        // Opaque cleanup texels prevent linear canvas sampling from revealing
+        // the original lettering at edited edges.
+        *target = Rgba([generated[0], generated[1], generated[2], 255]);
+    }
+    overlay
+}
+
 #[derive(Clone, Debug)]
 struct FlatFillRegion {
     bounds: [u32; 4],
@@ -380,7 +480,7 @@ struct FlatFillRegion {
 
 fn flat_fill_regions(input: &StageInput, width: u32, height: u32) -> Result<Vec<FlatFillRegion>> {
     let mut regions = Vec::new();
-    for entity in input.scene.descendants(input.page)? {
+    for entity in input.scene.descendants(input.page()?)? {
         let id = entity.id();
         let is_bubble = input
             .scene
@@ -432,7 +532,7 @@ struct InpaintInput {
 }
 
 async fn prepare(input: &StageInput) -> Result<InpaintInput> {
-    let page = input.page;
+    let page = input.page()?;
     let original = input
         .images
         .get(&input.scene, page, "source")
@@ -1019,6 +1119,26 @@ mod tests {
 
         assert!(processor.skip(&automatic).unwrap());
         assert!(!processor.skip(&manual).unwrap());
+    }
+
+    #[test]
+    fn fal_cleanup_respects_full_page_automatic_and_manual_masks() {
+        let generated = RgbaImage::from_pixel(2, 1, Rgba([1, 2, 3, 40]));
+        let mut mask = GrayImage::new(2, 1);
+        mask.put_pixel(1, 0, Luma([255]));
+
+        let full = cleanup_overlay(&generated, &mask, None, false, true);
+        assert_eq!(full.get_pixel(0, 0), &Rgba([1, 2, 3, 255]));
+        assert_eq!(full.get_pixel(1, 0), &Rgba([1, 2, 3, 255]));
+
+        let masked = cleanup_overlay(&generated, &mask, None, false, false);
+        assert_eq!(masked.get_pixel(0, 0), &Rgba([0, 0, 0, 0]));
+        assert_eq!(masked.get_pixel(1, 0), &Rgba([1, 2, 3, 255]));
+
+        let existing = RgbaImage::from_pixel(2, 1, Rgba([9, 8, 7, 255]));
+        let manual = cleanup_overlay(&generated, &mask, Some(existing), true, false);
+        assert_eq!(manual.get_pixel(0, 0), &Rgba([9, 8, 7, 255]));
+        assert_eq!(manual.get_pixel(1, 0), &Rgba([1, 2, 3, 255]));
     }
 
     fn rectangle_region([left, top, right, bottom]: [u32; 4]) -> FlatFillRegion {

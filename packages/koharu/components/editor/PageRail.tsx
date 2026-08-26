@@ -3,6 +3,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { observeElementRect, useVirtualizer } from '@tanstack/react-virtual'
 import {
+  CircleAlert,
   FilePlus2,
   FolderOpen,
   LoaderCircle,
@@ -14,6 +15,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import { DeleteAllPagesDialog } from '@/components/app/DeleteAllPagesDialog'
 import { ResourceMonitor } from '@/components/editor/ResourceMonitor'
 import { call } from '@/lib/backend'
 import {
@@ -82,6 +84,10 @@ export function PageRail() {
   const [query, setQuery] = useState('')
   const [renaming, setRenaming] = useState<PageSummary | null>(null)
   const [renameValue, setRenameValue] = useState('')
+  const [deleteAllOpen, setDeleteAllOpen] = useState(false)
+  const [deletingAll, setDeletingAll] = useState(false)
+  const selectedPageIds = pages.filter((page) => selected.includes(page.id)).map((page) => page.id)
+  const allPagesSelected = pages.length > 0 && selectedPageIds.length === pages.length
   const normalized = query.trim().toLocaleLowerCase()
   const visiblePages = useMemo(
     () =>
@@ -196,14 +202,52 @@ export function PageRail() {
       })
   }
 
-  const deletePage = (page: string) =>
-    void call(commands.deletePages, [page])
-      .then(() => {
-        selectPages(selected.filter((selectedPage) => selectedPage !== page))
-        if (active === page) selectLayers([])
-        return refresh(projectKey, pagesKey, pageKey)
-      })
-      .catch(() => undefined)
+  const deletePages = (targets: string[]) =>
+    call(commands.deletePages, targets).then(() => {
+      const deleted = new Set(targets)
+      selectPages(selected.filter((page) => !deleted.has(page)))
+      if (active && deleted.has(active)) selectLayers([])
+      return refresh(projectKey, pagesKey, pageKey)
+    })
+
+  const requestDelete = (page: string) => {
+    const targets = selected.includes(page) ? selectedPageIds : [page]
+    if (targets.length === pages.length) {
+      setDeleteAllOpen(true)
+      return
+    }
+    void deletePages(targets).catch(() => undefined)
+  }
+
+  const deleteAllPages = async () => {
+    if (deletingAll || pages.length === 0) return
+    setDeletingAll(true)
+    try {
+      await deletePages(pages.map((page) => page.id))
+      setDeleteAllOpen(false)
+    } finally {
+      setDeletingAll(false)
+    }
+  }
+
+  useEffect(() => {
+    if (!allPagesSelected) return
+    const handleDelete = (event: KeyboardEvent) => {
+      if (event.key !== 'Delete' && event.key !== 'Backspace') return
+      const target = event.target
+      if (
+        target instanceof HTMLElement &&
+        target.closest('input, textarea, [contenteditable="true"]')
+      ) {
+        return
+      }
+      if (useKoharuStore.getState().selectedLayers.length > 0) return
+      event.preventDefault()
+      setDeleteAllOpen(true)
+    }
+    window.addEventListener('keydown', handleDelete)
+    return () => window.removeEventListener('keydown', handleDelete)
+  }, [allPagesSelected])
 
   const openRename = (page: PageSummary) => {
     setRenaming(page)
@@ -308,7 +352,7 @@ export function PageRail() {
                       onDragStart={() => setDragged(page.id)}
                       onDragEnd={() => setDragged(null)}
                       onRename={() => openRename(page)}
-                      onDelete={() => deletePage(page.id)}
+                      onDelete={() => requestDelete(page.id)}
                       onDrop={() => {
                         if (dragged && dragged !== page.id) {
                           void call(commands.movePage, dragged, index)
@@ -382,6 +426,16 @@ export function PageRail() {
           </form>
         </DialogContent>
       </Dialog>
+
+      <DeleteAllPagesDialog
+        open={deleteAllOpen}
+        count={pages.length}
+        busy={deletingAll}
+        onOpenChange={(open) => {
+          if (!deletingAll) setDeleteAllOpen(open)
+        }}
+        onConfirm={() => void deleteAllPages().catch(() => undefined)}
+      />
     </>
   )
 }
@@ -507,6 +561,23 @@ function PageItem({
       <div className='min-w-0 py-0.5'>
         <div className='flex items-start gap-1'>
           <span className='min-w-0 flex-1 truncate text-[10px] font-medium'>{page.label}</span>
+          {page.warning && (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <span
+                    className='mt-0.5 shrink-0 text-destructive'
+                    aria-label={page.warning.message}
+                  />
+                }
+              >
+                <CircleAlert className='size-3' />
+              </TooltipTrigger>
+              <TooltipContent side='right' className='max-w-80 text-[10px]'>
+                {page.warning.message}
+              </TooltipContent>
+            </Tooltip>
+          )}
           <DropdownMenu>
             <DropdownMenuTrigger
               render={

@@ -48,6 +48,7 @@ pub(super) async fn models(client: &Client) -> Result<Vec<Model>> {
                 quantizations: Vec::new(),
                 vision: true,
                 reasoning: model.thinking,
+                reasoning_required: false,
             })
         })
         .collect())
@@ -124,7 +125,7 @@ pub(super) async fn translate(
         .and_then(|candidate| candidate.content.parts.into_iter().next())
         .context("Gemini returned no candidate content")?
         .text;
-    Ok(prompt::translations("gemini", &text, &request.segments)?)
+    Ok(prompt::translations("gemini", &text, request)?)
 }
 
 #[derive(Serialize)]
@@ -254,8 +255,8 @@ mod tests {
         assert!(value.get("thinkingConfig").is_none());
         assert_eq!(
             value["responseJsonSchema"]["properties"]["translations"]["items"]["properties"]["id"]
-                ["maximum"],
-            1
+                ["type"],
+            "string"
         );
     }
 

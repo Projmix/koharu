@@ -73,6 +73,7 @@ beforeEach(() => {
     initialized: false,
     preferences: null,
     translationModels: [],
+    inpaintingModels: [],
     resources: null,
     jobs: {},
     downloads: {},

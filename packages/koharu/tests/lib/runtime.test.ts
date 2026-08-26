@@ -4,10 +4,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import Providers from '@/app/providers'
 import { call } from '@/lib/backend'
-import { useProject } from '@/lib/queries'
+import { usePages, useProject } from '@/lib/queries'
 import { useKoharuStore } from '@/lib/store'
 import {
   commands,
+  type Model,
   type Preferences,
   type ProjectInfo,
   type StartupState,
@@ -27,23 +28,47 @@ vi.mock('@tauri-apps/api/core', () => ({
 const preferences: Preferences = {
   pipeline: {
     detection: { model: 'koharu-layout-rfdetr-seg-2xl' },
-    ocr: { model: 'paddleocr-vl-1.6' },
-    translation: {
-      model: {
-        provider: 'local',
-        model: 'lfm2.5-1.2b-instruct',
-        quantization: null,
-        vision: false,
-        reasoning: false,
+    ocr: {
+      method: 'local',
+      local_model: { model: 'paddleocr-vl-1.6' },
+      api: {
+        model: {
+          provider: 'openrouter',
+          model: 'qwen/qwen3.8-27b',
+          quantization: null,
+          vision: true,
+          reasoning: true,
+        },
+        generation: {
+          temperature: 0,
+          max_tokens: 1024,
+          vision: true,
+          reasoning: false,
+        },
+        instructions: null,
       },
-      generation: { vision: true, reasoning: true },
-      target_language: 'en-US',
-      instructions: null,
     },
-    inpainting: { model: 'lama' },
+    translation: {
+      source_language: 'ja-JP',
+      target_language: 'en-US',
+      page: translationProfile(),
+      chapter: translationProfile(),
+    },
+    inpainting: {
+      method: 'local',
+      local_model: { model: 'lama' },
+      manual_model: { model: 'lama' },
+      api: {
+        provider: 'fal',
+        model: 'microsoft/mai-image-2.5/edit',
+        prompt: 'Remove all text and reconstruct the original manga artwork.',
+        apply_mode: 'full-page',
+      },
+    },
     processor: {},
   },
   providers: {
+    fal: { configured: false, value: null, clear: false },
     entries: [],
   },
   typesetting: {
@@ -62,6 +87,7 @@ const project: ProjectInfo = {
 
 beforeEach(() => {
   vi.spyOn(commands, 'getTranslationModels').mockResolvedValue([])
+  vi.spyOn(commands, 'getInpaintingModels').mockResolvedValue([])
 })
 
 const startupState = (): StartupState => ({
@@ -94,7 +120,86 @@ function ProjectProbe() {
   )
 }
 
+function PagesProbe() {
+  const pages = usePages().data
+  return createElement(
+    'span',
+    null,
+    pages === undefined ? 'Pages loading' : `Pages ${pages.length}`,
+  )
+}
+
 describe('Tauri runtime', () => {
+  it('persists mandatory reasoning for a reloaded model profile', async () => {
+    const model: Model = {
+      provider: 'openrouter',
+      model: 'google/gemini-3.5-flash-lite',
+      name: 'Gemini 3.5 Flash Lite',
+      quantizations: [],
+      vision: true,
+      reasoning: true,
+      reasoning_required: true,
+    }
+    const configured: Preferences = {
+      ...preferences,
+      pipeline: {
+        ...preferences.pipeline,
+        translation: {
+          ...preferences.pipeline.translation,
+          page: {
+            ...preferences.pipeline.translation.page,
+            model: {
+              provider: model.provider,
+              model: model.model,
+              quantization: null,
+              vision: true,
+              reasoning: true,
+            },
+            generation: {
+              ...preferences.pipeline.translation.page.generation,
+              reasoning: false,
+            },
+          },
+        },
+      },
+    }
+    vi.spyOn(commands, 'getTranslationModels').mockResolvedValue([model])
+    vi.spyOn(commands, 'subscribe').mockResolvedValue({
+      ...startupState(),
+      preferences: configured,
+    })
+    const save = vi
+      .spyOn(commands, 'savePreferences')
+      .mockImplementation(async (pipeline, providers, typesetting) => ({
+        ...configured,
+        pipeline,
+        providers,
+        typesetting,
+      }))
+
+    const view = render(createElement(Providers, null, createElement('div')))
+    await waitFor(() =>
+      expect(save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          translation: expect.objectContaining({
+            page: expect.objectContaining({
+              model: expect.objectContaining({ reasoning_required: true }),
+              generation: expect.objectContaining({ reasoning: true }),
+            }),
+          }),
+        }),
+        configured.providers,
+        configured.typesetting,
+      ),
+    )
+    await waitFor(() => {
+      const page = useKoharuStore.getState().preferences?.pipeline.translation.page
+      expect(page?.model.reasoning_required).toBe(true)
+      expect(page?.generation.reasoning).toBe(true)
+    })
+    view.unmount()
+  })
+
   it('keeps the project unresolved until its backend query returns', async () => {
     const projectPending = deferred<ProjectInfo | null>()
     vi.spyOn(commands, 'getProject').mockReturnValue(projectPending.promise)
@@ -121,7 +226,7 @@ describe('Tauri runtime', () => {
         state: 'running',
         completed: 0,
         total: 4,
-        page: 'page',
+        target: { target: 'page', value: 'page' },
         stage: 'detection',
         model: 'model',
         error: null,
@@ -177,7 +282,13 @@ describe('Tauri runtime', () => {
   it('refreshes project queries when an autonomous job commits work', async () => {
     vi.spyOn(commands, 'getProject').mockResolvedValueOnce(null).mockResolvedValue(project)
     const binding = vi.spyOn(commands, 'subscribe').mockResolvedValue(startupState())
-    const view = render(createElement(Providers, null, createElement(ProjectProbe)))
+    const view = render(
+      createElement(
+        Providers,
+        null,
+        createElement('div', null, createElement(ProjectProbe), createElement(PagesProbe)),
+      ),
+    )
     expect(await screen.findByText('Closed')).toBeInTheDocument()
 
     const [, jobChannel] = binding.mock.calls[0]
@@ -186,7 +297,7 @@ describe('Tauri runtime', () => {
       state: 'running',
       completed: 1,
       total: 2,
-      page: 'page',
+      target: { target: 'page', value: 'page' },
       stage: 'ocr',
       model: 'model',
       error: null,
@@ -195,7 +306,53 @@ describe('Tauri runtime', () => {
     expect(await screen.findByText('Book')).toBeInTheDocument()
     view.unmount()
   })
+
+  it('refreshes page queries when a new processing job starts', async () => {
+    vi.spyOn(commands, 'getProject').mockResolvedValue(project)
+    const getPages = vi.spyOn(commands, 'getPages').mockResolvedValue([])
+    const binding = vi.spyOn(commands, 'subscribe').mockResolvedValue(startupState())
+    const view = render(
+      createElement(
+        Providers,
+        null,
+        createElement('div', null, createElement(ProjectProbe), createElement(PagesProbe)),
+      ),
+    )
+    expect(await screen.findByText('Book')).toBeInTheDocument()
+
+    const callsBeforeJob = getPages.mock.calls.length
+    const [, jobChannel] = binding.mock.calls[0]
+    act(() => {
+      jobChannel.onmessage({
+        id: 'new-job',
+        state: 'running',
+        completed: 0,
+        total: 4,
+        target: { target: 'page', value: 'page' },
+        stage: 'inpainting',
+        model: 'lama',
+        error: null,
+      })
+    })
+
+    await waitFor(() => expect(getPages.mock.calls.length).toBeGreaterThan(callsBeforeJob))
+    view.unmount()
+  })
 })
+
+function translationProfile() {
+  return {
+    model: {
+      provider: 'local' as const,
+      model: 'lfm2.5-1.2b-instruct',
+      quantization: null,
+      vision: false,
+      reasoning: false,
+    },
+    generation: { vision: true, reasoning: true },
+    instructions: null,
+  }
+}
 
 function deferred<T>() {
   let resolve!: (value: T) => void

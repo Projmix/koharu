@@ -12,9 +12,13 @@ import { Switch } from '@koharu/ui/components/switch'
 
 export function GenerationPreferences({
   value,
+  reasoningRequired = false,
+  showVision = true,
   onChange,
 }: {
   value: GenerationConfig
+  reasoningRequired?: boolean
+  showVision?: boolean
   onChange: (value: GenerationConfig) => void
 }) {
   const { t } = useTranslation()
@@ -96,23 +100,26 @@ export function GenerationPreferences({
         <div className='flex h-8 items-center justify-end'>
           <Switch
             aria-label={t('settings.generation.enableReasoning')}
-            checked={value.reasoning ?? false}
+            checked={reasoningRequired || (value.reasoning ?? false)}
+            disabled={reasoningRequired}
             onCheckedChange={(reasoning) => update({ reasoning })}
           />
         </div>
       </PreferenceRow>
-      <PreferenceRow
-        title={t('settings.generation.vision')}
-        description={t('settings.generation.visionDescription')}
-      >
-        <div className='flex h-8 items-center justify-end'>
-          <Switch
-            aria-label={t('settings.generation.vision')}
-            checked={value.vision ?? false}
-            onCheckedChange={(vision) => update({ vision })}
-          />
-        </div>
-      </PreferenceRow>
+      {showVision && (
+        <PreferenceRow
+          title={t('settings.generation.vision')}
+          description={t('settings.generation.visionDescription')}
+        >
+          <div className='flex h-8 items-center justify-end'>
+            <Switch
+              aria-label={t('settings.generation.vision')}
+              checked={value.vision ?? false}
+              onCheckedChange={(vision) => update({ vision })}
+            />
+          </div>
+        </PreferenceRow>
+      )}
     </PreferenceSection>
   )
 }

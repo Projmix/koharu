@@ -65,7 +65,7 @@ pub(super) async fn translate(
                 .flatten()
         })
         .context("LM Studio returned no message output")?;
-    Ok(prompt::translations("lm-studio", &text, &request.segments)?)
+    Ok(prompt::translations("lm-studio", &text, request)?)
 }
 
 pub(super) async fn models(client: &Client, config: &LmStudioConfig) -> Result<Vec<Model>> {
@@ -92,6 +92,7 @@ pub(super) async fn models(client: &Client, config: &LmStudioConfig) -> Result<V
                     .is_some_and(|capabilities| capabilities.vision),
                 reasoning: capabilities
                     .is_some_and(|capabilities| capabilities.reasoning.is_some()),
+                reasoning_required: false,
             }
         })
         .collect())

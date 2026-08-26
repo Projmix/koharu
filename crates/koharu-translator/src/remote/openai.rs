@@ -7,7 +7,9 @@ use serde::Deserialize;
 
 use super::openai_compatible::{ChatBackend, ResponseMode};
 use super::send_json;
-use crate::{GenerationConfig, Model, Provider, Result, TranslationRequest, display_name};
+use crate::{
+    GenerationConfig, Model, OcrRequest, Provider, Result, TranslationRequest, display_name,
+};
 
 const URL: &str = "https://api.openai.com/v1/chat/completions";
 const MODELS_URL: &str = "https://api.openai.com/v1/models";
@@ -36,6 +38,7 @@ pub(super) async fn models(client: &Client) -> Result<Vec<Model>> {
             quantizations: Vec::new(),
             vision: true,
             reasoning: true,
+            reasoning_required: false,
         })
         .collect())
 }
@@ -91,6 +94,32 @@ pub(super) async fn translate(
         )
     };
     super::openai_compatible::translate(client, backend, request).await
+}
+
+pub(super) async fn recognize(
+    client: &Client,
+    _config: &OpenAiConfig,
+    model: &str,
+    generation: &GenerationConfig,
+    request: &OcrRequest,
+) -> Result<String> {
+    let api_key = koharu_secrets::get("openai")?.context("openai API key is not configured")?;
+    let backend = ChatBackend {
+        max_tokens: None,
+        max_completion_tokens: generation.max_tokens,
+        reasoning_effort: generation
+            .reasoning
+            .map(|enabled| if enabled { "medium" } else { "none" }),
+        ..ChatBackend::new(
+            "openai",
+            URL,
+            Some(api_key.expose_secret()),
+            model,
+            generation,
+            ResponseMode::JsonSchema,
+        )
+    };
+    super::openai_compatible::recognize(client, backend, request).await
 }
 
 #[derive(Deserialize)]

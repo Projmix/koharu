@@ -186,6 +186,7 @@ async fn replace_project(handle: &AppHandle<Cef>, opened: Project) -> Result<()>
 
     handle.state::<AgentState>().reset().await;
     let processing = handle.state::<Processing>();
+    processing.clear_warnings();
     for stop in processing.stops.lock().values() {
         stop.stop();
     }
@@ -219,6 +220,7 @@ pub(crate) async fn get_project(
 #[specta::specta]
 pub(crate) async fn get_pages(
     project: State<'_, CurrentProject>,
+    processing: State<'_, Processing>,
 ) -> std::result::Result<Vec<PageSummary>, Error> {
     let snapshot = project
         .project
@@ -227,7 +229,12 @@ pub(crate) async fn get_pages(
         .as_ref()
         .context("no project is open")?
         .snapshot();
-    Ok(Project::pages(&snapshot)?)
+    let project_id = snapshot.project_id();
+    let mut pages = Project::pages(&snapshot)?;
+    for page in &mut pages {
+        page.warning = processing.warning(project_id, page.id);
+    }
+    Ok(pages)
 }
 
 #[tauri::command]
@@ -336,6 +343,7 @@ pub(crate) async fn delete_project(
 async fn close_current_project(handle: &AppHandle<Cef>) -> Result<()> {
     handle.state::<AgentState>().reset().await;
     let processing = handle.state::<Processing>();
+    processing.clear_warnings();
     for stop in processing.stops.lock().values() {
         stop.stop();
     }

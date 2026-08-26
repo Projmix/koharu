@@ -6,6 +6,7 @@
     "version": "버전"
   },
   "activity": {
+    "chapter": "장",
     "dismiss": "닫기",
     "downloadFailed": "다운로드에 실패했습니다.",
     "downloadingFiles": "{{count}}개 파일 다운로드 중",
@@ -125,12 +126,16 @@
   "inference": {
     "currentPage": "현재 페이지",
     "currentPageDescription": "캔버스의 페이지만 처리합니다.",
+    "automatic": "자동",
+    "compactMode": "처리 컨트롤 축소",
     "entireProject": "전체 프로젝트",
     "entireProjectDescription": "이 프로젝트의 모든 페이지를 처리합니다.",
+    "expandedMode": "처리 컨트롤 확장",
     "model": "모델",
     "noModel": "모델 없음",
     "notSet": "설정되지 않음",
     "output": "출력",
+    "pageProfile": "페이지 프로필",
     "pipelineStages": "파이프라인 단계",
     "providerDefault": "제공자 기본값",
     "run": "실행",
@@ -153,7 +158,8 @@
     "stageCount_other": "{{count}}단계",
     "stages": "단계",
     "stop": "중지",
-    "stopProcessing": "처리 중지"
+    "stopProcessing": "처리 중지",
+    "typing": "식자"
   },
   "inspector": {
     "alignBottom": "아래 정렬",
@@ -221,6 +227,7 @@
       "cleanup": "정리",
       "dialogue": "대사",
       "freeText": "자유 텍스트",
+      "onomatopoeia": "효과음",
       "group": "그룹",
       "image": "이미지",
       "paint": "페인트",
@@ -232,6 +239,7 @@
     "moveDown": "{{name}} 아래로 이동",
     "moveUp": "{{name}} 위로 이동",
     "opacityLabel": "{{name}} 불투명도",
+    "roleLabel": "{{name}} 텍스트 유형",
     "originalArtwork": "원본 아트워크",
     "show": "{{name}} 표시",
     "sourceLabel": "{{name}} 원문",
@@ -241,6 +249,7 @@
   },
   "menu": {
     "about": "정보",
+    "clearProject": "프로젝트 비우기",
     "closeProject": "프로젝트 닫기",
     "delete": "선택 항목 삭제",
     "discord": "Discord",
@@ -280,6 +289,10 @@
   "navigator": {
     "actionsFor": "{{page}} 작업",
     "delete": "삭제",
+    "deleteAllAction": "모든 페이지 삭제",
+    "deleteAllDescription": "프로젝트의 모든 페이지(총 {{count}}개)와 내용을 삭제합니다. 이 작업은 실행 취소할 수 있습니다.",
+    "deleteAllTitle": "모든 페이지를 삭제할까요?",
+    "deletingPages": "페이지 삭제 중…",
     "emptyDescription": "이미지 파일이나 폴더를 가져와 페이지를 추가하세요.",
     "emptyTitle": "아직 페이지가 없습니다",
     "filter": "페이지 필터링",
@@ -308,6 +321,12 @@
   "phase": {
     "detection": "감지",
     "inpainting": "인페인팅",
+    "ocr": "OCR",
+    "translation": "번역"
+  },
+  "phaseShort": {
+    "detection": "감지",
+    "inpainting": "복원",
     "ocr": "OCR",
     "translation": "번역"
   },
@@ -385,9 +404,36 @@
       "options": {
         "bubbleThreshold": "말풍선 임곗값",
         "negativePrompt": "네거티브 프롬프트",
+        "applyMode": "적용 모드",
+        "fullPage": "전체 페이지",
+        "mask": "마스크",
         "panelThreshold": "패널 임곗값",
         "prompt": "프롬프트",
         "textThreshold": "텍스트 임곗값"
+      },
+      "ocr": {
+        "api": "API / 클라우드",
+        "apiModel": "Vision API 모델",
+        "instructions": "OCR 지침",
+        "instructionsDescription": "정확한 전사, 읽기 순서, 후리가나 및 효과음에 대한 지침입니다.",
+        "instructionsPlaceholder": "선택적 OCR 전용 지침",
+        "local": "로컬(CPU)",
+        "localModel": "로컬 OCR 모델",
+        "method": "OCR 방식"
+      },
+      "inpainting": {
+        "apiModel": "이미지 편집 모델",
+        "localModel": "로컬 복원 모델",
+        "method": "복원 방법",
+        "options": "API 복원 옵션",
+        "promptPreset": "프롬프트 프리셋",
+        "promptPresets": {
+          "cleanup-all": "모든 텍스트와 워터마크 제거",
+          "cleanup-text": "텍스트만 제거",
+          "custom": "사용자 지정 프롬프트",
+          "translate-russian": "문자를 러시아어로 교체"
+        },
+        "provider": "이미지 제공자"
       },
       "processing": "처리 중",
       "stages": {
@@ -411,6 +457,7 @@
       "configured": "설정됨",
       "connections": "연결",
       "connectionsDescription": "자격 증명은 이 기기에 안전하게 저장됩니다.",
+      "falDescription": "Fal.ai 이미지 편집 모델에 사용하는 자격 증명입니다.",
       "credential": "자격 증명",
       "credentialLabel": "{{provider}} 자격 증명",
       "description": "번역 및 언어 모델 제공자를 연결합니다.",
@@ -418,7 +465,7 @@
       "title": "제공자"
     },
     "shortcuts": {
-      "description": "텍스트 필드에 포커스가 없을 때 단일 키 단축키를 사용할 수 있습니다.",
+      "description": "텍스트 필드에 포커스가 없을 때 Ctrl과 설정한 키를 사용합니다.",
       "inputLabel": "{{action}} 단축키",
       "title": "단축키",
       "tools": "도구"
@@ -433,17 +480,22 @@
     },
     "title": "설정",
     "translation": {
-      "description": "설정된 제공자의 모델을 선택하고 공통 번역 및 생성 옵션을 적용합니다.",
-      "instructionsDescription": "이름, 어조, 용어 또는 서식 지침입니다.",
+      "description": "페이지와 장 번역 프로필을 별도로 설정합니다.",
+      "chapterProfile": "장",
+      "instructions": "지침",
+      "instructionsDescription": "내장 프롬프트가 언어와 JSON 형식을 지정합니다. 비워 두면 그대로 사용하고 입력 내용은 추가 지침이 됩니다.",
       "instructionsLabel": "번역 지침",
       "instructionsPlaceholder": "프로젝트 전체에 적용할 선택적 지침",
       "model": "모델",
+      "pageProfile": "페이지",
       "modelDescription": "제공자 레이블은 각 모델의 실행 위치를 나타내며 연결은 별도로 설정합니다.",
       "modelQuantization": "모델 양자화",
       "output": "출력",
       "quantization": "양자화",
       "quantizationDescription": "작은 형식은 메모리를 덜 사용하지만 일반적으로 품질이 낮아질 수 있습니다.",
       "selectQuantization": "양자화 선택",
+      "sourceLanguage": "원문 언어",
+      "sourceLanguageDescription": "원본 페이지에 사용된 언어를 선택합니다. OCR과 번역 모두에 참고됩니다.",
       "targetLanguageDescription": "텍스트를 번역할 언어를 선택합니다.",
       "title": "번역",
       "translationModel": "번역 모델",
@@ -503,6 +555,7 @@
     "draw": "그리기",
     "eraser": "지우개",
     "increaseBrushSize": "브러시 크기 늘리기",
+    "ocr": "OCR 영역",
     "pan": "이동",
     "remove": "제거",
     "select": "선택",

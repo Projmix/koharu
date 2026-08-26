@@ -36,6 +36,7 @@ pub(super) async fn models(client: &Client) -> Result<Vec<Model>> {
             quantizations: Vec::new(),
             vision: false,
             reasoning: true,
+            reasoning_required: false,
         })
         .collect())
 }
@@ -87,7 +88,7 @@ pub(super) async fn translate(
         .context("MiniMax returned no choices")?
         .message
         .content;
-    Ok(prompt::translations("minimax", &text, &request.segments)?)
+    Ok(prompt::translations("minimax", &text, request)?)
 }
 
 #[derive(Serialize)]

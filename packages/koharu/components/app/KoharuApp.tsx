@@ -7,6 +7,7 @@ import { TitleBar } from '@/components/app/TitleBar'
 import { Editor } from '@/components/editor/Editor'
 import { SettingsPage } from '@/components/preferences/SettingsPage'
 import { StartView } from '@/components/start/StartView'
+import { bindHistoryShortcuts } from '@/lib/history'
 import { useProject } from '@/lib/queries'
 import { useKoharuStore } from '@/lib/store'
 import { cn } from '@koharu/ui/lib/utils'
@@ -21,6 +22,12 @@ export function KoharuApp() {
   const settingsOpen = useKoharuStore((state) => state.settingsOpen)
   const activePage = project?.active_page
   const editorOpen = project !== undefined && project !== null && !settingsOpen
+
+  useEffect(() => {
+    // Keep browser/native text editing semantics in fields, while making
+    // project history available from the title bar, settings, and editor.
+    return bindHistoryShortcuts(project !== undefined && project !== null)
+  }, [project])
 
   useEffect(() => {
     if (!projectLoaded || selectedPages.length > 0) return

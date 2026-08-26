@@ -45,7 +45,7 @@ pub(super) async fn translate(
                 .flatten()
         })
         .context("Grok returned no output text")?;
-    Ok(prompt::translations("grok", &text, &request.segments)?)
+    Ok(prompt::translations("grok", &text, request)?)
 }
 
 pub(super) async fn models(client: &Client) -> Result<Vec<Model>> {
@@ -70,6 +70,7 @@ pub(super) async fn models(client: &Client) -> Result<Vec<Model>> {
                 .iter()
                 .any(|modality| modality == "image"),
             reasoning: true,
+            reasoning_required: false,
         })
         .collect())
 }

@@ -34,6 +34,7 @@ import {
   isLockedLayer,
   isTextLayer,
   layerChildren,
+  ocrNumbering,
 } from '@/lib/document'
 import { pageKey, projectKey, queryClient, refresh, useFonts, usePage } from '@/lib/queries'
 import { useKoharuStore } from '@/lib/store'
@@ -106,6 +107,19 @@ const defaultTypography: Typography = {
   stroke_width: 0,
   alignment: null,
   writing_mode: null,
+}
+
+const textRoleOptions = [
+  { value: 'dev.koharu.text.dialogue', label: 'layers.kinds.dialogue' },
+  { value: 'dev.koharu.text.onomatopoeia', label: 'layers.kinds.onomatopoeia' },
+  { value: 'dev.koharu.text.free-text', label: 'layers.kinds.freeText' },
+] as const
+
+type TextRoleValue = (typeof textRoleOptions)[number]['value']
+
+type OcrDragPreview = {
+  parent: EntityId
+  order: EntityId[]
 }
 
 export function Inspector() {
@@ -499,17 +513,40 @@ function LayersInspector() {
     selected.length === 1 ? (selected[0] ?? null) : null,
   )
   const [movingLayer, setMovingLayer] = useState<EntityId | null>(null)
+  const [draggedLayers, setDraggedLayers] = useState<EntityId[]>([])
+  const [changingRole, setChangingRole] = useState<EntityId | null>(null)
+  const [dragPreview, setDragPreview] = useState<OcrDragPreview | null>(null)
 
   useEffect(() => {
     setExpandedLayer(selected.length === 1 ? (selected[0] ?? null) : null)
   }, [selected])
 
-  const layers = useMemo(() => (page ? displayedLayers(page.layers, page.id) : []), [page])
+  const previewLayers = useMemo(
+    () => (page ? applyOcrDragPreview(page.layers, page.id, dragPreview) : []),
+    [page, dragPreview],
+  )
+  const layers = useMemo(
+    () => (page ? displayedLayers(previewLayers, page.id) : []),
+    [page, previewLayers],
+  )
+  const { layerNumbers } = useMemo(() => ocrNumbering(previewLayers), [previewLayers])
 
   if (!page) return <EmptyInspector>{t('inspector.selectPage')}</EmptyInspector>
 
-  const move = (layer: Layer, displayDelta: number) => {
+  const commitMove = (layer: Layer, parent: EntityId, target: number) => {
     if (movingLayer !== null || isLockedLayer(layer)) return
+    setMovingLayer(layer.id)
+    void call(commands.moveLayer, layer.id, parent, target).then(
+      (next) => {
+        queryClient.setQueryData(pageKey, next)
+        setMovingLayer(null)
+        void refresh(projectKey)
+      },
+      () => setMovingLayer(null),
+    )
+  }
+
+  const move = (layer: Layer, displayDelta: number) => {
     const parent = layer.parent ?? page.id
     const storedSiblings = page.layers.filter(
       (candidate) => !isLockedLayer(candidate) && (candidate.parent ?? page.id) === parent,
@@ -524,16 +561,116 @@ function LayersInspector() {
     const targetLayer = shownSiblings[shownTarget]
     if (shownSource < 0 || !targetLayer) return
     const target = storedSiblings.findIndex((candidate) => candidate.id === targetLayer.id)
+    commitMove(layer, parent, target)
+  }
 
-    setMovingLayer(layer.id)
-    void call(commands.moveLayer, layer.id, parent, target).then(
-      (next) => {
-        queryClient.setQueryData(pageKey, next)
-        setMovingLayer(null)
-        void refresh(projectKey)
-      },
-      () => setMovingLayer(null),
+  const moveToNumber = (layer: Layer, requested: number) => {
+    const ocrLayers = page.layers.filter(
+      (candidate) => isTextLayer(candidate) && candidate.content.source_region,
     )
+    const source = ocrLayers.findIndex((candidate) => candidate.id === layer.id)
+    const target = Math.min(ocrLayers.length - 1, Math.max(0, requested - 1))
+    const targetLayer = ocrLayers[target]
+    if (source < 0 || source === target || !targetLayer) return
+
+    const parent = layer.parent ?? page.id
+    if ((targetLayer.parent ?? page.id) !== parent) return
+    const siblings = page.layers.filter(
+      (candidate) => !isLockedLayer(candidate) && (candidate.parent ?? page.id) === parent,
+    )
+    const remaining = siblings.filter((candidate) => candidate.id !== layer.id)
+    const anchor = remaining.findIndex((candidate) => candidate.id === targetLayer.id)
+    if (anchor < 0) return
+    commitMove(layer, parent, source < target ? anchor + 1 : anchor)
+  }
+
+  const changeRole = (layer: Layer, role: TextRoleValue) => {
+    if (changingRole !== null || !isTextLayer(layer) || layer.content.role === role) return
+    setChangingRole(layer.id)
+    void call(commands.setTextRole, layer.id, role).then(
+      () => {
+        setChangingRole(null)
+        void refresh(projectKey, pageKey)
+      },
+      () => setChangingRole(null),
+    )
+  }
+
+  const beginDrag = (layer: Layer) => {
+    if (!page || !isTextLayer(layer) || !layer.content.source_region) return
+    const parent = layer.parent ?? page.id
+    const selectedInParent = selected.filter((id) => {
+      const candidate = page.layers.find((value) => value.id === id)
+      return (
+        candidate &&
+        isTextLayer(candidate) &&
+        Boolean(candidate.content.source_region) &&
+        (candidate.parent ?? page.id) === parent
+      )
+    })
+    const dragging = selectedInParent.includes(layer.id)
+      ? ocrOrderForParent(page.layers, parent).filter((id) => selectedInParent.includes(id))
+      : [layer.id]
+    if (!selectedInParent.includes(layer.id)) selectLayers([layer.id])
+    setDraggedLayers(dragging)
+    setDragPreview({ parent, order: ocrOrderForParent(page.layers, parent) })
+  }
+
+  const previewDragOver = (target: Layer) => {
+    if (!page || !draggedLayers.length || !isTextLayer(target) || !target.content.source_region)
+      return
+    const dragged = page.layers.find((candidate) => candidate.id === draggedLayers[0])
+    if (!dragged || !isTextLayer(dragged) || !dragged.content.source_region) return
+    const parent = dragged.parent ?? page.id
+    if ((target.parent ?? page.id) !== parent || draggedLayers.includes(target.id)) return
+
+    setDragPreview((current) => {
+      const canonical =
+        current?.parent === parent ? current.order : ocrOrderForParent(page.layers, parent)
+      const parentLayer = page.layers.find((candidate) => candidate.id === parent)
+      const shown =
+        parentLayer && isGroupLayer(parentLayer) && parentLayer.role === 'text'
+          ? canonical
+          : [...canonical].reverse()
+      const targetIndex = shown.indexOf(target.id)
+      const moving = shown.filter((id) => draggedLayers.includes(id))
+      const firstDragged = shown.findIndex((id) => draggedLayers.includes(id))
+      if (targetIndex < 0 || firstDragged < 0) return current
+      const nextShown = shown.filter((id) => !draggedLayers.includes(id))
+      const anchor = nextShown.indexOf(target.id)
+      nextShown.splice(anchor + (firstDragged < targetIndex ? 1 : 0), 0, ...moving)
+      const next =
+        parentLayer && isGroupLayer(parentLayer) && parentLayer.role === 'text'
+          ? nextShown
+          : [...nextShown].reverse()
+      return sameIds(canonical, next) ? current : { parent, order: next }
+    })
+  }
+
+  const finishDrag = () => {
+    // The live preview can move the dragged row underneath the pointer. In
+    // that case the browser dispatches drop on the dragged row itself, so the
+    // row receiving drop is not a reliable target for the commit. The preview
+    // order is the source of truth for the final OCR number.
+    const preview = dragPreview
+    if (
+      preview &&
+      draggedLayers.length &&
+      movingLayer === null &&
+      !sameIds(preview.order, ocrOrderForParent(page.layers, preview.parent))
+    ) {
+      setMovingLayer(draggedLayers[0]!)
+      void call(commands.reorderLayers, preview.parent, preview.order).then(
+        (next) => {
+          queryClient.setQueryData(pageKey, next)
+          setMovingLayer(null)
+          void refresh(projectKey)
+        },
+        () => setMovingLayer(null),
+      )
+    }
+    setDraggedLayers([])
+    setDragPreview(null)
   }
 
   const deleteLayer = (layer: EntityId) =>
@@ -547,7 +684,15 @@ function LayersInspector() {
       })
       .catch(() => undefined)
 
-  const selectLayer = (layer: EntityId) => {
+  const selectLayer = (layer: EntityId, additive = false) => {
+    if (additive) {
+      selectLayers(
+        selected.includes(layer)
+          ? selected.filter((selectedLayer) => selectedLayer !== layer)
+          : [...selected, layer],
+      )
+      return
+    }
     if (selected.length === 1 && selected[0] === layer) {
       setExpandedLayer((current) => (current === layer ? null : layer))
       return
@@ -586,20 +731,45 @@ function LayersInspector() {
                 key={`${layer.type}:${layer.id}`}
                 layer={layer}
                 index={index}
+                number={layerNumbers.get(layer.id)}
+                numberCount={layerNumbers.size}
                 depth={depth}
                 selected={selected.includes(layer.id)}
                 expanded={!locked && expandedLayer === layer.id}
                 locked={locked}
-                onSelect={() => selectLayer(layer.id)}
+                onSelect={(additive) => selectLayer(layer.id, additive)}
                 onToggle={() =>
                   void call(commands.setVisibility, [layer.id], !layer.visibility.visible, null)
                     .then(() => refresh(projectKey, pageKey))
                     .catch(() => undefined)
                 }
-                onMove={(delta) => move(layer, delta)}
-                canMoveUp={!locked && position > 0}
-                canMoveDown={!locked && position >= 0 && position < siblings.length - 1}
+                onMove={(delta) =>
+                  layerNumbers.has(layer.id)
+                    ? moveToNumber(layer, layerNumbers.get(layer.id)! + delta)
+                    : move(layer, delta)
+                }
+                onNumberChange={(number) => moveToNumber(layer, number)}
+                onRoleChange={
+                  isTextLayer(layer) && layer.content.source_region
+                    ? (role) => changeRole(layer, role)
+                    : undefined
+                }
+                roleChanging={changingRole === layer.id}
+                canMoveUp={
+                  !locked &&
+                  (layerNumbers.has(layer.id) ? layerNumbers.get(layer.id)! > 1 : position > 0)
+                }
+                canMoveDown={
+                  !locked &&
+                  (layerNumbers.has(layer.id)
+                    ? layerNumbers.get(layer.id)! < layerNumbers.size
+                    : position >= 0 && position < siblings.length - 1)
+                }
                 reordering={movingLayer !== null}
+                dragged={draggedLayers.includes(layer.id)}
+                onDragStart={() => beginDrag(layer)}
+                onDragEnd={finishDrag}
+                onDragOver={() => previewDragOver(layer)}
                 onDelete={isGroupLayer(layer) ? undefined : () => deleteLayer(layer.id)}
               />
             )
@@ -614,6 +784,8 @@ function LayersInspector() {
 function LayerRow({
   layer,
   index,
+  number,
+  numberCount,
   depth,
   selected,
   expanded,
@@ -621,31 +793,95 @@ function LayerRow({
   onSelect,
   onToggle,
   onMove,
+  onNumberChange,
+  onRoleChange,
+  roleChanging,
   canMoveUp,
   canMoveDown,
   reordering,
+  dragged,
+  onDragStart,
+  onDragEnd,
+  onDragOver,
   onDelete,
 }: {
   layer: Layer
   index: number
+  number?: number
+  numberCount: number
   depth: number
   selected: boolean
   expanded: boolean
   locked: boolean
-  onSelect: () => void
+  onSelect: (additive: boolean) => void
   onToggle: () => void
   onMove: (delta: number) => void
+  onNumberChange: (number: number) => void
+  onRoleChange?: (role: TextRoleValue) => void
+  roleChanging: boolean
   canMoveUp: boolean
   canMoveDown: boolean
   reordering: boolean
+  dragged: boolean
+  onDragStart: () => void
+  onDragEnd: () => void
+  onDragOver: () => void
   onDelete?: () => void
 }) {
   const { t } = useTranslation()
   const name = localizedLayerName(layer, index, t)
   const detail = localizedLayerKind(layer, t)
+  const currentRole = isTextLayer(layer) ? supportedTextRole(layer.content.role) : null
   const Icon = layerIcon(layer)
+  const [numberValue, setNumberValue] = useState(number?.toString() ?? '')
+
+  useEffect(() => setNumberValue(number?.toString() ?? ''), [number])
+
+  const commitNumber = () => {
+    const parsed = Number(numberValue)
+    if (number === undefined || !Number.isInteger(parsed)) {
+      setNumberValue(number?.toString() ?? '')
+      return
+    }
+    const next = Math.min(numberCount, Math.max(1, parsed))
+    setNumberValue(next.toString())
+    if (next !== number) onNumberChange(next)
+  }
+
   return (
-    <div className='group min-w-0 px-1 py-px' style={{ paddingLeft: `${depth * 10 + 4}px` }}>
+    <div
+      data-testid={`layer-row-${layer.id}`}
+      draggable={number !== undefined && !reordering}
+      className={`group min-w-0 px-1 py-px ${dragged ? 'opacity-50' : ''}`}
+      style={{ paddingLeft: `${depth * 10 + 4}px` }}
+      onDragStart={
+        number === undefined
+          ? undefined
+          : (event) => {
+              if ((event.target as HTMLElement).closest('input,[data-layer-editor]')) {
+                event.preventDefault()
+                return
+              }
+              onDragStart()
+            }
+      }
+      onDragEnd={number === undefined ? undefined : onDragEnd}
+      onDragOver={
+        number === undefined
+          ? undefined
+          : (event) => {
+              event.preventDefault()
+              onDragOver()
+            }
+      }
+      onDrop={
+        number === undefined
+          ? undefined
+          : (event) => {
+              event.preventDefault()
+            }
+      }
+    >
       <div
         data-selected={selected}
         data-expanded={expanded}
@@ -658,19 +894,78 @@ function LayerRow({
             aria-expanded={locked ? undefined : expanded}
             disabled={locked}
             className='flex min-w-0 flex-1 items-center gap-1.5 rounded-lg px-1.5 py-1 text-left hover:bg-foreground/[0.05] focus-visible:ring-2 focus-visible:ring-ring/25'
-            onClick={onSelect}
+            onClick={(event) => onSelect(event.shiftKey)}
           >
-            <Icon className='size-3.5 shrink-0 text-muted-foreground' />
+            {number === undefined ? (
+              <Icon className='size-3.5 shrink-0 text-muted-foreground' />
+            ) : (
+              <input
+                type='number'
+                min={1}
+                max={numberCount}
+                step={1}
+                inputMode='numeric'
+                value={numberValue}
+                aria-label={`${name}: ${number}`}
+                data-testid={`ocr-layer-number-${layer.id}`}
+                disabled={reordering}
+                className='h-4 w-5 shrink-0 appearance-none rounded-sm border border-transparent bg-transparent p-0 text-center text-[9px] leading-none font-semibold text-primary tabular-nums hover:border-border focus:border-primary focus:outline-none disabled:opacity-50 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none'
+                onClick={(event) => event.stopPropagation()}
+                onFocus={(event) => event.currentTarget.select()}
+                onChange={(event) => setNumberValue(event.currentTarget.value)}
+                onBlur={commitNumber}
+                onKeyDown={(event) => {
+                  event.stopPropagation()
+                  if (event.key === 'Enter') event.currentTarget.blur()
+                  if (event.key === 'Escape') {
+                    setNumberValue(number.toString())
+                    event.currentTarget.select()
+                  }
+                }}
+              />
+            )}
             <span className='min-w-0 flex-1'>
               <span className='block truncate text-[11px] font-medium'>{name}</span>
-              <span className='block truncate text-[9px] leading-3 text-muted-foreground capitalize'>
-                {detail}
-              </span>
+              {!onRoleChange && (
+                <span className='block truncate text-[9px] leading-3 text-muted-foreground capitalize'>
+                  {detail}
+                </span>
+              )}
             </span>
           </button>
+          {onRoleChange && (
+            <div
+              data-layer-editor
+              data-testid={`ocr-role-${layer.id}`}
+              role='group'
+              aria-label={t('layers.roleLabel', { name })}
+              className='flex shrink-0 items-center gap-px rounded-md bg-foreground/[0.055] p-px dark:bg-foreground/[0.08]'
+            >
+              {textRoleOptions.map((option) => {
+                const active = currentRole === option.value
+                const label = t(option.label)
+                return (
+                  <button
+                    key={option.value}
+                    type='button'
+                    data-layer-editor
+                    data-testid={`ocr-role-${layer.id}-${option.value.split('.').at(-1)}`}
+                    aria-label={label}
+                    aria-pressed={active}
+                    title={label}
+                    disabled={roleChanging}
+                    className={`grid size-5 place-items-center rounded-sm text-[9px] leading-none font-semibold transition-colors focus-visible:ring-2 focus-visible:ring-ring/25 disabled:pointer-events-none disabled:opacity-50 ${active ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:bg-foreground/[0.09] hover:text-foreground dark:hover:bg-foreground/[0.13]'}`}
+                    onClick={() => onRoleChange(option.value)}
+                  >
+                    {label.slice(0, 1)}
+                  </button>
+                )
+              })}
+            </div>
+          )}
           {!locked && (
             <div
-              className={`pointer-events-none absolute top-1/2 z-10 flex -translate-y-1/2 rounded-md bg-background/80 p-0.5 opacity-0 shadow-sm ring-1 ring-border/40 backdrop-blur-md transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100 motion-reduce:transition-none ${expanded ? 'right-7' : 'right-[3.25rem]'}`}
+              className={`pointer-events-none absolute top-1/2 z-10 flex -translate-y-1/2 rounded-md bg-background/80 p-0.5 opacity-0 shadow-sm ring-1 ring-border/40 backdrop-blur-md transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100 motion-reduce:transition-none ${onRoleChange ? (expanded ? 'right-[5.5rem]' : 'right-[8.5rem]') : expanded ? 'right-7' : 'right-[3.25rem]'}`}
             >
               <button
                 type='button'
@@ -730,7 +1025,10 @@ function LayerRow({
           )}
         </div>
         {expanded && (
-          <div className='animate-in duration-150 fade-in slide-in-from-top-1 motion-reduce:animate-none'>
+          <div
+            data-layer-editor
+            className='animate-in duration-150 fade-in slide-in-from-top-1 motion-reduce:animate-none'
+          >
             <LayerEditor layer={layer} onDelete={onDelete} />
           </div>
         )}
@@ -852,7 +1150,7 @@ function LayerEditor({ layer, onDelete }: { layer: Layer; onDelete?: () => void 
               className='max-h-14 min-h-8 w-full max-w-full min-w-0 resize-y overflow-y-auto rounded-md bg-background px-1.5 py-1 text-[12px] leading-4 md:text-[12px]'
               value={layer.content.source?.text ?? ''}
               onCommit={(text) =>
-                void call(commands.setSourceText, layer.id, text)
+                call(commands.setSourceText, layer.id, text)
                   .then(() => refresh(projectKey, pageKey))
                   .catch(() => undefined)
               }
@@ -866,7 +1164,7 @@ function LayerEditor({ layer, onDelete }: { layer: Layer; onDelete?: () => void 
               className='max-h-16 min-h-9 w-full max-w-full min-w-0 resize-y overflow-y-auto rounded-md border-primary/25 bg-background px-1.5 py-1 text-[12px] leading-4 md:text-[12px]'
               value={layer.content.translation?.text ?? ''}
               onCommit={(text) =>
-                void call(commands.setTranslation, layer.id, text.trim() ? text : null)
+                call(commands.setTranslation, layer.id, text.trim() ? text : null)
                   .then(() => refresh(projectKey, pageKey))
                   .catch(() => undefined)
               }
@@ -1038,7 +1336,51 @@ function localizedLayerKind(layer: Layer, t: TFunction): string {
     const role = layer.content.role?.split('.').at(-1)
     if (role === 'dialogue') return t('layers.kinds.dialogue')
     if (role === 'free-text') return t('layers.kinds.freeText')
+    if (role === 'onomatopoeia') return t('layers.kinds.onomatopoeia')
     return t('layers.kinds.text')
   }
   return t('layers.kinds.image')
+}
+
+function supportedTextRole(role: string | null): TextRoleValue | null {
+  return textRoleOptions.find((option) => option.value === role)?.value ?? null
+}
+
+function ocrOrderForParent(layers: Layer[], parent: EntityId): EntityId[] {
+  return layers
+    .filter(
+      (layer) =>
+        isTextLayer(layer) &&
+        Boolean(layer.content.source_region) &&
+        (layer.parent ?? parent) === parent,
+    )
+    .map((layer) => layer.id)
+}
+
+function sameIds(left: EntityId[], right: EntityId[]): boolean {
+  return left.length === right.length && left.every((id, index) => id === right[index])
+}
+
+function applyOcrDragPreview(
+  layers: Layer[],
+  page: EntityId,
+  preview: OcrDragPreview | null,
+): Layer[] {
+  if (!preview) return layers
+  const slots = layers
+    .map((layer, index) => ({ layer, index }))
+    .filter(
+      ({ layer }) =>
+        isTextLayer(layer) &&
+        Boolean(layer.content.source_region) &&
+        (layer.parent ?? page) === preview.parent &&
+        preview.order.includes(layer.id),
+    )
+  if (slots.length !== preview.order.length) return layers
+  const byId = new Map(slots.map(({ layer }) => [layer.id, layer]))
+  return layers.map((layer, index) => {
+    const slot = slots.find((candidate) => candidate.index === index)
+    if (!slot) return layer
+    return byId.get(preview.order[slots.indexOf(slot)]) ?? layer
+  })
 }

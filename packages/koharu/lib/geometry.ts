@@ -1,4 +1,12 @@
-import type { EntityId, Frame, Layer, Point, TransformFrame } from '@koharu/bridge/protocol'
+import type {
+  AnalysisRegion,
+  EntityId,
+  Frame,
+  Geometry,
+  Layer,
+  Point,
+  TransformFrame,
+} from '@koharu/bridge/protocol'
 
 import { effectiveLayerVisibility, isTextLayer } from './document'
 
@@ -67,7 +75,40 @@ export function layerFrame(layer: Layer): Frame | null {
     layer.type === 'text' || layer.type === 'image' || layer.type === 'artwork'
       ? layer.geometry?.points
       : null
-  if (!points?.length || points.some((point) => !finite(point.x, point.y))) return null
+  return points ? frameFromPoints(points) : null
+}
+
+export function geometryFrame(geometry: Geometry): Frame | null {
+  return frameFromPoints(geometry.points)
+}
+
+export function framePoints(frame: Frame): Point[] {
+  const radians = (frame.angle_degrees * Math.PI) / 180
+  const cos = Math.cos(radians)
+  const sin = Math.sin(radians)
+  const center = { x: frame.x + frame.width * 0.5, y: frame.y + frame.height * 0.5 }
+  return [
+    {
+      x: center.x - frame.width * 0.5 * cos + frame.height * 0.5 * sin,
+      y: center.y - frame.width * 0.5 * sin - frame.height * 0.5 * cos,
+    },
+    {
+      x: center.x + frame.width * 0.5 * cos + frame.height * 0.5 * sin,
+      y: center.y + frame.width * 0.5 * sin - frame.height * 0.5 * cos,
+    },
+    {
+      x: center.x + frame.width * 0.5 * cos - frame.height * 0.5 * sin,
+      y: center.y + frame.width * 0.5 * sin + frame.height * 0.5 * cos,
+    },
+    {
+      x: center.x - frame.width * 0.5 * cos - frame.height * 0.5 * sin,
+      y: center.y - frame.width * 0.5 * sin + frame.height * 0.5 * cos,
+    },
+  ]
+}
+
+function frameFromPoints(points: Point[]): Frame | null {
+  if (!points.length || points.some((point) => !finite(point.x, point.y))) return null
   if (points.length === 4) {
     const [topLeft, topRight, bottomRight, bottomLeft] = points
     const top: [number, number] = [topRight.x - topLeft.x, topRight.y - topLeft.y]
@@ -133,6 +174,91 @@ export function hitTestLayers(
   return null
 }
 
+export function hitTestEditorSelection(
+  layers: Layer[],
+  regions: AnalysisRegion[],
+  point: Point,
+  frames: Readonly<Record<EntityId, Frame>>,
+): Layer | null {
+  const byId = new Map(regions.map((region) => [region.id, region]))
+  type Candidate = {
+    layer: Layer
+    /** Source OCR geometry is more precise than a containing bubble. */
+    priority: 0 | 1 | 2
+    area: number
+    distance: number
+    /** Later entries are visually on top and win otherwise. */
+    zIndex: number
+  }
+
+  const candidates: Candidate[] = []
+  for (let index = 0; index < layers.length; index += 1) {
+    const layer = layers[index]
+    if (!isTextLayer(layer)) continue
+    const visibility = effectiveLayerVisibility(layers, layer)
+    if (!visibility.visible || visibility.opacity <= 0) continue
+
+    const source = layer.content.source_region ? byId.get(layer.content.source_region) : undefined
+    const automatic = layer.automatic_region ? byId.get(layer.automatic_region) : undefined
+    const frame = controlFrame(layer, frames)
+
+    // A click on the detected glyph/text polygon should always resolve to
+    // that dialog, even when another bubble happens to contain the same
+    // point.  OCR polygons can overlap at their edges, so the smallest
+    // polygon is the most specific candidate and wins the tie-breaker below.
+    if (source && polygonContains(source.geometry.points, point)) {
+      candidates.push({
+        layer,
+        priority: 0,
+        area: polygonArea(source.geometry.points),
+        distance: distanceSquared(polygonCenter(source.geometry.points), point),
+        zIndex: index,
+      })
+    }
+
+    // Automatic regions are normally speech bubbles.  Several text layers
+    // may share one bubble, so do not blindly return the last layer: choose
+    // the text frame closest to the click (and use the source polygon as a
+    // fallback for layers that have no rendered frame yet).
+    if (automatic && polygonContains(automatic.geometry.points, point)) {
+      const anchor = frame
+        ? { x: frame.x + frame.width * 0.5, y: frame.y + frame.height * 0.5 }
+        : source
+          ? polygonCenter(source.geometry.points)
+          : polygonCenter(automatic.geometry.points)
+      candidates.push({
+        layer,
+        priority: 1,
+        area: frame ? frame.width * frame.height : polygonArea(automatic.geometry.points),
+        distance: distanceSquared(anchor, point),
+        zIndex: index,
+      })
+    }
+
+    if (frame && frameContains(frame, point)) {
+      candidates.push({
+        layer,
+        priority: 2,
+        area: frame.width * frame.height,
+        distance: distanceSquared(
+          { x: frame.x + frame.width * 0.5, y: frame.y + frame.height * 0.5 },
+          point,
+        ),
+        zIndex: index,
+      })
+    }
+  }
+
+  candidates.sort(
+    (left, right) =>
+      left.priority - right.priority ||
+      left.area - right.area ||
+      left.distance - right.distance ||
+      right.zIndex - left.zIndex,
+  )
+  return candidates[0]?.layer ?? hitTestLayers(layers, point, frames)
+}
+
 export function frameContains(frame: Frame, point: Point): boolean {
   const centerX = frame.x + frame.width * 0.5
   const centerY = frame.y + frame.height * 0.5
@@ -144,6 +270,81 @@ export function frameContains(frame: Frame, point: Point): boolean {
   const localX = x * cos - y * sin
   const localY = x * sin + y * cos
   return Math.abs(localX) <= frame.width * 0.5 && Math.abs(localY) <= frame.height * 0.5
+}
+
+function polygonContains(points: Point[], point: Point): boolean {
+  if (points.length < 3) return false
+  let inside = false
+  for (let index = 0, previous = points.length - 1; index < points.length; previous = index++) {
+    const start = points[previous]
+    const end = points[index]
+    const cross = (point.x - start.x) * (end.y - start.y) - (point.y - start.y) * (end.x - start.x)
+    if (
+      Math.abs(cross) <= minimumFrameSize &&
+      point.x >= Math.min(start.x, end.x) &&
+      point.x <= Math.max(start.x, end.x) &&
+      point.y >= Math.min(start.y, end.y) &&
+      point.y <= Math.max(start.y, end.y)
+    ) {
+      return true
+    }
+    if (
+      start.y > point.y !== end.y > point.y &&
+      point.x < ((end.x - start.x) * (point.y - start.y)) / (end.y - start.y) + start.x
+    ) {
+      inside = !inside
+    }
+  }
+  return inside
+}
+
+function polygonArea(points: Point[]): number {
+  if (points.length < 3) return Number.POSITIVE_INFINITY
+  let area = 0
+  for (let index = 0, previous = points.length - 1; index < points.length; previous = index++) {
+    const start = points[previous]
+    const end = points[index]
+    area += start.x * end.y - end.x * start.y
+  }
+  const result = Math.abs(area) * 0.5
+  return Number.isFinite(result) && result > minimumFrameSize ? result : Number.POSITIVE_INFINITY
+}
+
+function polygonCenter(points: Point[]): Point {
+  if (!points.length) return { x: Number.POSITIVE_INFINITY, y: Number.POSITIVE_INFINITY }
+  const area = polygonSignedArea(points)
+  if (Math.abs(area) <= minimumFrameSize || !Number.isFinite(area)) {
+    return {
+      x: points.reduce((sum, point) => sum + point.x, 0) / points.length,
+      y: points.reduce((sum, point) => sum + point.y, 0) / points.length,
+    }
+  }
+  let x = 0
+  let y = 0
+  for (let index = 0, previous = points.length - 1; index < points.length; previous = index++) {
+    const start = points[previous]
+    const end = points[index]
+    const cross = start.x * end.y - end.x * start.y
+    x += (start.x + end.x) * cross
+    y += (start.y + end.y) * cross
+  }
+  const scale = 1 / (6 * area)
+  return { x: x * scale, y: y * scale }
+}
+
+function polygonSignedArea(points: Point[]): number {
+  let area = 0
+  for (let index = 0, previous = points.length - 1; index < points.length; previous = index++) {
+    area += points[previous].x * points[index].y - points[index].x * points[previous].y
+  }
+  return area * 0.5
+}
+
+function distanceSquared(left: Point, right: Point): number {
+  const x = left.x - right.x
+  const y = left.y - right.y
+  const distance = x * x + y * y
+  return Number.isFinite(distance) ? distance : Number.POSITIVE_INFINITY
 }
 
 export function cssFrame(frame: Frame, camera: Camera): CssFrame {

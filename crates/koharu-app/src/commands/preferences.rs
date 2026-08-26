@@ -1,7 +1,7 @@
 use std::fmt;
 
 use anyhow::Result;
-use koharu_pipeline::PipelineConfig;
+use koharu_pipeline::{InpaintingModelChoice, PipelineConfig};
 use koharu_renderer::TypesettingConfig;
 use koharu_secrets::ExposeSecret as _;
 use koharu_translator::{Language, Model, Provider, ProviderConfig, ProvidersConfig};
@@ -44,6 +44,7 @@ impl Preferences {
 #[derive(Clone, Debug, Deserialize, Serialize, Type)]
 pub struct ProviderPreferences {
     pub entries: Vec<ProviderPreference>,
+    pub fal: CredentialInput,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, Type)]
@@ -73,7 +74,10 @@ impl ProviderPreferences {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        Ok(Self { entries })
+        Ok(Self {
+            entries,
+            fal: CredentialInput::load("fal")?,
+        })
     }
 
     fn into_config(self) -> Result<ProvidersConfig> {
@@ -96,6 +100,7 @@ impl ProviderPreferences {
         for (key, credential) in credentials {
             credential.save(key)?;
         }
+        self.fal.save("fal")?;
         Ok(config)
     }
 }
@@ -161,6 +166,7 @@ pub(crate) async fn save_preferences(
     providers: ProviderPreferences,
     typesetting: TypesettingConfig,
 ) -> std::result::Result<Preferences, Error> {
+    pipeline.validate()?;
     remember_pipeline_profiles(&mut pipeline);
     let providers = providers.into_config()?;
     let pipeline_config = PipelineConfig::load()?;
@@ -193,11 +199,28 @@ pub(crate) async fn save_preferences(
 fn remember_pipeline_profiles(config: &mut PipelineConfig) {
     let koharu_pipeline::DetectionModel::KoharuLayoutRFDetrSeg2XL(settings) = &config.detection;
     config.processor.koharu_layout_rfdetr_seg_2xl = Some(settings.clone());
-    if let koharu_pipeline::InpaintingModel::Flux2Klein(settings) = &config.inpainting {
+    if let koharu_pipeline::LocalInpaintingModel::Flux2Klein(settings) =
+        &config.inpainting.local_model
+    {
         config.processor.flux2_klein = Some(settings.clone());
     }
-    if let koharu_pipeline::InpaintingModel::RoremMixed(settings) = &config.inpainting {
+    if let koharu_pipeline::LocalInpaintingModel::RoremMixed(settings) =
+        &config.inpainting.local_model
+    {
         config.processor.rorem_mixed = Some(settings.clone());
+    }
+    if config.inpainting.api.provider == koharu_pipeline::InpaintingProvider::Fal {
+        let settings = koharu_pipeline::ImageEditConfig {
+            prompt: config.inpainting.api.prompt.clone(),
+            apply_mode: config.inpainting.api.apply_mode,
+        };
+        match config.inpainting.api.model.as_str() {
+            "microsoft/mai-image-2.5/edit" => config.processor.mai_image_2_5_edit = Some(settings),
+            "microsoft/mai-image-2.5-pro/edit" => {
+                config.processor.mai_image_2_5_pro_edit = Some(settings)
+            }
+            _ => {}
+        }
     }
 }
 
@@ -211,4 +234,42 @@ pub(crate) async fn get_preferences() -> std::result::Result<Preferences, Error>
 #[specta::specta]
 pub(crate) async fn get_translation_models() -> std::result::Result<Vec<Model>, Error> {
     Ok(koharu_translator::Translator::models().await?)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn get_inpainting_models() -> std::result::Result<Vec<InpaintingModelChoice>, Error>
+{
+    Ok(koharu_pipeline::inpainting_models().await?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn remembers_fal_edit_profiles_independently() {
+        let mut config = PipelineConfig::default();
+        config.inpainting.method = koharu_pipeline::InpaintingMethod::Api;
+        config.inpainting.api.provider = koharu_pipeline::InpaintingProvider::Fal;
+        config.inpainting.api.model = "microsoft/mai-image-2.5/edit".to_owned();
+        config.inpainting.api.prompt = "Clean the page.".to_owned();
+        config.inpainting.api.apply_mode = koharu_pipeline::InpaintingApplyMode::Mask;
+        remember_pipeline_profiles(&mut config);
+
+        config.inpainting.api.model = "microsoft/mai-image-2.5-pro/edit".to_owned();
+        config.inpainting.api.prompt = "Rebuild the page.".to_owned();
+        config.inpainting.api.apply_mode = koharu_pipeline::InpaintingApplyMode::FullPage;
+        remember_pipeline_profiles(&mut config);
+
+        let edit = config.processor.mai_image_2_5_edit.unwrap();
+        assert_eq!(edit.prompt, "Clean the page.");
+        assert_eq!(edit.apply_mode, koharu_pipeline::InpaintingApplyMode::Mask);
+        let pro = config.processor.mai_image_2_5_pro_edit.unwrap();
+        assert_eq!(pro.prompt, "Rebuild the page.");
+        assert_eq!(
+            pro.apply_mode,
+            koharu_pipeline::InpaintingApplyMode::FullPage
+        );
+    }
 }

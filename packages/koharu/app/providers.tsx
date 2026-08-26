@@ -8,7 +8,7 @@ import { I18nextProvider } from 'react-i18next'
 import { StartupView } from '@/components/app/StartupView'
 import { Updater } from '@/components/app/Updater'
 import ClientOnly from '@/components/ClientOnly'
-import { refreshTranslationModels } from '@/lib/backend'
+import { refreshTranslationModels, savePreferences } from '@/lib/backend'
 import i18n from '@/lib/i18n'
 import { pageKey, pagesKey, projectKey, queryClient, refresh } from '@/lib/queries'
 import {
@@ -16,9 +16,11 @@ import {
   receiveDownload,
   receiveStartupState,
   receiveJob,
+  receivePreferences,
   receiveResources,
   useKoharuStore,
 } from '@/lib/store'
+import { reconcileTranslationProfiles } from '@/lib/translation'
 import {
   commands,
   type CanvasState,
@@ -32,6 +34,27 @@ import { TooltipProvider } from '@koharu/ui/components/tooltip'
 
 export function Providers({ children }: { children: ReactNode }) {
   const runtime = useRef({ active: false, bound: false })
+  const reconciliation = useRef<string | null>(null)
+  const preferences = useKoharuStore((state) => state.preferences)
+  const translationModels = useKoharuStore((state) => state.translationModels)
+
+  useEffect(() => {
+    if (!preferences || translationModels.length === 0) return
+    const translation = reconcileTranslationProfiles(
+      preferences.pipeline.translation,
+      translationModels,
+    )
+    if (translation === preferences.pipeline.translation) return
+    const pipeline = { ...preferences.pipeline, translation }
+    const key = JSON.stringify(pipeline.translation)
+    if (reconciliation.current === key) return
+    reconciliation.current = key
+    void savePreferences(pipeline, preferences.providers, preferences.typesetting)
+      .then(receivePreferences)
+      .catch(() => {
+        // Keep the key so a transient save failure does not loop on every render.
+      })
+  }, [preferences, translationModels])
 
   useEffect(() => {
     const lifecycle = runtime.current
@@ -50,10 +73,11 @@ export function Providers({ children }: { children: ReactNode }) {
         .subscribe(
           channel<CanvasState>(receiveCanvas),
           channel<Job>((job) => {
+            const firstUpdate = !completed.has(job.id)
             const previous = completed.get(job.id) ?? 0
             completed.set(job.id, job.completed)
             receiveJob(job)
-            if (job.completed > previous || job.state !== 'running') {
+            if (firstUpdate || job.completed > previous || job.state !== 'running') {
               void refresh(projectKey, pagesKey, pageKey).catch(() => undefined)
             }
           }),
