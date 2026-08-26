@@ -154,10 +154,18 @@ pub(crate) fn translations(
         .enumerate()
         .map(|(index, id)| (id.as_str(), index))
         .collect::<BTreeMap<_, _>>();
+    let identities = (0..request.segments.len())
+        .map(|index| ((request.page_id(index), request.region_id(index)), index))
+        .collect::<BTreeMap<_, _>>();
     let mut translations = vec![None; request.segments.len()];
 
     for translation in output_translations {
-        let Some(&index) = positions.get(translation.id.as_str()) else {
+        let index = positions.get(translation.id.as_str()).copied().or_else(|| {
+            identities
+                .get(&(translation.page_id.clone(), translation.region_id.clone()))
+                .copied()
+        });
+        let Some(index) = index else {
             bail!(
                 "{provider} returned unknown translation ID {}",
                 translation.id
@@ -167,6 +175,15 @@ pub(crate) fn translations(
             bail!(
                 "{provider} returned duplicate translation ID {}",
                 translation.id
+            );
+        }
+        if let Some(page_index) = translation.page_index {
+            ensure!(
+                page_index == request.page_number(index),
+                "{provider} returned page index {} for translation ID {}, expected {}",
+                page_index,
+                translation.id,
+                request.page_number(index)
             );
         }
         ensure!(
@@ -184,7 +201,7 @@ pub(crate) fn translations(
             request.region_id(index)
         );
         ensure!(
-            translation.source_text == request.segments[index],
+            source_echo_matches(&request.segments[index], &translation.source_text),
             "{provider} changed source text for translation ID {}",
             translation.id
         );
@@ -206,6 +223,16 @@ pub(crate) fn translations(
         .into_iter()
         .map(|translation| translation.expect("missing IDs were rejected above"))
         .collect())
+}
+
+fn source_echo_matches(expected: &str, echoed: &str) -> bool {
+    let mut expected = expected.chars().peekable();
+    for character in echoed.chars() {
+        if expected.next_if_eq(&character).is_none() && character != '♡' {
+            return false;
+        }
+    }
+    expected.next().is_none()
 }
 
 pub(crate) fn output_schema() -> Value {
@@ -441,7 +468,7 @@ struct TranslationInputUnit<'a> {
 #[serde(deny_unknown_fields)]
 struct TranslationOutput {
     translations: Vec<TranslationOutputSegment>,
-    #[serde(rename = "notes")]
+    #[serde(default, rename = "notes")]
     _notes: String,
 }
 
@@ -450,6 +477,8 @@ struct TranslationOutput {
 struct TranslationOutputSegment {
     id: String,
     page_id: String,
+    #[serde(default)]
+    page_index: Option<usize>,
     region_id: String,
     source_text: String,
     translated_text: String,
@@ -539,6 +568,33 @@ mod tests {
 
         assert_eq!(
             parse_translation_response("openrouter", &response.to_string(), &request).unwrap(),
+            ["один"]
+        );
+    }
+
+    #[test]
+    fn accepts_matching_echoed_page_index() {
+        let request = TranslationRequest::new(["one"], Language::Russian)
+            .with_page_numbers([17])
+            .unwrap();
+        let response = r#"{"translations":[{"id":"segment:0","page_id":"page:17","page_index":17,"region_id":"region:0","source_text":"one","translated_text":"один"}]}"#;
+
+        assert_eq!(
+            translations("openrouter", response, &request).unwrap(),
+            ["один"]
+        );
+
+        let wrong = r#"{"translations":[{"id":"segment:0","page_id":"page:17","page_index":18,"region_id":"region:0","source_text":"one","translated_text":"один"}],"notes":""}"#;
+        assert!(translations("openrouter", wrong, &request).is_err());
+    }
+
+    #[test]
+    fn recovers_redundant_identity_and_decorative_source_echo() {
+        let request = TranslationRequest::new(["one"], Language::Russian);
+        let response = r#"{"translations":[{"id":"mistyped","page_id":"page:1","region_id":"region:0","source_text":"one♡","translated_text":"один"}]}"#;
+
+        assert_eq!(
+            translations("openrouter", response, &request).unwrap(),
             ["один"]
         );
     }
