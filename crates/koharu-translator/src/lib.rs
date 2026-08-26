@@ -17,6 +17,27 @@ use error::{Error, Result};
 use local::LocalTranslator;
 
 const MAX_ESTIMATED_CHAPTER_INPUT_TOKENS: usize = 100_000;
+const MAX_ESTIMATED_CHAPTER_OUTPUT_TOKENS: usize = 65_536;
+const CHAPTER_OUTPUT_BASE_TOKENS: usize = 16_384;
+const CHAPTER_OUTPUT_TOKENS_PER_SEGMENT: usize = 192;
+
+fn chapter_output_budget(request: &TranslationRequest) -> anyhow::Result<u32> {
+    let source_bytes = request.segments.iter().map(String::len).sum::<usize>();
+    let estimated_tokens = CHAPTER_OUTPUT_BASE_TOKENS
+        .saturating_add(
+            request
+                .segments
+                .len()
+                .saturating_mul(CHAPTER_OUTPUT_TOKENS_PER_SEGMENT),
+        )
+        .saturating_add(source_bytes.div_ceil(2));
+    anyhow::ensure!(
+        estimated_tokens <= MAX_ESTIMATED_CHAPTER_OUTPUT_TOKENS,
+        "chapter translation response is estimated at {estimated_tokens} output tokens, above the conservative limit of {MAX_ESTIMATED_CHAPTER_OUTPUT_TOKENS}; {}",
+        request.chapter_split_hint()
+    );
+    Ok(estimated_tokens as u32)
+}
 
 pub use backend::{
     OcrRequest, TranslationContext, TranslationRequest, TranslationSegmentMetadata, TranslationUnit,
@@ -132,7 +153,7 @@ impl Translator {
             return Ok((provider_id, request.segments));
         }
 
-        let generation = generation.for_model(selection);
+        let mut generation = generation.for_model(selection);
 
         if Self::supports_vision(selection, &generation) {
             request.prepare_image()?;
@@ -148,6 +169,8 @@ impl Translator {
                 "chapter translation request is estimated at {estimated_tokens} input tokens, above the conservative limit of {MAX_ESTIMATED_CHAPTER_INPUT_TOKENS}; {}",
                 request.chapter_split_hint()
             );
+            let output_budget = chapter_output_budget(&request)?;
+            generation.max_tokens.get_or_insert(output_budget);
         }
 
         let expected = request.segments.len();
@@ -286,6 +309,15 @@ mod tests {
                 ..GenerationConfig::default()
             }
         ));
+    }
+
+    #[test]
+    fn chapter_output_budget_scales_with_segment_count_and_text() {
+        let request = TranslationRequest::new(["猫"; 50], Language::Russian)
+            .with_page_numbers([1; 50])
+            .unwrap();
+
+        assert_eq!(chapter_output_budget(&request).unwrap(), 26_059);
     }
 
     #[tokio::test]

@@ -119,10 +119,9 @@ pub(super) async fn translate(
         reasoning_effort: backend.reasoning_effort,
         reasoning: backend.reasoning.map(|enabled| ReasoningConfig { enabled }),
         thinking: backend.thinking.map(|kind| ThinkingConfig { kind }),
-        response_format: backend.response_mode.response_format(
-            "manga_translation",
-            prompt::output_schema(request.segments.len()),
-        ),
+        response_format: backend
+            .response_mode
+            .response_format("manga_translation", prompt::output_schema()),
     };
     let http = client.post(backend.endpoint).json(&body);
     let http = match backend.api_key {
@@ -430,7 +429,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(
                 ResponseMode::JsonObject
-                    .response_format("manga_translation", output_schema(2))
+                    .response_format("manga_translation", output_schema())
                     .unwrap()
             )
             .unwrap(),
@@ -439,7 +438,7 @@ mod tests {
 
         let strict = serde_json::to_value(
             ResponseMode::JsonSchema
-                .response_format("manga_translation", output_schema(2))
+                .response_format("manga_translation", output_schema())
                 .unwrap(),
         )
         .unwrap();
@@ -453,7 +452,7 @@ mod tests {
         );
         assert!(
             ResponseMode::PromptOnly
-                .response_format("manga_translation", output_schema(2))
+                .response_format("manga_translation", output_schema())
                 .is_none()
         );
     }

@@ -184,14 +184,12 @@ pub(crate) fn translations(
         .collect())
 }
 
-pub(crate) fn output_schema(expected: usize) -> Value {
+pub(crate) fn output_schema() -> Value {
     json!({
         "type": "object",
         "properties": {
             "translations": {
                 "type": "array",
-                "minItems": expected,
-                "maxItems": expected,
                 "items": {
                     "type": "object",
                     "properties": {
@@ -662,11 +660,11 @@ mod tests {
     }
 
     #[test]
-    fn schema_requires_the_complete_import_identity() {
-        let schema = output_schema(3);
+    fn schema_requires_complete_identity_without_array_size_constraints() {
+        let schema = output_schema();
         let translations = &schema["properties"]["translations"];
-        assert_eq!(translations["minItems"], 3);
-        assert_eq!(translations["maxItems"], 3);
+        assert!(translations.get("minItems").is_none());
+        assert!(translations.get("maxItems").is_none());
         assert_eq!(
             translations["items"]["required"],
             json!([
