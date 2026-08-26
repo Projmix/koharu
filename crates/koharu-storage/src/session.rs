@@ -12,9 +12,9 @@ use tempfile::TempDir;
 use tokio::sync::Mutex;
 
 use crate::{
-    BlobId, Blobs, DocumentId, Error, Result, Revision,
+    BlobId, Blobs, DocumentId, Error, Result, Revision, VersionId,
     blobs::BlobStore,
-    format::{self, Slot, StoredState},
+    format::{self, Slot, StoredState, StoredVersion},
 };
 
 #[derive(Clone, Debug)]
@@ -103,6 +103,14 @@ impl State {
 pub struct GcReport {
     pub blobs: usize,
     pub bytes: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SavedVersion {
+    pub id: VersionId,
+    pub name: String,
+    pub created_at_ms: u64,
+    pub revision: Revision,
 }
 
 impl Session {
@@ -222,6 +230,99 @@ impl Session {
         })
     }
 
+    pub async fn list_versions(&self) -> Result<Vec<SavedVersion>> {
+        let _writer = self.inner.writer.lock().await;
+        let root = self.inner.root.clone();
+        let document = self.document_id();
+        tokio::task::spawn_blocking(move || {
+            format::list_versions(&root)?
+                .into_iter()
+                .map(|version| {
+                    if version.state.document != document {
+                        return Err(Error::DocumentMismatch {
+                            state: version.state.document,
+                            session: document,
+                        });
+                    }
+                    Ok(saved_version(&version))
+                })
+                .collect()
+        })
+        .await
+        .map_err(|error| Error::Task(error.to_string()))?
+    }
+
+    pub async fn save_version(&self, name: impl Into<String>) -> Result<SavedVersion> {
+        let name = validate_version_name(name.into())?;
+        let created_at_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|_| Error::invalid("system clock is before the Unix epoch"))?
+            .as_millis()
+            .try_into()
+            .map_err(|_| Error::invalid("project version timestamp overflow"))?;
+        let _writer = self.inner.writer.lock().await;
+        let root = self.inner.root.clone();
+        let current = self.inner.head.read().stored.clone();
+        let version = StoredVersion {
+            id: VersionId::new(),
+            name,
+            created_at_ms,
+            state: (*current).clone(),
+        };
+        let result = saved_version(&version);
+        let store = self.inner.blobs.clone();
+        tokio::task::spawn_blocking(move || {
+            let referenced = version.state.blobs.iter().copied().collect();
+            store.verify_references(&referenced)?;
+            format::save_version(&root, &version)
+        })
+        .await
+        .map_err(|error| Error::Task(error.to_string()))??;
+        Ok(result)
+    }
+
+    pub async fn load_version(&self, id: VersionId) -> Result<State> {
+        let _writer = self.inner.writer.lock().await;
+        let root = self.inner.root.clone();
+        let store = self.inner.blobs.clone();
+        let document = self.document_id();
+        tokio::task::spawn_blocking(move || {
+            let version = format::load_version(&root, id)?
+                .ok_or_else(|| Error::invalid(format!("project version {id} does not exist")))?;
+            if version.state.document != document {
+                return Err(Error::DocumentMismatch {
+                    state: version.state.document,
+                    session: document,
+                });
+            }
+            let referenced = version.state.blobs.iter().copied().collect();
+            let blobs = store.durable_scope(referenced)?;
+            Ok(State {
+                document,
+                revision: version.state.revision,
+                payload: Bytes::from(version.state.payload),
+                blobs,
+            })
+        })
+        .await
+        .map_err(|error| Error::Task(error.to_string()))?
+    }
+
+    pub async fn delete_version(&self, id: VersionId) -> Result<()> {
+        let _writer = self.inner.writer.lock().await;
+        let root = self.inner.root.clone();
+        tokio::task::spawn_blocking(move || {
+            if !format::delete_version(&root, id)? {
+                return Err(Error::invalid(format!(
+                    "project version {id} does not exist"
+                )));
+            }
+            Ok(())
+        })
+        .await
+        .map_err(|error| Error::Task(error.to_string()))?
+    }
+
     #[tracing::instrument(level = "info", skip_all)]
     pub async fn collect_garbage(&self) -> Result<GcReport> {
         let _writer = self.inner.writer.lock().await;
@@ -234,12 +335,42 @@ impl Session {
                     saved.extend(state.blobs);
                 }
             }
+            for version in format::list_versions(&root)? {
+                saved.extend(version.state.blobs);
+            }
             let (blobs, bytes) = store.collect(saved)?;
             Ok::<_, Error>(GcReport { blobs, bytes })
         })
         .await
         .map_err(|error| Error::Task(error.to_string()))?
     }
+}
+
+fn saved_version(version: &StoredVersion) -> SavedVersion {
+    SavedVersion {
+        id: version.id,
+        name: version.name.clone(),
+        created_at_ms: version.created_at_ms,
+        revision: version.state.revision,
+    }
+}
+
+fn validate_version_name(name: String) -> Result<String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(Error::invalid("project version name cannot be empty"));
+    }
+    if name.chars().count() > 120 {
+        return Err(Error::invalid(
+            "project version name cannot exceed 120 characters",
+        ));
+    }
+    if name.chars().any(char::is_control) {
+        return Err(Error::invalid(
+            "project version name cannot contain control characters",
+        ));
+    }
+    Ok(name.to_owned())
 }
 
 fn create_project(

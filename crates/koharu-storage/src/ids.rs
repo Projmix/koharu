@@ -61,6 +61,7 @@ macro_rules! uuid_id {
 }
 
 uuid_id!(DocumentId);
+uuid_id!(VersionId);
 
 #[revisioned(revision = 1)]
 #[derive(

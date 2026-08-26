@@ -159,3 +159,63 @@ async fn rejects_stale_saves() {
         Err(Error::RevisionConflict { .. })
     ));
 }
+
+#[tokio::test]
+async fn saved_versions_retain_state_and_blobs_until_deleted() {
+    let root = tempfile::tempdir().unwrap();
+    let session = Session::create(root.path(), DocumentId::new(), Bytes::new())
+        .await
+        .unwrap();
+    let initial = session.load().await.unwrap();
+    let bytes = Bytes::from_static(b"version-only blob");
+    let id = BlobId::for_bytes(&bytes);
+    let first = session
+        .save(
+            &initial
+                .update(
+                    Revision::new(1),
+                    Bytes::from_static(b"saved payload"),
+                    [id],
+                    [(id, bytes.clone())],
+                )
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let version = session.save_version("  First pass  ").await.unwrap();
+    assert_eq!(version.name, "First pass");
+    assert_eq!(version.revision, Revision::new(1));
+
+    let second = session
+        .save(
+            &first
+                .update(Revision::new(2), Bytes::from_static(b"new head"), [], [])
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let third = session
+        .save(
+            &second
+                .update(Revision::new(3), Bytes::from_static(b"newest head"), [], [])
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    drop((initial, first, second, third));
+
+    assert_eq!(
+        session.list_versions().await.unwrap(),
+        vec![version.clone()]
+    );
+    let saved = session.load_version(version.id).await.unwrap();
+    assert_eq!(saved.payload(), &Bytes::from_static(b"saved payload"));
+    assert_eq!(saved.blobs().get(id).await.unwrap(), bytes);
+    drop(saved);
+    assert_eq!(session.collect_garbage().await.unwrap().blobs, 0);
+
+    session.delete_version(version.id).await.unwrap();
+    assert!(session.list_versions().await.unwrap().is_empty());
+    assert_eq!(session.collect_garbage().await.unwrap().blobs, 1);
+    assert!(!blob_path(root.path(), id).exists());
+}

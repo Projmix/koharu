@@ -41,6 +41,10 @@ export const commands = {
 	closeProject: () => __TAURI_INVOKE<null>("close_project"),
 	importPages: (source: PageImportSource) => __TAURI_INVOKE<null>("import_pages", { source }),
 	selectPage: (page: EntityId) => __TAURI_INVOKE<PageSelection>("select_page", { page }).then((v) => (({...v,page:({...v.page,regions:v.page.regions.map(i=>({...i,geometry:({...i.geometry,points:i.geometry.points.map(i=>i)})}))})}) as typeof v)),
+	listProjectVersions: () => __TAURI_INVOKE<ProjectVersion[]>("list_project_versions").then((v) => (v.map(i=>i) as typeof v)),
+	saveProjectVersion: (name: string) => __TAURI_INVOKE<ProjectVersion>("save_project_version", { name }),
+	restoreProjectVersion: (id: VersionId) => __TAURI_INVOKE<ProjectInfo>("restore_project_version", { id }),
+	deleteProjectVersion: (id: VersionId) => __TAURI_INVOKE<null>("delete_project_version", { id }),
 	renamePage: (page: EntityId, label: string) => __TAURI_INVOKE<null>("rename_page", { page, label }),
 	deletePages: (pages: EntityId[]) => __TAURI_INVOKE<null>("delete_pages", { pages }),
 	movePage: (page: EntityId, index: number) => __TAURI_INVOKE<null>("move_page", { page, index }),
@@ -495,6 +499,13 @@ export type ProjectSummary = {
 	name: string,
 };
 
+export type ProjectVersion = {
+	id: VersionId,
+	name: string,
+	created_at_ms: number,
+	revision: Revision,
+};
+
 export type Provider = "local" | "atlas-cloud" | "openai" | "gemini" | "claude" | "grok" | "minimax" | "deepseek" | "openai-compatible" | "openrouter" | "lm-studio" | "deepl" | "google-cloud-translation" | "caiyun";
 
 export type ProviderConfig = { provider: "local"; settings: LocalConfig } | { provider: "atlas-cloud"; settings: AtlasCloudConfig } | { provider: "openai"; settings: OpenAiConfig } | { provider: "gemini"; settings: GeminiConfig } | { provider: "claude"; settings: ClaudeConfig } | { provider: "grok"; settings: GrokConfig } | { provider: "minimax"; settings: MiniMaxConfig } | { provider: "deepseek"; settings: DeepSeekConfig } | { provider: "openai-compatible"; settings: OpenAiCompatibleConfig } | { provider: "openrouter"; settings: OpenRouterConfig } | { provider: "lm-studio"; settings: LmStudioConfig } | { provider: "deepl"; settings: DeepLConfig } | { provider: "google-cloud-translation"; settings: GoogleCloudConfig } | { provider: "caiyun"; settings: CaiyunConfig };
@@ -610,6 +621,8 @@ export type TypographyUpdate = {
 	layer: EntityId,
 	typography: Typography,
 };
+
+export type VersionId = string;
 
 export type WritingMode = "Horizontal" | "Vertical";
 

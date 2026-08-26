@@ -1490,3 +1490,51 @@ async fn user_promotion_protects_generated_entity_and_relation_lifecycle() {
         Err(Error::Authorship(_))
     ));
 }
+
+#[tokio::test]
+async fn restoring_a_saved_version_creates_a_new_head() {
+    let root = tempfile::tempdir().unwrap();
+    let mut session = Session::create(root.path()).await.unwrap();
+    let mut page_id = None;
+    let create = session
+        .snapshot()
+        .patch(|edit| {
+            page_id = Some(edit.add_page(page(), At::End)?);
+            Ok(())
+        })
+        .unwrap();
+    let saved_snapshot = session.commit(create).await.unwrap().snapshot;
+    let page_id = page_id.unwrap();
+    let version = session.save_version("Detected and OCRed").await.unwrap();
+
+    let changed = saved_snapshot
+        .patch(|edit| edit.set_page(page_id, PageDraft::new("Changed", 800.0, 1200.0)))
+        .unwrap();
+    let changed = session.commit(changed).await.unwrap().snapshot;
+    assert_eq!(
+        changed.page(page_id).unwrap().page().unwrap().label,
+        "Changed"
+    );
+
+    let restored = session.restore_version(version.id).await.unwrap();
+    assert_eq!(restored.revision(), Revision::new(3));
+    let saved_label = saved_snapshot.page(page_id).unwrap().page().unwrap().label;
+    assert_eq!(
+        restored.page(page_id).unwrap().page().unwrap().label,
+        saved_label
+    );
+    drop((session, saved_snapshot, changed, restored));
+
+    let reopened = Session::open(root.path()).await.unwrap();
+    assert_eq!(reopened.snapshot().revision(), Revision::new(3));
+    assert_eq!(
+        reopened
+            .snapshot()
+            .page(page_id)
+            .unwrap()
+            .page()
+            .unwrap()
+            .label,
+        saved_label
+    );
+}

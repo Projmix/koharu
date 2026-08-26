@@ -21,6 +21,15 @@ pub(crate) fn publish(target: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
+pub(crate) fn remove(target: &Path) -> Result<bool> {
+    if !target.try_exists()? {
+        return Ok(false);
+    }
+    fs::remove_file(target)?;
+    sync_parent(target)?;
+    Ok(true)
+}
+
 #[cfg(unix)]
 fn sync_parent(path: &Path) -> Result<()> {
     if let Some(parent) = path.parent() {

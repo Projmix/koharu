@@ -8,6 +8,7 @@ pub(crate) mod output;
 pub(crate) mod preferences;
 pub(crate) mod processing;
 pub(crate) mod project;
+pub(crate) mod versions;
 
 use parking_lot::Mutex;
 use serde::Serialize;
@@ -74,6 +75,10 @@ pub fn bindings() -> tauri_specta::Builder<tauri::Cef> {
             lifecycle::close_project,
             lifecycle::import_pages,
             lifecycle::select_page,
+            versions::list_project_versions,
+            versions::save_project_version,
+            versions::restore_project_version,
+            versions::delete_project_version,
             editing::rename_page,
             editing::delete_pages,
             editing::move_page,

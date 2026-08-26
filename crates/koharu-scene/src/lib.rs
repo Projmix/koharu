@@ -42,7 +42,7 @@ pub use semantics::{
 pub use session::{Commit, Session};
 pub use snapshot::{EntityRef, PageRef, RelationRef, Snapshot};
 
-pub use koharu_storage::{BlobId, PatchId, Revision};
+pub use koharu_storage::{BlobId, PatchId, Revision, SavedVersion, VersionId};
 
 #[cfg(test)]
 mod tests;

@@ -183,6 +183,44 @@ impl Session {
         self.storage.collect_garbage().await.map_err(Into::into)
     }
 
+    pub async fn list_versions(&self) -> Result<Vec<koharu_storage::SavedVersion>> {
+        self.storage.list_versions().await.map_err(Into::into)
+    }
+
+    pub async fn save_version(
+        &self,
+        name: impl Into<String>,
+    ) -> Result<koharu_storage::SavedVersion> {
+        self.storage.save_version(name).await.map_err(Into::into)
+    }
+
+    pub async fn delete_version(&self, id: koharu_storage::VersionId) -> Result<()> {
+        self.storage.delete_version(id).await.map_err(Into::into)
+    }
+
+    pub async fn restore_version(&mut self, id: koharu_storage::VersionId) -> Result<Snapshot> {
+        let version = self.storage.load_version(id).await?;
+        let next_revision = self
+            .current
+            .revision()
+            .next()
+            .ok_or_else(|| Error::invalid("project revision overflow"))?;
+        let checkpoint: StoredState = revision::from_slice(version.payload())?;
+        let state = State::from_checkpoint(version.document_id(), next_revision, checkpoint)?;
+        state.validate()?;
+        let proposed = version.update(
+            next_revision,
+            Bytes::from(encode_checkpoint(&state)?),
+            state.referenced_blobs(),
+            std::iter::empty(),
+        )?;
+        let stored = self.storage.save(&proposed).await?;
+        let snapshot = Snapshot::new(Arc::new(state), stored)?;
+        self.current = snapshot.clone();
+        self.history.clear();
+        Ok(snapshot)
+    }
+
     async fn assemble(storage: koharu_storage::Session, state: State) -> Result<Self> {
         let stored = storage.load().await?;
         let current = Snapshot::new(Arc::new(state), stored)?;

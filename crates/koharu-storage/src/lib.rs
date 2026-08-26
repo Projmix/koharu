@@ -10,8 +10,8 @@ mod session;
 pub use blobs::Blobs;
 pub use bytes::Bytes;
 pub use error::{Error, Result};
-pub use ids::{BlobId, DocumentId, PatchId, Revision};
-pub use session::{GcReport, Session, State};
+pub use ids::{BlobId, DocumentId, PatchId, Revision, VersionId};
+pub use session::{GcReport, SavedVersion, Session, State};
 
 #[cfg(test)]
 mod tests;

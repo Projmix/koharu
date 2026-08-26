@@ -335,6 +335,26 @@ impl Project {
         }
     }
 
+    pub(crate) async fn list_versions(&self) -> Result<Vec<koharu_scene::SavedVersion>> {
+        self.session.list_versions().await.map_err(Into::into)
+    }
+
+    pub(crate) async fn save_version(&self, name: String) -> Result<koharu_scene::SavedVersion> {
+        self.session.save_version(name).await.map_err(Into::into)
+    }
+
+    pub(crate) async fn delete_version(&self, id: koharu_scene::VersionId) -> Result<()> {
+        self.session.delete_version(id).await.map_err(Into::into)
+    }
+
+    pub(crate) async fn restore_version(&mut self, id: koharu_scene::VersionId) -> Result<()> {
+        self.session.restore_version(id).await?;
+        self.undo.clear();
+        self.redo.clear();
+        self.reconcile_page();
+        Ok(())
+    }
+
     pub(crate) fn pages(snapshot: &Snapshot) -> Result<Vec<PageSummary>> {
         snapshot
             .pages()

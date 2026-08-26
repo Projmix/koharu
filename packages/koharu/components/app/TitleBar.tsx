@@ -1,13 +1,14 @@
 'use client'
 
 import { openUrl } from '@tauri-apps/plugin-opener'
-import { FilePlus2, FolderOpen, LoaderCircle, Settings, Trash2 } from 'lucide-react'
+import { FilePlus2, FolderOpen, History, LoaderCircle, Settings, Trash2 } from 'lucide-react'
 import Image from 'next/image'
 import { useState, type ComponentProps } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { AboutDialog } from '@/components/app/AboutDialog'
 import { DeleteAllPagesDialog } from '@/components/app/DeleteAllPagesDialog'
+import { ProjectVersionsDialog } from '@/components/app/ProjectVersionsDialog'
 import { useMacOS, WindowControls } from '@/components/app/WindowChrome'
 import { call } from '@/lib/backend'
 import { selectableLayer } from '@/lib/geometry'
@@ -42,6 +43,7 @@ export function TitleBar() {
   const { t } = useTranslation()
   const [aboutOpen, setAboutOpen] = useState(false)
   const [clearProjectOpen, setClearProjectOpen] = useState(false)
+  const [versionsOpen, setVersionsOpen] = useState(false)
   const [clearingProject, setClearingProject] = useState(false)
   const macOS = useMacOS()
   const project = useProject().data
@@ -141,6 +143,10 @@ export function TitleBar() {
                 {t('menu.exportPsd')}
               </MenubarItem>
               <MenubarSeparator />
+              <MenubarItem disabled={!project || importing} onClick={() => setVersionsOpen(true)}>
+                <History />
+                {t('menu.projectVersions')}
+              </MenubarItem>
               <MenubarItem
                 disabled={!project || pages.length === 0 || importing}
                 variant='destructive'
@@ -293,6 +299,7 @@ export function TitleBar() {
         {!macOS && <WindowControls />}
       </header>
       <AboutDialog open={aboutOpen} onOpenChange={setAboutOpen} />
+      <ProjectVersionsDialog open={versionsOpen} onOpenChange={setVersionsOpen} />
       <DeleteAllPagesDialog
         open={clearProjectOpen}
         count={pages.length}
