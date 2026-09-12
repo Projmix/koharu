@@ -103,6 +103,42 @@ const textLayer: Layer = {
   automatic_region: null,
 }
 
+const secondLayer: Layer = {
+  ...textLayer,
+  id: 'second',
+  content: {
+    ...textLayer.content,
+    id: 'second-content',
+    translation: { text: 'Second', language: null },
+  },
+}
+
+const thirdLayer: Layer = {
+  ...textLayer,
+  id: 'third',
+  content: {
+    ...textLayer.content,
+    id: 'third-content',
+    translation: { text: 'Third', language: null },
+  },
+}
+
+const artworkLayer: Layer = {
+  type: 'artwork',
+  id: 'artwork',
+  parent: 'page',
+  geometry: {
+    points: [
+      { x: 0, y: 0 },
+      { x: 10, y: 0 },
+      { x: 10, y: 10 },
+      { x: 0, y: 10 },
+    ],
+  },
+  visibility: { visible: true, opacity: 1 },
+  image: 'source',
+}
+
 const preferences: Preferences = {
   pipeline: {
     detection: { model: 'koharu-layout-rfdetr-seg-2xl' },
@@ -1087,6 +1123,77 @@ describe('greenfield editor', () => {
     expect(useKoharuStore.getState().selectedLayers).toEqual(['text-5', 'text-6'])
   })
 
+  function installLayerSelectionFixture() {
+    installProject()
+    queryClient.setQueryData(pageKey, (page: { layers: Layer[] }) => ({
+      ...page,
+      layers: [...page.layers, secondLayer, artworkLayer, thirdLayer],
+    }))
+  }
+
+  it('toggles layers in the selection with ctrl-click', () => {
+    installLayerSelectionFixture()
+    render(<Inspector />)
+
+    expect(useKoharuStore.getState().selectedLayers).toEqual(['element'])
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Second' }), { ctrlKey: true })
+    expect(useKoharuStore.getState().selectedLayers).toEqual(['element', 'second'])
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Hello' }), { ctrlKey: true })
+    expect(useKoharuStore.getState().selectedLayers).toEqual(['second'])
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Second' }), { ctrlKey: true })
+    expect(useKoharuStore.getState().selectedLayers).toEqual([])
+  })
+
+  it('toggles layers in the selection with meta-click', () => {
+    installLayerSelectionFixture()
+    render(<Inspector />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Second' }), { metaKey: true })
+    expect(useKoharuStore.getState().selectedLayers).toEqual(['element', 'second'])
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Second' }), { metaKey: true })
+    expect(useKoharuStore.getState().selectedLayers).toEqual(['element'])
+  })
+
+  it('selects a display range with shift-click, skipping locked layers', () => {
+    installLayerSelectionFixture()
+    render(<Inspector />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Third' }))
+    expect(useKoharuStore.getState().selectedLayers).toEqual(['third'])
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Hello' }), { shiftKey: true })
+    expect(useKoharuStore.getState().selectedLayers).toEqual(['third', 'second', 'element'])
+  })
+
+  it('unions a shift range with the existing selection when ctrl is held', () => {
+    installLayerSelectionFixture()
+    render(<Inspector />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Second' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Third' }), {
+      ctrlKey: true,
+      shiftKey: true,
+    })
+    expect(useKoharuStore.getState().selectedLayers).toEqual(['second', 'third'])
+  })
+
+  it('falls back to single selection when shift-clicking without an anchor', () => {
+    installLayerSelectionFixture()
+    render(<Inspector />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Third' }), { shiftKey: true })
+    expect(useKoharuStore.getState().selectedLayers).toEqual(['third'])
+  })
+
+  it('collapses a multi-selection back to a single layer on plain click', () => {
+    installLayerSelectionFixture()
+    render(<Inspector />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Second' }), { ctrlKey: true })
+    expect(useKoharuStore.getState().selectedLayers).toEqual(['element', 'second'])
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Hello' }))
+    expect(useKoharuStore.getState().selectedLayers).toEqual(['element'])
+  })
+
   it('resets a custom text frame to its automatic region', async () => {
     installProject()
     queryClient.setQueryData(pageKey, (page: { layers: Layer[] }) => ({
@@ -1124,7 +1231,7 @@ describe('greenfield editor', () => {
     useCompactProcessingControls()
 
     fireEvent.click(screen.getByRole('button', { name: 'Processing settings' }))
-    fireEvent.click(screen.getByRole('button', { name: /Scope Page/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Scope Selection/ }))
     fireEvent.click(screen.getByRole('button', { name: /Entire project/ }))
     fireEvent.click(screen.getByRole('button', { name: 'Export chapter translation request' }))
     fireEvent.click(screen.getByRole('button', { name: 'Import chapter translation response' }))
@@ -1162,7 +1269,7 @@ describe('greenfield editor', () => {
     )
   })
 
-  it('runs the current page and exposes the runtime shortcuts', async () => {
+  it('runs the selected pages by default and exposes the runtime shortcuts', async () => {
     installProject()
     const run = vi.spyOn(commands, 'process').mockResolvedValue('job')
     render(<CanvasCommandBar />)
@@ -1183,7 +1290,7 @@ describe('greenfield editor', () => {
     fireEvent.click(selector)
     await waitFor(() => expect(commands.getTranslationModels).toHaveBeenCalled())
     expect(screen.getByRole('button', { name: /Model Gemma 4 E2B Instruct/ })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /Scope Page/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Scope Selection/ })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Stages 4 stages/ })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Output English/ })).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Settings' }))
@@ -1521,7 +1628,7 @@ describe('greenfield editor', () => {
       'Page guidance',
     )
     await user.click(screen.getByRole('button', { name: 'Back' }))
-    await user.click(screen.getByRole('button', { name: /Scope Page/ }))
+    await user.click(screen.getByRole('button', { name: /Scope Selection/ }))
     await user.click(screen.getByRole('button', { name: /Entire project/ }))
     await user.click(screen.getByRole('button', { name: /Stages 4 stages/ }))
     await user.click(screen.getByRole('button', { name: /Translation/ }))

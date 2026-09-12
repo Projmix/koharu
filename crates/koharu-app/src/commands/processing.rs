@@ -7,7 +7,8 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use specta::Type;
-use tauri::{AppHandle, Cef, Manager as _, State, ipc::Channel};
+use tauri::{AppHandle, Manager as _, State, ipc::Channel};
+use tauri_runtime_cef::CefRuntime;
 use uuid::Uuid;
 
 use super::{
@@ -174,7 +175,7 @@ pub(crate) struct JobChannel {
 #[specta::specta]
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn process(
-    handle: AppHandle<Cef>,
+    handle: AppHandle<CefRuntime>,
     scope: koharu_pipeline::Scope,
     operation: koharu_pipeline::Operation,
     project: State<'_, CurrentProject>,
@@ -425,7 +426,7 @@ pub(crate) async fn process(
         }));
 
         struct PipelineCommitter {
-            handle: AppHandle<Cef>,
+            handle: AppHandle<CefRuntime>,
         }
 
         #[async_trait::async_trait]
@@ -518,7 +519,7 @@ struct ChapterTranslationExport {
 #[tauri::command]
 #[specta::specta]
 pub(crate) async fn export_chapter_translation(
-    window: tauri::WebviewWindow<Cef>,
+    window: tauri::WebviewWindow<CefRuntime>,
     project: State<'_, CurrentProject>,
     processing: State<'_, Processing>,
 ) -> std::result::Result<(), Error> {
@@ -586,8 +587,8 @@ pub(crate) async fn export_chapter_translation(
 #[tauri::command]
 #[specta::specta]
 pub(crate) async fn import_chapter_translation(
-    window: tauri::WebviewWindow<Cef>,
-    handle: AppHandle<Cef>,
+    window: tauri::WebviewWindow<CefRuntime>,
+    handle: AppHandle<CefRuntime>,
     project: State<'_, CurrentProject>,
     processing: State<'_, Processing>,
 ) -> std::result::Result<(), Error> {
