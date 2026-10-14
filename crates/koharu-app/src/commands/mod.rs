@@ -2,12 +2,15 @@ pub(crate) mod agent;
 pub(crate) mod canvas;
 pub(crate) mod editing;
 pub(crate) mod fonts;
+pub(crate) mod image_edit_preview;
 pub(crate) mod import;
 pub(crate) mod lifecycle;
 pub(crate) mod output;
 pub(crate) mod preferences;
 pub(crate) mod processing;
 pub(crate) mod project;
+mod translation;
+pub(crate) mod updates;
 pub(crate) mod versions;
 
 use parking_lot::Mutex;
@@ -81,6 +84,8 @@ pub fn bindings() -> tauri_specta::Builder<tauri_runtime_cef::CefRuntime> {
             versions::delete_project_version,
             editing::rename_page,
             editing::delete_pages,
+            editing::duplicate_pages,
+            editing::paste_text_blocks,
             editing::move_page,
             editing::set_source_text,
             editing::set_text_role,
@@ -95,8 +100,9 @@ pub fn bindings() -> tauri_specta::Builder<tauri_runtime_cef::CefRuntime> {
             editing::redo,
             processing::process,
             processing::stop_job,
-            processing::export_chapter_translation,
-            processing::import_chapter_translation,
+            image_edit_preview::resolve_image_edit_preview,
+            translation::export_chapter_translation,
+            translation::import_chapter_translation,
             output::export_pages,
             output::get_thumbnail,
             fonts::get_fonts,
@@ -105,6 +111,7 @@ pub fn bindings() -> tauri_specta::Builder<tauri_runtime_cef::CefRuntime> {
             preferences::get_preferences,
             preferences::get_translation_models,
             preferences::get_inpainting_models,
+            updates::check_upstream_update,
             canvas::get_canvas_manifest,
             canvas::get_canvas_resource,
             canvas::prepare_canvas_page,
@@ -115,8 +122,10 @@ pub fn bindings() -> tauri_specta::Builder<tauri_runtime_cef::CefRuntime> {
             canvas::add_ocr_region,
             canvas::commit_paint,
             canvas::commit_erase,
+            canvas::import_cleanup_image,
             canvas::commit_transform,
             canvas::commit_inpaint,
+            canvas::commit_restore,
         ])
         .disable_serde_phases()
         .error_handling(ErrorHandlingMode::Throw)

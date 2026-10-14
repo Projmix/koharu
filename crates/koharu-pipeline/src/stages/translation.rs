@@ -7,8 +7,8 @@ use koharu_scene::{
     RegionSpec, SourceText, Translation,
 };
 use koharu_translator::{
-    GenerationConfig, Language, ModelSelection, Provider, TranslationContext, TranslationRequest,
-    TranslationSegmentMetadata, TranslationUnit, Translator,
+    Language, Provider, TranslationContext, TranslationRequest, TranslationSegmentMetadata,
+    TranslationUnit, Translator,
 };
 
 use crate::{StageTarget, TranslationConfig, TranslationProfile, TranslationUnitPolicy};
@@ -20,6 +20,8 @@ use super::{
 };
 
 const PRODUCER: &str = "dev.koharu.pipeline.translation";
+
+mod manual;
 
 pub(super) struct Processor {
     config: TranslationConfig,
@@ -58,13 +60,11 @@ struct OrderedEntry {
 
 /// The complete, ordered chapter translation input and its target entities.
 /// Keeping request construction and patch construction together ensures that
-/// network responses and manually imported files use exactly the same contract.
+/// network responses and manually imported files target the same scene entities.
 pub struct ChapterTranslation {
     snapshot: koharu_scene::Snapshot,
     targets: Vec<(EntityId, String)>,
     request: TranslationRequest,
-    model: ModelSelection,
-    generation: GenerationConfig,
     target_language: Language,
 }
 
@@ -129,29 +129,8 @@ impl ChapterTranslation {
                 .map(|target| (target.entity, target.source))
                 .collect(),
             request,
-            model: profile.model.clone(),
-            generation: profile.generation,
             target_language,
         })
-    }
-
-    #[must_use]
-    pub fn model(&self) -> &ModelSelection {
-        &self.model
-    }
-
-    pub fn openrouter_request(&self) -> Result<serde_json::Value> {
-        anyhow::ensure!(
-            !self.request.segments.is_empty(),
-            "chapter translation found no untranslated OCR text"
-        );
-        Translator::openrouter_request(&self.model, self.generation, self.request.clone())
-    }
-
-    pub fn patch_from_response(&self, response: &str) -> Result<koharu_scene::Patch> {
-        let translated =
-            koharu_translator::parse_translation_response("openrouter", response, &self.request)?;
-        self.patch_from_translations(translated, "openrouter-manual-import")
     }
 
     fn patch_from_translations(
@@ -867,6 +846,193 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn manual_export_does_not_depend_on_an_api_provider() {
+        let mut session = koharu_scene::Session::memory().await.unwrap();
+        let mut edit = session.snapshot().edit();
+        let page = edit
+            .add_page(PageDraft::new("page", 120.0, 180.0), At::End)
+            .unwrap();
+        add_text(&mut edit, page, "source", (10.0, 10.0, 20.0, 30.0));
+        session.commit(edit.finish().unwrap()).await.unwrap();
+        let mut config = TranslationConfig::default();
+        config.chapter.model.provider = Provider::Local;
+        config.chapter.model.model = None;
+        let chapter = ChapterTranslation::from_snapshot(session.snapshot(), &config).unwrap();
+
+        let export = chapter.manual_export().unwrap();
+        assert!(export.prompt.contains("translation.json"));
+        let segment = &export.document["pages"][0]["units"][0]["segments"][0];
+        assert_eq!(segment["source_text"], "source");
+        assert!(segment.get("page_id").is_none());
+        assert!(segment.get("region_id").is_none());
+        for key in ["provider", "model", "request", "endpoint"] {
+            assert!(export.document.get(key).is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn manual_import_uses_one_stable_id_per_block() {
+        let mut session = koharu_scene::Session::memory().await.unwrap();
+        let mut edit = session.snapshot().edit();
+        let page = edit
+            .add_page(PageDraft::new("page", 120.0, 180.0), At::End)
+            .unwrap();
+        let (target, region, _) = add_text(&mut edit, page, "source", (10.0, 10.0, 20.0, 30.0));
+        session.commit(edit.finish().unwrap()).await.unwrap();
+        let config = TranslationConfig::default();
+        let chapter = ChapterTranslation::from_snapshot(session.snapshot(), &config).unwrap();
+        let response = serde_json::json!({
+            "project_id": session.project_id().to_string(),
+            "target_language": config.target_language,
+            "translations": [{
+                "id": format!("page:{page}::region:{region}"),
+                "source_text": "source",
+                "translated_text": "translation"
+            }]
+        });
+
+        let patch = chapter.patch_from_response(&response.to_string()).unwrap();
+        session.commit(patch).await.unwrap();
+        assert_eq!(
+            session
+                .snapshot()
+                .component::<Translation>(target)
+                .unwrap()
+                .unwrap()
+                .text
+                .value,
+            "translation"
+        );
+    }
+
+    #[tokio::test]
+    async fn manual_import_reorders_by_id_and_rejects_invalid_files_atomically() {
+        let mut session = koharu_scene::Session::memory().await.unwrap();
+        let mut edit = session.snapshot().edit();
+        let page = edit
+            .add_page(PageDraft::new("page", 120.0, 180.0), At::End)
+            .unwrap();
+        let (first, _, _) = add_text(&mut edit, page, "first", (80.0, 10.0, 20.0, 30.0));
+        let (second, _, _) = add_text(&mut edit, page, "second", (10.0, 10.0, 20.0, 30.0));
+        session.commit(edit.finish().unwrap()).await.unwrap();
+        let mut config = TranslationConfig::default();
+        config.target_language = Language::Russian;
+        let chapter = ChapterTranslation::from_snapshot(session.snapshot(), &config).unwrap();
+        let response = serde_json::json!({
+            "project_id": session.project_id().to_string(),
+            "target_language": "ru-RU",
+            "translations": (0..chapter.request.segments.len()).rev().map(|index| serde_json::json!({
+                "id": chapter.request.segment_id(index),
+                "source_text": chapter.request.segments[index],
+                "translated_text": format!("translated {}", chapter.request.segments[index]),
+            })).collect::<Vec<_>>()
+        });
+        for error in [
+            "project",
+            "language",
+            "unknown",
+            "duplicate",
+            "source",
+            "empty",
+            "missing",
+            "extra",
+            "redundant-region",
+        ] {
+            let mut invalid = response.clone();
+            match error {
+                "project" => invalid["project_id"] = serde_json::json!("another-project"),
+                "language" => invalid["target_language"] = serde_json::json!("en-US"),
+                "unknown" => invalid["translations"][0]["id"] = serde_json::json!("unknown"),
+                "duplicate" => invalid["translations"][0] = invalid["translations"][1].clone(),
+                "source" => {
+                    invalid["translations"][0]["source_text"] = serde_json::json!("changed")
+                }
+                "empty" => {
+                    invalid["translations"][0]["translated_text"] = serde_json::json!(" \n ")
+                }
+                "missing" => {
+                    invalid["translations"].as_array_mut().unwrap().pop();
+                }
+                "extra" => {
+                    invalid["translations"]
+                        .as_array_mut()
+                        .unwrap()
+                        .push(response["translations"][0].clone());
+                }
+                "redundant-region" => {
+                    invalid["translations"][0]["region_id"] = serde_json::json!("wrong")
+                }
+                _ => unreachable!(),
+            }
+            assert!(
+                chapter.patch_from_response(&invalid.to_string()).is_err(),
+                "{error}"
+            );
+            assert!(
+                session
+                    .snapshot()
+                    .component::<Translation>(first)
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(
+                session
+                    .snapshot()
+                    .component::<Translation>(second)
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        let patch = chapter.patch_from_response(&response.to_string()).unwrap();
+        session.commit(patch).await.unwrap();
+        for (entity, expected) in [(first, "translated first"), (second, "translated second")] {
+            assert_eq!(
+                session
+                    .snapshot()
+                    .component::<Translation>(entity)
+                    .unwrap()
+                    .unwrap()
+                    .text
+                    .value,
+                expected
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn manual_import_rejects_a_file_missing_a_newly_added_block() {
+        let mut session = koharu_scene::Session::memory().await.unwrap();
+        let mut edit = session.snapshot().edit();
+        let page = edit
+            .add_page(PageDraft::new("page", 120.0, 180.0), At::End)
+            .unwrap();
+        let (first, region, _) = add_text(&mut edit, page, "first", (80.0, 10.0, 20.0, 30.0));
+        session.commit(edit.finish().unwrap()).await.unwrap();
+        let config = TranslationConfig::default();
+        let response = serde_json::json!({
+            "project_id": session.project_id().to_string(),
+            "target_language": config.target_language,
+            "translations": [{"id":format!("page:{page}::region:{region}"), "source_text":"first", "translated_text":"translation"}]
+        });
+        let mut edit = session.snapshot().edit();
+        add_text(&mut edit, page, "new", (10.0, 10.0, 20.0, 30.0));
+        session.commit(edit.finish().unwrap()).await.unwrap();
+        let current = ChapterTranslation::from_snapshot(session.snapshot(), &config).unwrap();
+        let error = current
+            .patch_from_response(&response.to_string())
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("expected 2"), "{error}");
+        assert!(
+            session
+                .snapshot()
+                .component::<Translation>(first)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
     async fn manual_chapter_import_is_strict_and_preserves_user_translations() {
         let mut session = koharu_scene::Session::memory().await.unwrap();
         let mut edit = session.snapshot().edit();
@@ -890,14 +1056,13 @@ mod tests {
             ChapterTranslation::from_snapshot(session.snapshot(), &TranslationConfig::default())
                 .unwrap();
         let response = serde_json::json!({
+            "project_id": session.project_id().to_string(),
+            "target_language": TranslationConfig::default().target_language,
             "translations": [{
                 "id": format!("page:{page}::region:{region}"),
-                "page_id": page.to_string(),
-                "region_id": region.to_string(),
                 "source_text": "source",
                 "translated_text": "перевод"
-            }],
-            "notes": ""
+            }]
         });
         let patch = chapter.patch_from_response(&response.to_string()).unwrap();
         session.commit(patch).await.unwrap();

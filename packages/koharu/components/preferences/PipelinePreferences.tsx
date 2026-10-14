@@ -34,6 +34,7 @@ import {
   inpaintingPromptForPreset,
   inpaintingPromptPresets,
 } from '@/lib/inpaintingPrompts'
+import { inpaintingProviderName, inpaintingProviders } from '@/lib/inpaintingProviders'
 import { modelKey, modelSelection, providerName } from '@/lib/translation'
 import type {
   InpaintingModelChoice,
@@ -52,6 +53,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@koharu/ui/components/select'
+import { Switch } from '@koharu/ui/components/switch'
 import { Textarea } from '@koharu/ui/components/textarea'
 
 const stages = [['detection', Search]] as const satisfies ReadonlyArray<
@@ -170,6 +172,16 @@ function InpaintingPreferences({
   }
   const choices = selected ? apiModels : [current, ...apiModels]
   const promptPreset = identifyInpaintingPrompt(inpainting.api.prompt)
+  const restorationModels = models.filter(
+    (model) => model.provider === inpainting.restoration.provider,
+  )
+  if (!restorationModels.some((model) => model.model === inpainting.restoration.model)) {
+    restorationModels.unshift({
+      provider: inpainting.restoration.provider,
+      model: inpainting.restoration.model,
+      name: inpainting.restoration.model,
+    })
+  }
   const updateMethod = (method: typeof inpainting.method) =>
     onChange({ ...value, inpainting: { ...inpainting, method } })
 
@@ -179,6 +191,18 @@ function InpaintingPreferences({
         title={t('settings.pipeline.stages.inpainting.title')}
         description={t('settings.pipeline.stages.inpainting.description')}
       >
+        <PreferenceRow
+          title={t('settings.pipeline.inpainting.previewBeforeSend')}
+          description={t('settings.pipeline.inpainting.previewBeforeSendDescription')}
+        >
+          <Switch
+            aria-label={t('settings.pipeline.inpainting.previewBeforeSend')}
+            checked={inpainting.preview_before_send}
+            onCheckedChange={(preview_before_send) =>
+              onChange({ ...value, inpainting: { ...inpainting, preview_before_send } })
+            }
+          />
+        </PreferenceRow>
         <PreferenceRow title={t('settings.pipeline.inpainting.method')} align='start'>
           <div className='grid gap-3'>
             <div className='flex items-center gap-2'>
@@ -253,8 +277,11 @@ function InpaintingPreferences({
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value='fal'>Fal.ai</SelectItem>
-                    <SelectItem value='openrouter'>OpenRouter</SelectItem>
+                    {inpaintingProviders.map((provider) => (
+                      <SelectItem key={provider} value={provider}>
+                        {inpaintingProviderName(provider)}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
                 <Popover open={modelOpen} onOpenChange={setModelOpen}>
@@ -286,7 +313,10 @@ function InpaintingPreferences({
           </div>
         </PreferenceRow>
       </PreferenceSection>
-      <PreferenceSection title={t('tools.remove')}>
+      <PreferenceSection
+        title={t('tools.remove')}
+        description={t('settings.pipeline.inpainting.removeDescription')}
+      >
         <PreferenceRow title={t('settings.pipeline.inpainting.localModel')} align='start'>
           <div className='grid gap-3'>
             <Select
@@ -321,6 +351,94 @@ function InpaintingPreferences({
               model={manual}
               onChange={(next) =>
                 onChange(replaceManualInpainting(value, next as LocalInpaintingModel))
+              }
+            />
+          </div>
+        </PreferenceRow>
+      </PreferenceSection>
+      <PreferenceSection
+        title={t('tools.restore')}
+        description={t('settings.pipeline.inpainting.restorationDescription')}
+      >
+        <PreferenceRow title={t('settings.pipeline.inpainting.restorationProvider')}>
+          <Select
+            value={inpainting.restoration.provider}
+            onValueChange={(provider) => {
+              if (!provider) return
+              const next = models.find((model) => model.provider === provider)
+              if (!next) return
+              onChange({
+                ...value,
+                inpainting: {
+                  ...inpainting,
+                  restoration: {
+                    ...inpainting.restoration,
+                    provider: next.provider,
+                    model: next.model,
+                  },
+                },
+              })
+            }}
+          >
+            <SelectTrigger
+              aria-label={t('settings.pipeline.inpainting.restorationProvider')}
+              className='h-8 text-[11px]'
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {inpaintingProviders.map((provider) => (
+                <SelectItem key={provider} value={provider}>
+                  {inpaintingProviderName(provider)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </PreferenceRow>
+        <PreferenceRow title={t('settings.pipeline.inpainting.restorationModel')} align='start'>
+          <div className='grid gap-3'>
+            <Select
+              value={inpainting.restoration.model}
+              onValueChange={(model) => {
+                if (!model) return
+                onChange({
+                  ...value,
+                  inpainting: {
+                    ...inpainting,
+                    restoration: { ...inpainting.restoration, model },
+                  },
+                })
+              }}
+            >
+              <SelectTrigger
+                aria-label={t('settings.pipeline.inpainting.restorationModel')}
+                className='h-8 text-[11px]'
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {restorationModels.map((model) => (
+                  <SelectItem key={model.model} value={model.model}>
+                    {model.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Textarea
+              aria-label={t('settings.pipeline.inpainting.restorationPrompt')}
+              value={inpainting.restoration.prompt}
+              className='field-sizing-fixed min-h-32 resize-y overflow-y-auto text-[12px] leading-5'
+              onChange={(event) =>
+                onChange({
+                  ...value,
+                  inpainting: {
+                    ...inpainting,
+                    restoration: {
+                      ...inpainting.restoration,
+                      prompt: event.currentTarget.value,
+                    },
+                  },
+                })
               }
             />
           </div>
@@ -431,9 +549,7 @@ function OcrPreferences({
   const apiModels = modelChoices.filter(
     (model) =>
       model.vision &&
-      (model.provider === 'openrouter' ||
-        model.provider === 'openai' ||
-        model.provider === 'openai-compatible'),
+      providers.some((entry) => entry.config.provider === model.provider && entry.supports_ocr),
   )
   const selected =
     apiModels.find((candidate) => modelKey(candidate) === modelKey(ocr.api.model)) ?? null
@@ -474,10 +590,11 @@ function OcrPreferences({
                 <SelectContent>
                   <SelectItem value='local'>{t('settings.pipeline.ocr.local')}</SelectItem>
                   <SelectItem value='api'>{t('settings.pipeline.ocr.api')}</SelectItem>
+                  <SelectItem value='local-api'>{t('settings.pipeline.ocr.hybrid')}</SelectItem>
                 </SelectContent>
               </Select>
             </div>
-            {ocr.method === 'local' ? (
+            {ocr.method !== 'api' && (
               <Select
                 value={ocr.local_model.model}
                 items={localOcrNames}
@@ -503,7 +620,8 @@ function OcrPreferences({
                   ))}
                 </SelectContent>
               </Select>
-            ) : (
+            )}
+            {ocr.method !== 'local' && (
               <Popover open={modelOpen} onOpenChange={setModelOpen}>
                 <PopoverTrigger
                   type='button'
@@ -542,10 +660,15 @@ function OcrPreferences({
                 </PopoverContent>
               </Popover>
             )}
+            {ocr.method === 'local-api' && (
+              <p className='text-[11px] text-muted-foreground'>
+                {t('settings.pipeline.ocr.hybridDescription')}
+              </p>
+            )}
           </div>
         </PreferenceRow>
       </PreferenceSection>
-      {ocr.method === 'api' && (
+      {ocr.method !== 'local' && (
         <>
           <GenerationPreferences
             value={ocr.api.generation}

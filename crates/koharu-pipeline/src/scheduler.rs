@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use koharu_scene::EntityId;
 
+use crate::stage::OcrPass;
 use crate::{Stage, StageTarget};
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -13,6 +14,7 @@ enum WorkState {
 
 struct StageWork {
     stage: Stage,
+    ocr_pass: OcrPass,
     state: WorkState,
 }
 
@@ -40,8 +42,8 @@ impl PageWork {
         };
         self.stages
             .iter()
-            .find(|work| work.stage == prerequisite)
-            .is_none_or(|work| work.state == WorkState::Finished)
+            .filter(|work| work.stage == prerequisite)
+            .all(|work| work.state == WorkState::Finished)
     }
 }
 
@@ -53,12 +55,18 @@ pub(crate) struct Scheduler {
     head: usize,
     chapter: Option<StageWork>,
     project_scope: bool,
+    parallel_inpainting: bool,
     ocr_requested: bool,
     total: usize,
 }
 
 impl Scheduler {
-    pub(crate) fn new(pages: &[EntityId], stages: &[Stage], project_scope: bool) -> Self {
+    pub(crate) fn new(
+        pages: &[EntityId],
+        stages: &[Stage],
+        project_scope: bool,
+        parallel_inpainting: bool,
+    ) -> Self {
         let page_stages = stages
             .iter()
             .copied()
@@ -72,6 +80,7 @@ impl Scheduler {
                     .iter()
                     .map(|stage| StageWork {
                         stage: *stage,
+                        ocr_pass: OcrPass::Final,
                         state: WorkState::Pending,
                     })
                     .collect(),
@@ -80,12 +89,18 @@ impl Scheduler {
         let chapter =
             (project_scope && stages.contains(&Stage::Translation)).then_some(StageWork {
                 stage: Stage::Translation,
+                ocr_pass: OcrPass::Final,
                 state: WorkState::Pending,
             });
         let total = pages
             .len()
             .saturating_mul(page_stages.len())
             .saturating_add(usize::from(chapter.is_some()));
+        let page_window = if parallel_inpainting && page_stages.contains(&Stage::Inpainting) {
+            pages.len().max(1)
+        } else {
+            page_stages.len().max(1)
+        };
         Self {
             page_index: pages
                 .iter()
@@ -93,11 +108,12 @@ impl Scheduler {
                 .map(|(index, page)| (page.page, index))
                 .collect(),
             pages,
-            page_window: page_stages.len().max(1),
+            page_window,
             active_pages: 0,
             head: 0,
             chapter,
             project_scope,
+            parallel_inpainting,
             ocr_requested: page_stages.contains(&Stage::Ocr),
             total,
         }
@@ -107,8 +123,41 @@ impl Scheduler {
         self.total
     }
 
+    pub(crate) fn enable_hybrid_ocr(&mut self) {
+        for page in &mut self.pages {
+            if let Some(index) = page.stages.iter().position(|work| work.stage == Stage::Ocr) {
+                page.stages.insert(
+                    index,
+                    StageWork {
+                        stage: Stage::Ocr,
+                        ocr_pass: OcrPass::Local,
+                        state: WorkState::Pending,
+                    },
+                );
+                self.total += 1;
+            }
+        }
+    }
+
+    pub(crate) fn ocr_pass(&self, target: StageTarget) -> OcrPass {
+        target
+            .page()
+            .and_then(|page| self.page_index.get(&page))
+            .and_then(|index| {
+                self.pages[*index]
+                    .stages
+                    .iter()
+                    .find(|work| work.stage == Stage::Ocr && work.state == WorkState::Running)
+            })
+            .map_or(OcrPass::Final, |work| work.ocr_pass)
+    }
+
     pub(crate) const fn project_scope(&self) -> bool {
         self.project_scope
+    }
+
+    pub(crate) const fn parallel_inpainting(&self) -> bool {
+        self.parallel_inpainting
     }
 
     pub(crate) fn start_next(
@@ -131,7 +180,8 @@ impl Scheduler {
                     .enumerate()
                     .find_map(|(index, work)| {
                         (work.state == WorkState::Pending
-                            && !busy_stages.contains(&work.stage)
+                            && (self.parallel_inpainting && work.stage == Stage::Inpainting
+                                || !busy_stages.contains(&work.stage))
                             && self.pages[page_index].ready(index))
                         .then_some(index)
                     });
@@ -187,8 +237,9 @@ impl Scheduler {
                     .enumerate()
                     .find_map(|(index, work)| {
                         (work.state == WorkState::Pending
-                            && !busy_stages.contains(&work.stage)
-                            && self.page_stage_ready(work.stage))
+                            && (self.parallel_inpainting && work.stage == Stage::Inpainting
+                                || !busy_stages.contains(&work.stage))
+                            && self.page_stage_ready(work))
                         .then_some(index)
                     });
             let Some(stage_index) = stage_index else {
@@ -211,7 +262,8 @@ impl Scheduler {
         })
     }
 
-    fn page_stage_ready(&self, stage: Stage) -> bool {
+    fn page_stage_ready(&self, current: &StageWork) -> bool {
+        let stage = current.stage;
         if stage == Stage::Inpainting
             && self
                 .chapter
@@ -223,7 +275,7 @@ impl Scheduler {
         self.pages.iter().all(|page| {
             page.stages
                 .iter()
-                .filter(|work| work.stage < stage)
+                .filter(|work| (work.stage, work.ocr_pass) < (stage, current.ocr_pass))
                 .all(|work| work.state == WorkState::Finished)
         })
     }
@@ -242,7 +294,11 @@ impl Scheduler {
         };
         let page = &mut self.pages[page_index];
         let was_finished = page.finished();
-        if let Some(work) = page.stages.iter_mut().find(|work| work.stage == stage) {
+        if let Some(work) = page
+            .stages
+            .iter_mut()
+            .find(|work| work.stage == stage && work.state == WorkState::Running)
+        {
             work.state = WorkState::Finished;
         }
         let page_finished = !was_finished && page.finished();
@@ -273,9 +329,58 @@ mod tests {
     }
 
     #[test]
+    fn hybrid_chapter_finishes_all_local_ocr_before_any_api_call() {
+        let pages = pages(3);
+        let mut scheduler = Scheduler::new(&pages, &[Stage::Ocr, Stage::Translation], true, false);
+        scheduler.enable_hybrid_ocr();
+        let busy = BTreeSet::new();
+        assert_eq!(scheduler.total(), 7);
+        for pass in [OcrPass::Local, OcrPass::Final] {
+            for page in &pages {
+                let work = scheduler.start_next(&busy).unwrap();
+                assert_eq!(work, (StageTarget::Page(*page), Stage::Ocr));
+                assert_eq!(scheduler.ocr_pass(work.0), pass);
+                assert!(
+                    scheduler
+                        .start_next(&BTreeSet::from([Stage::Ocr]))
+                        .is_none()
+                );
+                scheduler.complete_stage(work.0, work.1);
+            }
+        }
+        assert_eq!(
+            scheduler.start_next(&busy),
+            Some((StageTarget::Chapter, Stage::Translation))
+        );
+    }
+
+    #[test]
+    fn hybrid_page_translation_waits_for_the_api_pass() {
+        let pages = pages(1);
+        let mut scheduler = Scheduler::new(&pages, &[Stage::Ocr, Stage::Translation], false, false);
+        scheduler.enable_hybrid_ocr();
+        let busy = BTreeSet::new();
+        let local = scheduler.start_next(&busy).unwrap();
+        scheduler.complete_stage(local.0, local.1);
+        let api = scheduler.start_next(&busy).unwrap();
+        assert_eq!(api.1, Stage::Ocr);
+        assert_eq!(scheduler.ocr_pass(api.0), OcrPass::Final);
+        assert!(
+            scheduler
+                .start_next(&BTreeSet::from([Stage::Ocr]))
+                .is_none()
+        );
+        scheduler.complete_stage(api.0, api.1);
+        assert_eq!(
+            scheduler.start_next(&busy),
+            Some((StageTarget::Page(pages[0]), Stage::Translation))
+        );
+    }
+
+    #[test]
     fn starts_pages_in_order_and_models_independently() {
         let pages = pages(2);
-        let mut scheduler = Scheduler::new(&pages, &Stage::ALL, false);
+        let mut scheduler = Scheduler::new(&pages, &Stage::ALL, false, false);
         let mut busy = BTreeSet::new();
 
         let first = scheduler.start_next(&busy).unwrap();
@@ -307,10 +412,39 @@ mod tests {
     }
 
     #[test]
-    fn sliding_window_backpressures_fast_upstream_models() {
+    fn api_cleaning_pages_can_start_in_parallel_for_both_scopes() {
+        for project_scope in [false, true] {
+            let pages = pages(2);
+            let mut scheduler = Scheduler::new(&pages, &[Stage::Inpainting], project_scope, true);
+            let mut busy = BTreeSet::new();
+
+            assert_eq!(
+                scheduler.start_next(&busy),
+                Some((StageTarget::Page(pages[0]), Stage::Inpainting))
+            );
+            busy.insert(Stage::Inpainting);
+            assert_eq!(
+                scheduler.start_next(&busy),
+                Some((StageTarget::Page(pages[1]), Stage::Inpainting))
+            );
+        }
+
+        let pages = pages(2);
+        let mut local = Scheduler::new(&pages, &[Stage::Inpainting], false, false);
+        let mut busy = BTreeSet::new();
+        assert_eq!(
+            local.start_next(&busy),
+            Some((StageTarget::Page(pages[0]), Stage::Inpainting))
+        );
+        busy.insert(Stage::Inpainting);
+        assert!(local.start_next(&busy).is_none());
+    }
+
+    #[test]
+    fn parallel_cleaning_keeps_other_models_backpressured() {
         let pages = pages(4);
         let stages = [Stage::Detection, Stage::Ocr, Stage::Inpainting];
-        let mut scheduler = Scheduler::new(&pages, &stages, false);
+        let mut scheduler = Scheduler::new(&pages, &stages, false, true);
         let mut busy = BTreeSet::new();
 
         assert_eq!(
@@ -323,18 +457,22 @@ mod tests {
         let inpainting = scheduler.start_next(&busy).unwrap();
         busy.insert(inpainting.1);
 
-        for page in &pages[1..3] {
+        for page in &pages[1..] {
             assert_eq!(
                 scheduler.start_next(&busy),
                 Some((StageTarget::Page(*page), Stage::Detection))
             );
             assert!(!scheduler.complete_stage(StageTarget::Page(*page), Stage::Detection));
+            assert_eq!(
+                scheduler.start_next(&busy),
+                Some((StageTarget::Page(*page), Stage::Inpainting))
+            );
         }
         assert!(scheduler.start_next(&busy).is_none());
 
         assert!(!scheduler.complete_stage(StageTarget::Page(pages[0]), Stage::Ocr));
         assert!(scheduler.complete_stage(StageTarget::Page(pages[0]), Stage::Inpainting));
-        busy.clear();
+        busy.remove(&Stage::Ocr);
         assert_eq!(
             scheduler.start_next(&busy),
             Some((StageTarget::Page(pages[1]), Stage::Ocr))
@@ -345,7 +483,7 @@ mod tests {
     fn schedules_one_chapter_translation_after_every_page_ocr() {
         let pages = pages(2);
         let stages = [Stage::Detection, Stage::Ocr, Stage::Translation];
-        let mut scheduler = Scheduler::new(&pages, &stages, true);
+        let mut scheduler = Scheduler::new(&pages, &stages, true, false);
         let busy = BTreeSet::new();
 
         assert_eq!(scheduler.total(), 5);
@@ -376,7 +514,7 @@ mod tests {
     }
 
     #[test]
-    fn chapter_translation_precedes_sequential_project_inpainting() {
+    fn chapter_translation_precedes_parallel_project_inpainting() {
         let pages = pages(2);
         let stages = [
             Stage::Detection,
@@ -384,7 +522,7 @@ mod tests {
             Stage::Translation,
             Stage::Inpainting,
         ];
-        let mut scheduler = Scheduler::new(&pages, &stages, true);
+        let mut scheduler = Scheduler::new(&pages, &stages, true, true);
         let busy = BTreeSet::new();
 
         for page in &pages {
@@ -411,7 +549,6 @@ mod tests {
             scheduler.start_next(&busy),
             Some((StageTarget::Page(pages[0]), Stage::Inpainting))
         );
-        scheduler.complete_stage(StageTarget::Page(pages[0]), Stage::Inpainting);
         assert_eq!(
             scheduler.start_next(&busy),
             Some((StageTarget::Page(pages[1]), Stage::Inpainting))

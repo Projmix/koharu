@@ -8,6 +8,7 @@ import { usePages, useProject } from '@/lib/queries'
 import { useKoharuStore } from '@/lib/store'
 import {
   commands,
+  type ImageEditPreview,
   type Model,
   type Preferences,
   type ProjectInfo,
@@ -56,6 +57,7 @@ const preferences: Preferences = {
     },
     inpainting: {
       method: 'local',
+      preview_before_send: false,
       local_model: { model: 'lama' },
       manual_model: { model: 'lama' },
       api: {
@@ -64,11 +66,18 @@ const preferences: Preferences = {
         prompt: 'Remove all text and reconstruct the original manga artwork.',
         apply_mode: 'full-page',
       },
+      restoration: {
+        provider: 'fal',
+        model: 'microsoft/mai-image-2.5/edit',
+        prompt:
+          'Restore and reconstruct the selected image area. Preserve the existing art style, linework, colors, lighting, anatomy, perspective, and panel geometry. Do not add text, logos, watermarks, or new objects.',
+      },
     },
     processor: {},
   },
   providers: {
     fal: { configured: false, value: null, clear: false },
+    replicate: { configured: false, value: null, clear: false },
     entries: [],
   },
   typesetting: {
@@ -93,6 +102,7 @@ beforeEach(() => {
 const startupState = (): StartupState => ({
   preferences,
   jobs: [],
+  image_edit_previews: [],
   canvas: {
     page: null,
     revision: null,
@@ -101,6 +111,20 @@ const startupState = (): StartupState => ({
     element_frames: [],
   },
 })
+
+const imageEditPreview: ImageEditPreview = {
+  id: 'preview',
+  job: 'job',
+  page: 'page',
+  page_label: 'Page 1',
+  provider: 'fal',
+  model: 'image-edit-model',
+  prompt: 'Restore the artwork.',
+  image_url: 'data:image/png;base64,cHJldmlldw==',
+  width: 512,
+  height: 768,
+  restoration: false,
+}
 
 async function start() {
   const pending = deferred<StartupState>()
@@ -130,6 +154,40 @@ function PagesProbe() {
 }
 
 describe('Tauri runtime', () => {
+  it('hydrates pending image-edit previews and follows the native queue until unmounted', async () => {
+    const preview = imageEditPreview
+    const binding = vi.spyOn(commands, 'subscribe').mockResolvedValue({
+      ...startupState(),
+      image_edit_previews: [preview],
+    })
+    const view = render(createElement(Providers, null, createElement('div')))
+    await waitFor(() => expect(useKoharuStore.getState().imageEditPreviews).toEqual([preview]))
+
+    const [, , , , , channel] = binding.mock.calls[0]
+    const next = { ...preview, id: 'next-preview', prompt: 'Restore this area.', restoration: true }
+    act(() => channel.onmessage([next]))
+    expect(useKoharuStore.getState().imageEditPreviews).toEqual([next])
+    act(() => channel.onmessage([]))
+    expect(useKoharuStore.getState().imageEditPreviews).toEqual([])
+    view.unmount()
+    channel.onmessage([preview])
+    expect(useKoharuStore.getState().imageEditPreviews).toEqual([])
+  })
+
+  it('keeps a newer preview channel update when the startup snapshot arrives later', async () => {
+    const pending = deferred<StartupState>()
+    const binding = vi.spyOn(commands, 'subscribe').mockReturnValue(pending.promise)
+    const view = render(createElement(Providers, null, createElement('div')))
+    await waitFor(() => expect(binding).toHaveBeenCalledTimes(1))
+    const [, , , , , channel] = binding.mock.calls[0]
+
+    act(() => channel.onmessage([]))
+    pending.resolve({ ...startupState(), image_edit_previews: [imageEditPreview] })
+    await waitFor(() => expect(useKoharuStore.getState().initialized).toBe(true))
+    expect(useKoharuStore.getState().imageEditPreviews).toEqual([])
+    view.unmount()
+  })
+
   it('persists mandatory reasoning for a reloaded model profile', async () => {
     const model: Model = {
       provider: 'openrouter',

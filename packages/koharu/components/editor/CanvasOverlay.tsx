@@ -17,6 +17,7 @@ import {
   selectableLayer,
   type Camera,
 } from '@/lib/geometry'
+import { useKoharuStore } from '@/lib/store'
 import type {
   AnalysisRegion,
   EntityId,
@@ -61,6 +62,7 @@ export function CanvasOverlay({
   onTransformEnd,
 }: CanvasOverlayProps) {
   const root = useRef<HTMLDivElement>(null)
+  const textTransformTarget = useKoharuStore((state) => state.textTransformTarget)
   const expandedSelection = useMemo(
     () => expandLayerSelection(page.layers, selected),
     [page.layers, selected],
@@ -94,7 +96,7 @@ export function CanvasOverlay({
     : undefined
   const selectionControl = multipleSelected
     ? undefined
-    : sourceRegion && sourceRegionFrame
+    : textTransformTarget === 'region' && sourceRegion && sourceRegionFrame
       ? { element: sourceRegion.id, frame: sourceRegionFrame }
       : layers
           .filter(({ layer }) => selectedIds.has(layer.id) && selectableLayer(layer))
@@ -165,7 +167,7 @@ export function CanvasOverlay({
           element={selectionControl.element}
           frame={selectionControl.frame}
           camera={camera}
-          edgesOnly={Boolean(selectedTextLayer && !sourceRegion)}
+          edgesOnly={false}
           onTransformStart={onTransformStart}
           onTransformFrame={onTransformFrame}
           onTransformEnd={onTransformEnd}
@@ -297,6 +299,7 @@ function DraftOverlay({ frame, camera }: { frame: Frame; camera: Camera }) {
   const position = cssFrame(frame, camera)
   return (
     <div
+      data-testid='rectangle-preview'
       className='absolute border border-dashed border-primary bg-primary/5'
       style={{
         left: position.left,

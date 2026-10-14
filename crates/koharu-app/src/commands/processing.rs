@@ -5,7 +5,6 @@ use koharu_pipeline::{Committer, Progress, RunStatus, StageOutput, StopToken};
 use koharu_scene::{EntityId, ProjectId, Snapshot};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use specta::Type;
 use tauri::{AppHandle, Manager as _, State, ipc::Channel};
 use tauri_runtime_cef::CefRuntime;
@@ -14,6 +13,7 @@ use uuid::Uuid;
 use super::{
     ChannelExt as _, Error,
     canvas::CanvasChannel,
+    image_edit_preview::DesktopImageEditReviewer,
     project::{CurrentProject, PageWarning},
 };
 use koharu_desktop::Desktop;
@@ -68,7 +68,6 @@ pub enum JobState {
 pub(crate) struct Processing {
     pub(crate) stops: Mutex<HashMap<JobId, StopToken>>,
     pub(crate) jobs: Mutex<HashMap<JobId, Job>>,
-    pub(crate) inpainting_mask: Mutex<Option<koharu_pipeline::InpaintingMask>>,
     pub(crate) warnings: Mutex<HashMap<(ProjectId, EntityId), PageWarning>>,
     resume: Mutex<Option<ProcessingRequest>>,
 }
@@ -166,6 +165,31 @@ fn requests_inpainting(operation: &koharu_pipeline::Operation) -> bool {
     }
 }
 
+fn accepts_queued_manual_request(
+    scope: &koharu_pipeline::Scope,
+    operation: &koharu_pipeline::Operation,
+    inpainting_mask: Option<&koharu_pipeline::InpaintingMask>,
+) -> bool {
+    let masked_inpainting = matches!(
+        (scope, operation, inpainting_mask),
+        (
+            koharu_pipeline::Scope::Region { page, .. },
+            koharu_pipeline::Operation::Only {
+                stage: koharu_pipeline::Stage::Inpainting,
+            },
+            Some(mask),
+        ) if *page == mask.page
+    );
+    let entity_ocr = matches!(
+        (scope, operation),
+        (
+            koharu_pipeline::Scope::Entities(entities),
+            koharu_pipeline::Operation::Stages { stages },
+        ) if !entities.is_empty() && stages.as_slice() == [koharu_pipeline::Stage::Ocr]
+    );
+    masked_inpainting || entity_ocr
+}
+
 #[derive(Default)]
 pub(crate) struct JobChannel {
     pub(crate) channel: Mutex<Option<Channel<Job>>>,
@@ -182,6 +206,28 @@ pub(crate) async fn process(
     processing: State<'_, Processing>,
     job_channel: State<'_, JobChannel>,
 ) -> std::result::Result<JobId, Error> {
+    process_with_mask(
+        handle,
+        scope,
+        operation,
+        project,
+        processing,
+        job_channel,
+        None,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn process_with_mask(
+    handle: AppHandle<CefRuntime>,
+    scope: koharu_pipeline::Scope,
+    operation: koharu_pipeline::Operation,
+    project: State<'_, CurrentProject>,
+    processing: State<'_, Processing>,
+    job_channel: State<'_, JobChannel>,
+    inpainting_mask: Option<koharu_pipeline::InpaintingMask>,
+) -> std::result::Result<JobId, Error> {
     let snapshot = project
         .project
         .lock()
@@ -190,10 +236,13 @@ pub(crate) async fn process(
         .context("no project is open")?
         .snapshot();
     let id = JobId::new();
+    let image_edit_reviewer = DesktopImageEditReviewer::for_job(handle.clone(), id)?;
     let stop = StopToken::default();
     {
         let mut stops = processing.stops.lock();
-        if !stops.is_empty() {
+        if !stops.is_empty()
+            && !accepts_queued_manual_request(&scope, &operation, inpainting_mask.as_ref())
+        {
             return Err(anyhow::anyhow!("another process is already running").into());
         }
         stops.insert(id, stop.clone());
@@ -211,7 +260,6 @@ pub(crate) async fn process(
     processing.jobs.lock().insert(id, job.clone());
     job_channel.channel.publish(job);
 
-    let inpainting_mask = processing.inpainting_mask.lock().take();
     let request = processing.select_request(ProcessingRequest {
         project: snapshot.project_id(),
         scope,
@@ -237,6 +285,7 @@ pub(crate) async fn process(
             stop: stop.clone(),
             progress: None,
             inpainting_mask: request.inpainting_mask,
+            image_edit_reviewer,
         };
         request.progress = Some(Arc::new(move |event| {
             enum JobUpdate {
@@ -501,157 +550,77 @@ pub(crate) async fn process(
     Ok(id)
 }
 
-#[derive(Serialize)]
-struct ChapterTranslationExport {
-    format: &'static str,
-    version: u32,
-    project_id: String,
-    revision: String,
-    provider: String,
-    model: String,
-    endpoint: &'static str,
-    request: Value,
-    system_prompt: Value,
-    chapter_payload: Value,
-}
-
-/// Save the exact, credential-free OpenRouter request used for a chapter.
-#[tauri::command]
-#[specta::specta]
-pub(crate) async fn export_chapter_translation(
-    window: tauri::WebviewWindow<CefRuntime>,
-    project: State<'_, CurrentProject>,
-    processing: State<'_, Processing>,
-) -> std::result::Result<(), Error> {
-    if !processing.stops.lock().is_empty() {
-        return Err(anyhow::anyhow!(
-            "chapter translation export is unavailable while processing is running"
-        )
-        .into());
-    }
-    let Some(file) = rfd::AsyncFileDialog::new()
-        .add_filter("JSON", &["json"])
-        .set_file_name("koharu-chapter-translation-request.json")
-        .set_parent(&window)
-        .save_file()
-        .await
-    else {
-        return Ok(());
-    };
-    let snapshot = {
-        let project = project.project.lock().await;
-        project.as_ref().context("no project is open")?.snapshot()
-    };
-    let config = koharu_pipeline::PipelineConfig::load()?.read()?.clone();
-    let chapter =
-        koharu_pipeline::ChapterTranslation::from_snapshot(snapshot.clone(), &config.translation)?;
-    let request = chapter.openrouter_request()?;
-    let messages = request
-        .get("messages")
-        .and_then(Value::as_array)
-        .context("OpenRouter request did not contain messages")?;
-    let system_prompt = messages
-        .first()
-        .and_then(|message| message.get("content"))
-        .cloned()
-        .context("OpenRouter request did not contain a system prompt")?;
-    let chapter_payload = messages
-        .get(1)
-        .and_then(|message| message.get("content"))
-        .cloned()
-        .context("OpenRouter request did not contain a chapter payload")?;
-    let model = chapter
-        .model()
-        .model
-        .clone()
-        .context("OpenRouter requires a selected translation model")?;
-    let export = ChapterTranslationExport {
-        format: "koharu.chapter-translation-request",
-        version: 1,
-        project_id: snapshot.project_id().to_string(),
-        revision: snapshot.revision().to_string(),
-        provider: chapter.model().provider.to_string(),
-        model,
-        endpoint: "https://openrouter.ai/api/v1/chat/completions",
-        request,
-        system_prompt,
-        chapter_payload,
-    };
-    let bytes = serde_json::to_vec_pretty(&export)?;
-    tokio::fs::write(file.path(), bytes).await?;
-    tracing::info!(target: "koharu_metrics", metric = "chapter_translation_exported");
-    Ok(())
-}
-
-/// Import a manually completed chapter translation and commit it atomically.
-#[tauri::command]
-#[specta::specta]
-pub(crate) async fn import_chapter_translation(
-    window: tauri::WebviewWindow<CefRuntime>,
-    handle: AppHandle<CefRuntime>,
-    project: State<'_, CurrentProject>,
-    processing: State<'_, Processing>,
-) -> std::result::Result<(), Error> {
-    if !processing.stops.lock().is_empty() {
-        return Err(anyhow::anyhow!(
-            "chapter translation import is unavailable while processing is running"
-        )
-        .into());
-    }
-    let Some(file) = rfd::AsyncFileDialog::new()
-        .add_filter("JSON", &["json"])
-        .set_parent(&window)
-        .pick_file()
-        .await
-    else {
-        return Ok(());
-    };
-    let bytes = tokio::fs::read(file.path()).await?;
-    let value: Value =
-        serde_json::from_slice(&bytes).context("chapter translation file is not valid JSON")?;
-    let response = if value.get("translations").is_some() {
-        value
-    } else if value.get("choices").is_some() {
-        value
-    } else if let Some(response) = value.get("response") {
-        response.clone()
-    } else {
-        return Err(anyhow::anyhow!(
-            "chapter translation JSON must contain translations or an OpenRouter choices response"
-        )
-        .into());
-    };
-    let snapshot = {
-        let project = project.project.lock().await;
-        project.as_ref().context("no project is open")?.snapshot()
-    };
-    let config = koharu_pipeline::PipelineConfig::load()?.read()?.clone();
-    let chapter =
-        koharu_pipeline::ChapterTranslation::from_snapshot(snapshot, &config.translation)?;
-    let patch = chapter.patch_from_response(&serde_json::to_string(&response)?)?;
-    let (commit, page) = {
-        let mut projects = project.project.lock().await;
-        let project = projects.as_mut().context("no project is open")?;
-        let commit = project
-            .commit_rebased(patch)
-            .await?
-            .context("the project changed while importing; export a fresh chapter request")?;
-        project.record_commit(&commit);
-        (commit, project.active_page())
-    };
-    let desktop = handle.state::<Desktop>();
-    desktop.synchronize(&commit.snapshot, page, &commit).await?;
-    handle
-        .state::<CanvasChannel>()
-        .channel
-        .publish(desktop.canvas_state());
-    tracing::info!(target: "koharu_metrics", metric = "chapter_translation_imported");
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn admission_policy_queues_manual_requests_but_rejects_another_processing_run() {
+        let page = koharu_scene::EntityId::new();
+        let entity = koharu_scene::EntityId::new();
+        let mask = koharu_pipeline::InpaintingMask {
+            page,
+            png: Arc::from(Vec::<u8>::new()),
+            intent: koharu_pipeline::InpaintingIntent::Remove,
+        };
+
+        assert!(accepts_queued_manual_request(
+            &koharu_pipeline::Scope::Region {
+                page,
+                bounds: koharu_pipeline::Bounds {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 1.0,
+                    height: 1.0,
+                },
+            },
+            &koharu_pipeline::Operation::Only {
+                stage: koharu_pipeline::Stage::Inpainting,
+            },
+            Some(&mask),
+        ));
+        assert!(accepts_queued_manual_request(
+            &koharu_pipeline::Scope::Entities(vec![entity]),
+            &koharu_pipeline::Operation::Stages {
+                stages: vec![koharu_pipeline::Stage::Ocr],
+            },
+            None,
+        ));
+        assert!(!accepts_queued_manual_request(
+            &koharu_pipeline::Scope::Project,
+            &koharu_pipeline::Operation::Full,
+            None,
+        ));
+        assert!(!accepts_queued_manual_request(
+            &koharu_pipeline::Scope::Pages(vec![page]),
+            &koharu_pipeline::Operation::Stages {
+                stages: vec![koharu_pipeline::Stage::Ocr],
+            },
+            None,
+        ));
+    }
+
+    #[test]
+    fn stop_tokens_remain_independent_by_job_id() {
+        let processing = Processing::default();
+        let first_job = JobId::new();
+        let second_job = JobId::new();
+        let first_stop = StopToken::default();
+        let second_stop = StopToken::default();
+        processing
+            .stops
+            .lock()
+            .insert(first_job, first_stop.clone());
+        processing
+            .stops
+            .lock()
+            .insert(second_job, second_stop.clone());
+
+        processing.stops.lock().get(&first_job).unwrap().stop();
+
+        assert!(first_stop.stopped());
+        assert!(!second_stop.stopped());
+    }
 
     #[tokio::test]
     async fn retry_uses_the_original_scope_and_stages_when_selection_matches() {

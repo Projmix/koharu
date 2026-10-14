@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use smallvec::SmallVec;
 
@@ -89,6 +89,197 @@ impl Edit {
             components: stored,
         });
         Ok(id)
+    }
+
+    /// Duplicates complete pages while retaining blob references and remapping
+    /// every relation whose endpoints both belong to the copied page.
+    pub fn duplicate_pages(&mut self, pages: &[EntityId]) -> Result<Vec<EntityId>> {
+        if pages.is_empty() {
+            return Err(Error::invalid("at least one page is required"));
+        }
+        let requested = pages.iter().copied().collect::<HashSet<_>>();
+        if requested.len() != pages.len() {
+            return Err(Error::invalid("duplicate page ids are not allowed"));
+        }
+        let ordered = self
+            .state
+            .page_order
+            .iter()
+            .copied()
+            .filter(|page| requested.contains(page))
+            .collect::<Vec<_>>();
+        if ordered.len() != pages.len() {
+            return Err(Error::invalid("every duplicate source must be a page"));
+        }
+
+        let page_key = key::<Page>()?;
+        let record_exists = |id| self.state.contains_entity(id);
+        let blob_exists = |id| self.base.storage.blobs().contains(id);
+        let context = ValidationContext::new(&record_exists, &blob_exists);
+        let mut labels = self
+            .state
+            .page_order
+            .iter()
+            .map(|page| {
+                let value = self
+                    .state
+                    .component(*page, &page_key)?
+                    .ok_or_else(|| Error::invalid("page component is missing"))?;
+                decode::<Page>(value, &context).map(|page| page.label)
+            })
+            .collect::<Result<HashSet<_>>>()?;
+
+        struct EntityCopy {
+            id: EntityId,
+            parent: Option<EntityId>,
+            components: Components,
+        }
+        struct RelationCopy {
+            value: Relation,
+            components: Components,
+        }
+        struct PageCopy {
+            source: EntityId,
+            page: Page,
+            entities: Vec<EntityCopy>,
+            relations: Vec<RelationCopy>,
+        }
+
+        // Finish all validation and cloning before mutating the edit so a bad
+        // source cannot leave a partially built patch.
+        let copies = ordered
+            .iter()
+            .map(|source| {
+                let page_state = self.state.page(*source)?;
+                let ids = page_state.descendants(*source)?;
+                let members = ids.iter().copied().collect::<HashSet<_>>();
+                let has_external_text_dependency = self.state.relations.values().any(|relation| {
+                    let source_inside = members.contains(&relation.value.source);
+                    let target_inside = members.contains(&relation.value.target);
+                    let kind = &relation.value.kind;
+                    source_inside != target_inside
+                        && (*kind == crate::Presents::kind()
+                            || *kind == crate::RecognizedFrom::kind()
+                            || *kind == crate::FitsTo::kind())
+                });
+                if has_external_text_dependency {
+                    return Err(Error::invalid(
+                        "page has a text dependency outside its own subtree",
+                    ));
+                }
+                let entities = ids
+                    .into_iter()
+                    .map(|id| {
+                        let node = page_state.entity(id)?;
+                        Ok(EntityCopy {
+                            id,
+                            parent: node.parent.map(|parent| page_state.entities[parent].id),
+                            components: node.components.clone(),
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let relations = self
+                    .state
+                    .relations
+                    .values()
+                    .filter(|relation| {
+                        members.contains(&relation.value.source)
+                            && members.contains(&relation.value.target)
+                    })
+                    .map(|relation| RelationCopy {
+                        value: relation.value.clone(),
+                        components: relation.components.clone(),
+                    })
+                    .collect();
+                let value = self
+                    .state
+                    .component(*source, &page_key)?
+                    .ok_or_else(|| Error::invalid("page component is missing"))?;
+                Ok(PageCopy {
+                    source: *source,
+                    page: decode(value, &context)?,
+                    entities,
+                    relations,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        self.observe_page_order_write();
+        let mut duplicated = Vec::with_capacity(copies.len());
+        for copy in copies {
+            let mut suffix = 2;
+            let label = loop {
+                let candidate = format!("{} ({suffix})", copy.page.label);
+                if labels.insert(candidate.clone()) {
+                    break candidate;
+                }
+                suffix += 1;
+            };
+            let mut ids = HashMap::with_capacity(copy.entities.len());
+            for entity in &copy.entities {
+                ids.insert(entity.id, EntityId::new());
+            }
+            let page = ids[&copy.source];
+            let position = self
+                .state
+                .page_order
+                .iter()
+                .position(|candidate| *candidate == copy.source)
+                .expect("validated source page remains in the edit")
+                + 1;
+            let root = copy
+                .entities
+                .first()
+                .expect("a page subtree always contains its root");
+            self.state
+                .insert_page(page, position, root.components.clone())?;
+            self.operations.push(Operation::InsertPage {
+                id: page,
+                position: position as u32,
+                components: store_components(&root.components),
+            });
+            self.set_page(
+                page,
+                PageDraft::new(label, copy.page.width, copy.page.height),
+            )?;
+
+            for entity in copy.entities.iter().skip(1) {
+                let id = ids[&entity.id];
+                let parent = ids[&entity
+                    .parent
+                    .expect("non-root page entities always have a parent")];
+                let position = self.state.child_ids(parent)?.len();
+                self.state
+                    .insert_entity(page, id, parent, position, entity.components.clone())?;
+                self.operations.push(Operation::InsertEntity {
+                    page,
+                    id,
+                    parent,
+                    position: position as u32,
+                    components: store_components(&entity.components),
+                });
+            }
+            for relation in copy.relations {
+                let id = RelationId::new();
+                let value = Relation {
+                    source: ids[&relation.value.source],
+                    target: ids[&relation.value.target],
+                    ..relation.value
+                };
+                self.state.insert_relation(id, value.clone())?;
+                for (key, component) in &relation.components {
+                    self.state
+                        .set_relation_component(id, key.clone(), component.clone())?;
+                }
+                self.operations.push(Operation::InsertRelation {
+                    id,
+                    value,
+                    components: store_components(&relation.components),
+                });
+            }
+            duplicated.push(page);
+        }
+        Ok(duplicated)
     }
 
     pub fn add_entity(&mut self, parent: EntityId, at: At) -> Result<EntityId> {
@@ -693,7 +884,7 @@ impl Edit {
         Ok((key::<T>()?, self.encode_value(value)?))
     }
 
-    pub(crate) fn ensure_text_group(&mut self, page: EntityId) -> Result<EntityId> {
+    pub fn ensure_text_group(&mut self, page: EntityId) -> Result<EntityId> {
         self.state.page(page)?;
         let marker = key::<TextGroup>()?;
         let children = self

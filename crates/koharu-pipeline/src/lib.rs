@@ -11,6 +11,7 @@ mod progress;
 mod report;
 mod request;
 mod resources;
+mod review;
 mod scheduler;
 mod scope;
 mod stage;
@@ -20,15 +21,16 @@ mod stages;
 pub use config::{
     ApiInpaintingConfig, ApiOcrConfig, DetectionModel, InpaintingConfig, InpaintingMethod,
     InpaintingModelChoice, InpaintingProvider, LocalInpaintingModel, OcrConfig, OcrMethod,
-    OcrModel, PipelineConfig, ProcessorConfig, TranslationConfig, TranslationProfile,
-    TranslationUnitPolicy,
+    OcrModel, PipelineConfig, ProcessorConfig, RestorationConfig, TranslationConfig,
+    TranslationProfile, TranslationUnitPolicy,
 };
 pub use error::{ErrorKind, PipelineError};
 pub use pipeline::Pipeline;
 pub use progress::{Progress, ProgressSink};
 pub use report::{Committer, Report, RunStatus, StageOutput};
-pub use request::{InpaintingMask, Operation, Request, StopToken};
+pub use request::{InpaintingIntent, InpaintingMask, Operation, Request, StopToken};
 pub use resources::{DeviceResources, ResourceSnapshot};
+pub use review::{ImageEditReview, ImageEditReviewer};
 pub use scope::{Bounds, Scope};
 pub use stage::{Stage, StageTarget};
 pub use stages::{

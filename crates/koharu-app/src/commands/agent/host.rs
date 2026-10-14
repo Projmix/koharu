@@ -17,6 +17,7 @@ use crate::commands::{
     ChannelExt as _,
     canvas::{CanvasChannel, Point},
     editing::{GeometryUpdate, TypographyUpdate},
+    image_edit_preview::DesktopImageEditReviewer,
     output,
     preferences::Preferences,
     processing::{JobId, Processing},
@@ -129,6 +130,7 @@ impl KoharuHost {
             .context("no project is open")?
             .snapshot();
         let job = JobId::new();
+        let image_edit_reviewer = DesktopImageEditReviewer::for_job(self.handle.clone(), job)?;
         let stop = StopToken::default();
         {
             let processing = self.handle.state::<Processing>();
@@ -154,6 +156,7 @@ impl KoharuHost {
             stop,
             progress: None,
             inpainting_mask: None,
+            image_edit_reviewer,
         };
         let result = self
             .handle

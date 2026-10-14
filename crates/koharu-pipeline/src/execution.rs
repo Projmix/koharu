@@ -36,6 +36,7 @@ pub(crate) struct Execution<'a> {
     base: koharu_scene::Revision,
     started: Instant,
     inpainting_mask: Option<crate::InpaintingMask>,
+    image_edit_reviewer: Option<Arc<dyn crate::ImageEditReviewer>>,
 }
 
 impl<'a> Execution<'a> {
@@ -55,11 +56,15 @@ impl<'a> Execution<'a> {
         let scope = NormalizedScope::new(&snapshot, &request.scope, &stages)
             .map_err(|error| PipelineError::new(ErrorKind::InvalidInput, None, error))?;
         let pages = scope.pages().to_vec();
-        let scheduler = Scheduler::new(
+        let mut scheduler = Scheduler::new(
             &pages,
             &stages,
             matches!(request.scope, crate::Scope::Project),
+            runner.parallel_inpainting() && request.inpainting_mask.is_none(),
         );
+        if runner.hybrid_ocr() {
+            scheduler.enable_hybrid_ocr();
+        }
         if let Some(mask) = request.inpainting_mask.as_ref()
             && (!pages.contains(&mask.page) || !stages.contains(&Stage::Inpainting))
         {
@@ -94,6 +99,7 @@ impl<'a> Execution<'a> {
             base,
             started,
             inpainting_mask: request.inpainting_mask,
+            image_edit_reviewer: request.image_edit_reviewer,
         })
     }
 
@@ -160,7 +166,9 @@ impl<'a> Execution<'a> {
                 StageInput::chapter(self.scene.clone(), Arc::from(self.scope.pages()))
             }
         }
-        .with_stop(self.stop.clone());
+        .with_stop(self.stop.clone())
+        .with_image_edit_reviewer(self.image_edit_reviewer.clone())
+        .with_ocr_pass(self.scheduler.ocr_pass(target));
         Some(StageJob::new(
             stage,
             input,
@@ -184,7 +192,7 @@ impl<'a> Execution<'a> {
             Err(error)
                 if stage == Stage::Inpainting
                     && target.page().is_some()
-                    && self.scheduler.project_scope() =>
+                    && (self.scheduler.project_scope() || self.scheduler.parallel_inpainting()) =>
             {
                 self.mark_complete(target, stage);
                 progress::emit(
@@ -506,6 +514,81 @@ mod tests {
             .scheduler
             .start_next(&BTreeSet::new())
             .expect("next page should continue");
+        assert_eq!(next, (StageTarget::Page(next_page), Stage::Inpainting));
+    }
+
+    #[tokio::test]
+    async fn parallel_inpainting_failure_is_reported_as_page_warning() {
+        let mut session = koharu_scene::Session::memory().await.unwrap();
+        let mut edit = session.snapshot().edit();
+        let page = edit
+            .add_page(PageDraft::new("page", 100.0, 100.0), At::End)
+            .unwrap();
+        let next_page = edit
+            .add_page(PageDraft::new("next page", 100.0, 100.0), At::End)
+            .unwrap();
+        session.commit(edit.finish().unwrap()).await.unwrap();
+        let snapshot = session.snapshot();
+
+        let device = koharu_ml::Device::cpu();
+        let resources = ResourceMonitor::new(&device);
+        let translator = koharu_translator::Translator::from_config(
+            device.clone(),
+            koharu_config::Config::memory(koharu_translator::ProvidersConfig::default()),
+        )
+        .unwrap();
+        let mut config = crate::PipelineConfig::default();
+        config.inpainting.method = crate::InpaintingMethod::Api;
+        let runner =
+            Arc::new(StageRunner::new(&config, translator, &device, resources.clone()).unwrap());
+        let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let event_sink = events.clone();
+        let mut committer = SessionCommitter { session };
+        let mut execution = Execution::new(
+            runner,
+            resources,
+            snapshot,
+            Request {
+                operation: crate::Operation::Only {
+                    stage: Stage::Inpainting,
+                },
+                scope: crate::Scope::Pages(vec![page, next_page]),
+                progress: Some(Arc::new(move |event| {
+                    event_sink.lock().unwrap().push(event);
+                })),
+                ..Request::default()
+            },
+            &mut committer,
+        )
+        .unwrap();
+
+        execution
+            .handle_completion(StageCompletion {
+                target: StageTarget::Page(page),
+                stage: Stage::Inpainting,
+                model: "api-model".to_owned(),
+                elapsed: std::time::Duration::ZERO,
+                outcome: Err(PipelineError::new(
+                    ErrorKind::Processing,
+                    Some(Stage::Inpainting),
+                    anyhow::anyhow!("422 Unprocessable Entity"),
+                )),
+            })
+            .await;
+
+        assert!(execution.failure.is_none());
+        assert_eq!(execution.completed, 1);
+        assert!(
+            events
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|event| matches!(event, Progress::Warning { .. }))
+        );
+        let next = execution
+            .scheduler
+            .start_next(&BTreeSet::new())
+            .expect("next selected page should continue");
         assert_eq!(next, (StageTarget::Page(next_page), Stage::Inpainting));
     }
 }

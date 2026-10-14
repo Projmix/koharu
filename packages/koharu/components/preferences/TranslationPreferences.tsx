@@ -54,6 +54,11 @@ export function TranslationPreferences({
   onChange: (value: TranslationSettings) => void
 }) {
   const { t } = useTranslation()
+  modelChoices = modelChoices.filter((model) =>
+    providers.some(
+      (entry) => entry.config.provider === model.provider && entry.supports_translation,
+    ),
+  )
   const [profileName, setProfileName] = useState<ProfileName>('page')
   const [modelOpen, setModelOpen] = useState(false)
   const profile = value[profileName]

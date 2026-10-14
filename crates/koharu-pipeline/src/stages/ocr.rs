@@ -1,6 +1,7 @@
 use std::sync::{Arc, Mutex};
 
 use super::{StageInput, StageProcessor, finish, generation};
+use crate::stage::OcrPass;
 use crate::{ModelCell, OcrConfig, OcrMethod, OcrModel, scope::geometry_extents};
 use anyhow::{Context as _, Result, anyhow, bail};
 use async_trait::async_trait;
@@ -47,40 +48,35 @@ impl Processor {
 
 #[async_trait]
 impl StageProcessor for Processor {
-    fn model(&self, _input: &StageInput) -> String {
-        match self.config.method {
-            OcrMethod::Local => local_model_name(&self.config.local_model).to_owned(),
-            OcrMethod::Api => {
-                let provider = Translator::model(&self.config.api.model);
-                match self.config.api.model.model.as_deref() {
-                    Some(model) => format!("{provider}: {model}"),
-                    None => provider.to_owned(),
-                }
-            }
+    fn model(&self, input: &StageInput) -> String {
+        if self.uses_local(input) {
+            return local_model_name(&self.config.local_model).to_owned();
         }
+        self.api_model_name()
     }
 
-    fn recovers_from_memory_pressure(&self, _input: &StageInput) -> bool {
-        self.config.method == OcrMethod::Local
+    fn recovers_from_memory_pressure(&self, input: &StageInput) -> bool {
+        self.uses_local(input)
     }
 
     fn unload(&self) -> bool {
         self.model.unload()
     }
 
-    async fn load(&self, _input: &StageInput) -> Result<()> {
-        match self.config.method {
-            OcrMethod::Local => {
-                self.model
-                    .ensure(|| Model::load(self.device.clone(), &self.config.local_model))
-                    .await
-            }
-            OcrMethod::Api => Ok(()),
+    async fn load(&self, input: &StageInput) -> Result<()> {
+        if self.uses_local(input) {
+            self.model
+                .ensure(|| Model::load(self.device.clone(), &self.config.local_model))
+                .await
+        } else {
+            self.model.unload();
+            Ok(())
         }
     }
 
     fn skip(&self, input: &StageInput) -> Result<bool> {
         let page = input.page()?;
+        let completed_models = self.completed_models(input);
         let mut has_target = false;
         for entity in input.scene.descendants(page)? {
             let region = entity.id();
@@ -95,15 +91,8 @@ impl StageProcessor for Processor {
             for relation in input.scene.relations_to_as::<RecognizedFrom>(region) {
                 has_target = true;
                 let content = relation.value().source;
-                let Some(source) = input.scene.component::<SourceText>(content)? else {
-                    return Ok(false);
-                };
-                if matches!(source.text.origin, Origin::User) {
-                    continue;
-                }
-                if source.text.value.trim().is_empty()
-                    || !matches!(source.text.origin, Origin::Generated(_))
-                {
+                let source = input.scene.component::<SourceText>(content)?;
+                if !source_is_complete(source.as_ref(), completed_models.as_deref()) {
                     return Ok(false);
                 }
             }
@@ -112,19 +101,81 @@ impl StageProcessor for Processor {
     }
 
     async fn process(&self, input: StageInput) -> Result<koharu_scene::Patch> {
-        match self.config.method {
-            OcrMethod::Local => {
-                self.model
-                    .lock()
-                    .await
-                    .as_ref()
-                    .ok_or_else(|| anyhow!("OCR model is not loaded"))?
-                    .run(input, self.source_language)
-                    .await
+        let model_name = self.model(&input);
+        let completed_models = self.completed_models(&input);
+        let (page, targets) =
+            targets(&input, completed_models.as_deref().unwrap_or_default()).await?;
+        if self.uses_local(&input) {
+            let results = self
+                .model
+                .lock()
+                .await
+                .as_ref()
+                .ok_or_else(|| anyhow!("OCR model is not loaded"))?
+                .recognize(targets, input.stop.clone())
+                .await?;
+            if input.stop.stopped() {
+                return finish(input.scene.edit());
             }
-            OcrMethod::Api => {
-                run_api(&self.translator, &self.config, self.source_language, input).await
-            }
+            apply_results(input, page, &model_name, self.source_language, results)
+        } else {
+            run_api(
+                &self.translator,
+                &self.config,
+                self.source_language,
+                input,
+                &model_name,
+                targets,
+            )
+            .await
+        }
+    }
+}
+
+impl Processor {
+    fn completed_models(&self, input: &StageInput) -> Option<Vec<String>> {
+        if self.config.method != OcrMethod::LocalApi {
+            return None;
+        }
+        let mut models = vec![self.api_model_name()];
+        if input.ocr_pass == OcrPass::Local {
+            models.push(local_model_name(&self.config.local_model).to_owned());
+        }
+        Some(models)
+    }
+
+    fn api_model_name(&self) -> String {
+        let provider = Translator::model(&self.config.api.model);
+        let api = match self.config.api.model.model.as_deref() {
+            Some(model) => format!("{provider}: {model}"),
+            None => provider.to_owned(),
+        };
+        if self.config.method == OcrMethod::LocalApi {
+            format!("{} → {api}", local_model_name(&self.config.local_model))
+        } else {
+            api
+        }
+    }
+
+    fn uses_local(&self, input: &StageInput) -> bool {
+        self.config.method == OcrMethod::Local
+            || self.config.method == OcrMethod::LocalApi && input.ocr_pass == OcrPass::Local
+    }
+}
+
+fn source_is_complete(source: Option<&SourceText>, completed_models: Option<&[String]>) -> bool {
+    let Some(source) = source else {
+        return false;
+    };
+    match &source.text.origin {
+        Origin::User => true,
+        Origin::Generated(previous) => {
+            !source.text.value.trim().is_empty()
+                && completed_models.is_none_or(|models| {
+                    models
+                        .iter()
+                        .any(|model| previous.model.as_ref() == Some(model))
+                })
         }
     }
 }
@@ -163,47 +214,37 @@ impl Model {
         }
     }
 
-    async fn run(
+    async fn recognize(
         &self,
-        input: StageInput,
-        source_language: Language,
-    ) -> Result<koharu_scene::Patch> {
-        let model_name = match self {
-            Self::Manga(_) => "manga-ocr",
-            Self::Baberu(_) => "baberu-ocr",
-            Self::Hayai(_) => "hayai-ocr",
-            Self::Paddle(_) => "paddleocr-vl-1.6",
-        };
-        let (page, targets) = targets(&input).await?;
-
-        let results = match self {
+        targets: Vec<OcrTarget>,
+        stop: crate::StopToken,
+    ) -> Result<Vec<OcrResult>> {
+        match self {
             Self::Manga(model) => {
-                infer_text(model.clone(), targets, |model, image| {
+                infer_text(model.clone(), targets, stop, |model, image| {
                     model.inference(image)
                 })
-                .await?
+                .await
             }
             Self::Baberu(model) => {
-                infer_text(model.clone(), targets, |model, image| {
+                infer_text(model.clone(), targets, stop, |model, image| {
                     model.inference(image)
                 })
-                .await?
+                .await
             }
             Self::Hayai(model) => {
-                infer_text(model.clone(), targets, |model, image| {
+                infer_text(model.clone(), targets, stop, |model, image| {
                     model.inference(image)
                 })
-                .await?
+                .await
             }
             Self::Paddle(model) => {
-                infer_text(model.clone(), targets, |model, image| {
+                infer_text(model.clone(), targets, stop, |model, image| {
                     Ok(model.inference(image, PaddleOCRVLTask::Ocr)?.text)
                 })
-                .await?
+                .await
             }
-        };
-
-        apply_results(input, page, model_name, source_language, results)
+        }
     }
 }
 
@@ -212,17 +253,24 @@ async fn run_api(
     config: &OcrConfig,
     source_language: Language,
     input: StageInput,
+    model_name: &str,
+    targets: Vec<OcrTarget>,
 ) -> Result<koharu_scene::Patch> {
-    let (page, targets) = targets(&input).await?;
-    let model_name = config
-        .api
-        .model
-        .model
-        .as_deref()
-        .unwrap_or_else(|| Translator::model(&config.api.model))
-        .to_owned();
+    let page = input.page()?;
     let mut results = Vec::with_capacity(targets.len());
     for target in targets {
+        let draft = if config.method == OcrMethod::LocalApi {
+            Some(
+                input
+                    .scene
+                    .component::<SourceText>(target.content)?
+                    .ok_or_else(|| anyhow!("local OCR must finish before API OCR"))?
+                    .text
+                    .value,
+            )
+        } else {
+            None
+        };
         let OcrTarget {
             content,
             region,
@@ -230,9 +278,10 @@ async fn run_api(
             image,
         } = target;
         let request = OcrRequest {
-            image: Arc::new(prepare_api_image(image)),
+            image: Arc::new(prepare_api_image(Arc::unwrap_or_clone(image))),
             source_language: Some(source_language),
             instructions: config.api.instructions.clone(),
+            draft,
         };
         let recognized = tokio::select! {
             biased;
@@ -250,7 +299,7 @@ async fn run_api(
             text: normalize_ocr_text(recognized.1),
         });
     }
-    apply_results(input, page, &model_name, source_language, results)
+    apply_results(input, page, model_name, source_language, results)
 }
 
 /// Keep provider-facing OCR images above the minimum side length accepted by
@@ -271,7 +320,10 @@ fn prepare_api_image(image: DynamicImage) -> DynamicImage {
     DynamicImage::ImageRgb8(canvas)
 }
 
-async fn targets(input: &StageInput) -> Result<(EntityId, Vec<OcrTarget>)> {
+async fn targets(
+    input: &StageInput,
+    completed_models: &[String],
+) -> Result<(EntityId, Vec<OcrTarget>)> {
     let page = input.page()?;
     let mut targets = Vec::new();
     let source = input
@@ -305,15 +357,14 @@ async fn targets(input: &StageInput) -> Result<(EntityId, Vec<OcrTarget>)> {
                 (*candidate != *region && nested_geometry(geometry, child)).then_some(child)
             })
             .collect::<Vec<_>>();
-        let crop = crop(&source, geometry, &exclusions)
-            .with_context(|| format!("text region {region} is outside its source image"))?;
+        let crop = Arc::new(
+            crop(&source, geometry, &exclusions)
+                .with_context(|| format!("text region {region} is outside its source image"))?,
+        );
         for relation in input.scene.relations_to_as::<RecognizedFrom>(*region) {
             let content = relation.value().source;
             let previous = input.scene.component::<SourceText>(content)?;
-            if previous
-                .as_ref()
-                .is_some_and(|value| matches!(value.text.origin, Origin::User))
-            {
+            if source_is_complete(previous.as_ref(), Some(completed_models)) {
                 continue;
             }
             targets.push(OcrTarget {
@@ -370,11 +421,12 @@ fn apply_results(
     finish(edit)
 }
 
+#[derive(Clone)]
 struct OcrTarget {
     content: EntityId,
     region: EntityId,
     geometry: Geometry,
-    image: DynamicImage,
+    image: Arc<DynamicImage>,
 }
 
 struct OcrResult {
@@ -387,23 +439,26 @@ struct OcrResult {
 async fn infer_text<M: Send + 'static>(
     model: Arc<Mutex<M>>,
     targets: Vec<OcrTarget>,
+    stop: crate::StopToken,
     inference: impl Fn(&M, &DynamicImage) -> Result<String> + Send + Sync + 'static,
 ) -> Result<Vec<OcrResult>> {
     tokio::task::spawn_blocking(move || {
         let model = model
             .lock()
             .map_err(|_| anyhow!("OCR model lock is poisoned"))?;
-        targets
-            .into_iter()
-            .map(|target| {
-                Ok(OcrResult {
-                    content: target.content,
-                    region: target.region,
-                    geometry: target.geometry,
-                    text: normalize_ocr_text(inference(&model, &target.image)?),
-                })
-            })
-            .collect()
+        let mut results = Vec::with_capacity(targets.len());
+        for target in targets {
+            if stop.stopped() {
+                break;
+            }
+            results.push(OcrResult {
+                content: target.content,
+                region: target.region,
+                geometry: target.geometry,
+                text: normalize_ocr_text(inference(&model, &target.image)?),
+            });
+        }
+        Ok(results)
     })
     .await
     .context("OCR task panicked")?
@@ -563,9 +618,9 @@ fn point_in_geometry(x: f64, y: f64, geometry: &Geometry) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::{collections::BTreeMap, io::Cursor, sync::Arc};
 
-    use koharu_scene::{At, PageDraft, TextRegion};
+    use koharu_scene::{AssetInput, AssetMetadata, AssetRole, At, PageDraft, TextRegion};
 
     use super::*;
     use crate::ImageCache;
@@ -616,6 +671,348 @@ mod tests {
         session.commit(edit.finish().unwrap()).await.unwrap();
 
         assert!(processor().skip(&input(&session, page)).unwrap());
+
+        let mut hybrid = processor();
+        hybrid.config.method = OcrMethod::LocalApi;
+        assert!(!hybrid.skip(&input(&session, page)).unwrap());
+        let verified = generation(PRODUCER, &hybrid.model(&input(&session, page))).unwrap();
+        let mut edit = session.snapshot().edit_as(verified.clone());
+        edit.set(
+            generated_content.unwrap(),
+            &SourceText {
+                text: Authored::generated("verified".to_owned(), verified),
+                language: None,
+            },
+        )
+        .unwrap();
+        session.commit(edit.finish().unwrap()).await.unwrap();
+        assert!(hybrid.skip(&input(&session, page)).unwrap());
+        assert!(
+            hybrid
+                .skip(&input(&session, page).with_ocr_pass(OcrPass::Local))
+                .unwrap()
+        );
+        hybrid.config.local_model = OcrModel::MangaOcr;
+        assert!(!hybrid.skip(&input(&session, page)).unwrap());
+        assert!(
+            !hybrid
+                .skip(&input(&session, page).with_ocr_pass(OcrPass::Local))
+                .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn hybrid_local_draft_is_ready_for_api_but_not_a_completed_api_result() {
+        let mut session = koharu_scene::Session::memory().await.unwrap();
+        let mut edit = session.snapshot().edit();
+        let page = edit
+            .add_page(PageDraft::new("page", 100.0, 100.0), At::End)
+            .unwrap();
+        let region = edit
+            .add_analysis_region::<TextRegion>(
+                page,
+                At::End,
+                &Geometry::rectangle(10.0, 10.0, 20.0, 20.0),
+                None,
+            )
+            .unwrap();
+        let content = edit.add_text_content(page, At::End).unwrap();
+        edit.relate::<RecognizedFrom>(content, region).unwrap();
+        session.commit(edit.finish().unwrap()).await.unwrap();
+        let mut hybrid = processor();
+        hybrid.config.method = OcrMethod::LocalApi;
+        let local_input = input(&session, page).with_ocr_pass(OcrPass::Local);
+        assert!(hybrid.uses_local(&local_input));
+        assert!(!hybrid.uses_local(&input(&session, page)));
+        let owner = generation(PRODUCER, &hybrid.model(&local_input)).unwrap();
+        let mut edit = session.snapshot().edit_as(owner.clone());
+        edit.set(
+            content,
+            &SourceText {
+                text: Authored::generated("原稿".to_owned(), owner),
+                language: None,
+            },
+        )
+        .unwrap();
+        session.commit(edit.finish().unwrap()).await.unwrap();
+        assert!(
+            hybrid
+                .skip(&input(&session, page).with_ocr_pass(OcrPass::Local))
+                .unwrap()
+        );
+        assert!(!hybrid.skip(&input(&session, page)).unwrap());
+    }
+
+    #[tokio::test]
+    async fn hybrid_rerun_keeps_verified_regions_when_new_text_needs_ocr() {
+        let mut session = koharu_scene::Session::memory().await.unwrap();
+        let mut hybrid = processor();
+        hybrid.config.method = OcrMethod::LocalApi;
+        let mut edit = session.snapshot().edit();
+        let page = edit
+            .add_page(PageDraft::new("mixed page", 100.0, 100.0), At::End)
+            .unwrap();
+        let mut png = Cursor::new(Vec::new());
+        DynamicImage::new_rgb8(100, 100)
+            .write_to(&mut png, image::ImageFormat::Png)
+            .unwrap();
+        edit.set_asset(
+            page,
+            &AssetRole::new("source").unwrap(),
+            AssetInput::new(
+                Arc::<[u8]>::from(png.into_inner()),
+                "image/png",
+                AssetMetadata {
+                    width: Some(100),
+                    height: Some(100),
+                    attributes: BTreeMap::new(),
+                },
+            ),
+        )
+        .unwrap();
+        let mut contents = Vec::new();
+        for x in [5.0, 35.0, 65.0] {
+            let region = edit
+                .add_analysis_region::<TextRegion>(
+                    page,
+                    At::End,
+                    &Geometry::rectangle(x, 5.0, 20.0, 20.0),
+                    None,
+                )
+                .unwrap();
+            let content = edit.add_text_content(page, At::End).unwrap();
+            edit.relate::<RecognizedFrom>(content, region).unwrap();
+            contents.push(content);
+        }
+        session.commit(edit.finish().unwrap()).await.unwrap();
+        let verified = contents[0];
+        let pending = contents[1];
+        let new = contents[2];
+        let local_model = hybrid.model(&input(&session, page).with_ocr_pass(OcrPass::Local));
+        let final_model = hybrid.api_model_name();
+        for (content, model, text) in [
+            (verified, final_model.as_str(), "API corrected text"),
+            (pending, local_model.as_str(), "existing local draft"),
+        ] {
+            let owner = generation(PRODUCER, model).unwrap();
+            let mut edit = session.snapshot().edit_as(owner.clone());
+            edit.set(
+                content,
+                &SourceText {
+                    text: Authored::generated(text.to_owned(), owner),
+                    language: None,
+                },
+            )
+            .unwrap();
+            session.commit(edit.finish().unwrap()).await.unwrap();
+        }
+        let verified_before = session
+            .snapshot()
+            .component::<SourceText>(verified)
+            .unwrap()
+            .unwrap();
+        let pending_before = session
+            .snapshot()
+            .component::<SourceText>(pending)
+            .unwrap()
+            .unwrap();
+        let local_input = input(&session, page).with_ocr_pass(OcrPass::Local);
+        assert!(!hybrid.skip(&local_input).unwrap());
+        let (_, ordinary_targets) = targets(&local_input, &[]).await.unwrap();
+        assert_eq!(
+            ordinary_targets
+                .iter()
+                .map(|target| target.content)
+                .collect::<Vec<_>>(),
+            contents
+        );
+        let local_models = hybrid.completed_models(&local_input).unwrap();
+        let (_, local_targets) = targets(&local_input, &local_models).await.unwrap();
+        assert_eq!(
+            local_targets
+                .iter()
+                .map(|target| target.content)
+                .collect::<Vec<_>>(),
+            vec![new]
+        );
+        let results = infer_text(
+            Arc::new(Mutex::new(())),
+            local_targets,
+            local_input.stop.clone(),
+            |_, _| Ok("new local draft".to_owned()),
+        )
+        .await
+        .unwrap();
+        let local_patch =
+            apply_results(local_input, page, &local_model, Language::Japanese, results).unwrap();
+        session.commit(local_patch).await.unwrap();
+        assert_eq!(
+            session
+                .snapshot()
+                .component::<SourceText>(verified)
+                .unwrap()
+                .unwrap(),
+            verified_before
+        );
+        assert_eq!(
+            session
+                .snapshot()
+                .component::<SourceText>(pending)
+                .unwrap()
+                .unwrap(),
+            pending_before
+        );
+        assert!(
+            hybrid
+                .skip(&input(&session, page).with_ocr_pass(OcrPass::Local))
+                .unwrap()
+        );
+
+        let final_input = input(&session, page);
+        assert!(!hybrid.skip(&final_input).unwrap());
+        let final_models = hybrid.completed_models(&final_input).unwrap();
+        let (_, final_targets) = targets(&final_input, &final_models).await.unwrap();
+        assert_eq!(
+            final_targets
+                .iter()
+                .map(|target| target.content)
+                .collect::<Vec<_>>(),
+            vec![pending, new]
+        );
+
+        let cancelled_input = input(&session, page);
+        cancelled_input.stop.stop();
+        let cancelled_patch = run_api(
+            &hybrid.translator,
+            &hybrid.config,
+            Language::Japanese,
+            cancelled_input,
+            &final_model,
+            final_targets.clone(),
+        )
+        .await
+        .unwrap();
+        session.commit(cancelled_patch).await.unwrap();
+        assert_eq!(
+            session
+                .snapshot()
+                .component::<SourceText>(verified)
+                .unwrap()
+                .unwrap(),
+            verified_before
+        );
+        assert_eq!(
+            session
+                .snapshot()
+                .component::<SourceText>(pending)
+                .unwrap()
+                .unwrap(),
+            pending_before
+        );
+
+        let mut invalid_api = hybrid.config.clone();
+        invalid_api.api.model.vision = false;
+        let error = run_api(
+            &hybrid.translator,
+            &invalid_api,
+            Language::Japanese,
+            input(&session, page),
+            &final_model,
+            final_targets,
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("does not accept images"));
+        assert_eq!(
+            session
+                .snapshot()
+                .component::<SourceText>(verified)
+                .unwrap()
+                .unwrap(),
+            verified_before
+        );
+        assert_eq!(
+            session
+                .snapshot()
+                .component::<SourceText>(pending)
+                .unwrap()
+                .unwrap(),
+            pending_before
+        );
+        assert_eq!(
+            session
+                .snapshot()
+                .component::<SourceText>(new)
+                .unwrap()
+                .unwrap()
+                .text
+                .value,
+            "new local draft"
+        );
+
+        let mut edit = session.snapshot().edit();
+        edit.set(
+            pending,
+            &SourceText {
+                text: Authored::user(String::new()),
+                language: None,
+            },
+        )
+        .unwrap();
+        session.commit(edit.finish().unwrap()).await.unwrap();
+        let (_, remaining) = targets(&input(&session, page), &final_models)
+            .await
+            .unwrap();
+        assert_eq!(
+            remaining
+                .iter()
+                .map(|target| target.content)
+                .collect::<Vec<_>>(),
+            vec![new]
+        );
+    }
+
+    #[tokio::test]
+    async fn local_ocr_stops_between_crops_and_keeps_region_order() {
+        let mut session = koharu_scene::Session::memory().await.unwrap();
+        let mut edit = session.snapshot().edit();
+        let page = edit
+            .add_page(PageDraft::new("page", 100.0, 100.0), At::End)
+            .unwrap();
+        let region = edit
+            .add_analysis_region::<TextRegion>(
+                page,
+                At::End,
+                &Geometry::rectangle(0.0, 0.0, 20.0, 20.0),
+                None,
+            )
+            .unwrap();
+        let content = edit.add_text_content(page, At::End).unwrap();
+        session.commit(edit.finish().unwrap()).await.unwrap();
+        let target = OcrTarget {
+            content,
+            region,
+            geometry: Geometry::rectangle(0.0, 0.0, 20.0, 20.0),
+            image: Arc::new(DynamicImage::new_rgb8(20, 20)),
+        };
+        let stop = crate::StopToken::default();
+        let inference_stop = stop.clone();
+        let results = infer_text(
+            Arc::new(Mutex::new(())),
+            vec![target.clone(), target],
+            stop,
+            move |_, image| {
+                assert_eq!(image.dimensions(), (20, 20));
+                inference_stop.stop();
+                Ok("最初".to_owned())
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].content, content);
+        assert_eq!(results[0].region, region);
+        assert_eq!(results[0].text, "最初");
     }
 
     #[tokio::test]

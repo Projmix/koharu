@@ -101,11 +101,7 @@ pub(super) async fn translate(
         .context("chat completion returned no choices")?
         .message
         .content;
-    Ok(prompt::parse_translation_response(
-        backend.provider,
-        &text,
-        request,
-    )?)
+    Ok(prompt::translations(backend.provider, &text, request)?)
 }
 
 pub(super) fn translation_request_body(
@@ -149,7 +145,11 @@ pub(super) fn translation_request_body(
             .response_mode
             .response_format("manga_translation", prompt::output_schema()),
     };
-    Ok(serde_json::to_value(body).map_err(anyhow::Error::from)?)
+    let mut body = serde_json::to_value(body).map_err(anyhow::Error::from)?;
+    if backend.require_parameters {
+        body["provider"] = serde_json::json!({ "require_parameters": true });
+    }
+    Ok(body)
 }
 
 pub(super) async fn recognize(
@@ -221,6 +221,7 @@ pub(super) struct ChatBackend<'a> {
     pub(super) reasoning: Option<bool>,
     pub(super) thinking: Option<&'static str>,
     pub(super) response_mode: ResponseMode,
+    pub(super) require_parameters: bool,
 }
 
 impl<'a> ChatBackend<'a> {
@@ -247,6 +248,7 @@ impl<'a> ChatBackend<'a> {
             reasoning: None,
             thinking: None,
             response_mode,
+            require_parameters: false,
         }
     }
 }

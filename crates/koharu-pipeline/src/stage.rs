@@ -3,6 +3,13 @@ use specta::Type;
 
 use koharu_scene::EntityId;
 
+#[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
+pub(crate) enum OcrPass {
+    Local,
+    #[default]
+    Final,
+}
+
 #[derive(
     Clone,
     Copy,

@@ -47,7 +47,7 @@ const tools = [
   ['draw', Brush],
   ['eraser', Eraser],
   ['color_picker', Pipette],
-  ['remove', Sparkles],
+  ['remove', Eraser],
   ['pan', Hand],
 ] as const satisfies ReadonlyArray<readonly [CanvasTool, typeof MousePointer2]>
 
@@ -67,28 +67,78 @@ export function ToolBar() {
         {tools.map(([tool, Icon], index) => (
           <div key={tool} className='contents'>
             {index === tools.length - 1 && <span className='my-1 h-px w-5 bg-border' />}
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Button
-                    type='button'
-                    variant='ghost'
-                    size='icon'
-                    disabled={!page}
-                    aria-label={t(`tools.${tool}`)}
-                    data-active={active === tool}
-                    className='relative text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground disabled:opacity-30 data-[active=true]:bg-accent data-[active=true]:text-accent-foreground'
-                    onClick={() => setTool(tool)}
-                  />
-                }
-              >
-                <Icon className='size-4' />
-              </TooltipTrigger>
-              <TooltipContent side='right'>
-                {t(`tools.${tool}`)}
-                <span className='ml-2 opacity-60'>Ctrl+{shortcuts[tool].toUpperCase()}</span>
-              </TooltipContent>
-            </Tooltip>
+            {tool === 'remove' ? (
+              <div className='relative size-9 overflow-hidden rounded-xl'>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <Button
+                        type='button'
+                        variant='ghost'
+                        size='icon'
+                        disabled={!page}
+                        aria-label={t('tools.remove')}
+                        data-active={active === 'remove'}
+                        className='absolute inset-0 size-9 rounded-xl text-muted-foreground [clip-path:polygon(0_0,0_100%,100%_100%)] hover:bg-foreground/[0.06] hover:text-foreground disabled:opacity-30 data-[active=true]:bg-accent data-[active=true]:text-accent-foreground'
+                        onClick={() => setTool('remove')}
+                      />
+                    }
+                  >
+                    <Eraser className='absolute bottom-1.5 left-1.5 size-3.5' />
+                  </TooltipTrigger>
+                  <TooltipContent side='right'>
+                    {t('tools.remove')}
+                    <span className='ml-2 opacity-60'>Alt+{shortcuts.remove.toUpperCase()}</span>
+                  </TooltipContent>
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <Button
+                        type='button'
+                        variant='ghost'
+                        size='icon'
+                        disabled={!page}
+                        aria-label={t('tools.restore')}
+                        data-active={active === 'restore'}
+                        className='absolute inset-0 size-9 rounded-xl text-muted-foreground [clip-path:polygon(0_0,100%_0,100%_100%)] hover:bg-foreground/[0.06] hover:text-foreground disabled:opacity-30 data-[active=true]:bg-accent data-[active=true]:text-accent-foreground'
+                        onClick={() => setTool('restore')}
+                      />
+                    }
+                  >
+                    <Sparkles className='absolute top-1.5 right-1.5 size-3.5' />
+                  </TooltipTrigger>
+                  <TooltipContent side='right'>
+                    {t('tools.restore')}
+                    <span className='ml-2 opacity-60'>Alt+{shortcuts.restore.toUpperCase()}</span>
+                  </TooltipContent>
+                </Tooltip>
+                <span className='pointer-events-none absolute top-0 left-0 h-px w-13 origin-left rotate-45 bg-border' />
+              </div>
+            ) : (
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      type='button'
+                      variant='ghost'
+                      size='icon'
+                      disabled={!page}
+                      aria-label={t(`tools.${tool}`)}
+                      data-active={active === tool}
+                      className='relative text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground disabled:opacity-30 data-[active=true]:bg-accent data-[active=true]:text-accent-foreground'
+                      onClick={() => setTool(tool)}
+                    />
+                  }
+                >
+                  <Icon className='size-4' />
+                </TooltipTrigger>
+                <TooltipContent side='right'>
+                  {t(`tools.${tool}`)}
+                  <span className='ml-2 opacity-60'>Alt+{shortcuts[tool].toUpperCase()}</span>
+                </TooltipContent>
+              </Tooltip>
+            )}
           </div>
         ))}
       </div>

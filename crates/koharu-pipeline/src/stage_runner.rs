@@ -17,6 +17,8 @@ use crate::{
 pub(crate) struct StageRunner {
     stages: Stages,
     accelerator: AcceleratorGate,
+    parallel_inpainting: bool,
+    hybrid_ocr: bool,
 }
 
 impl StageRunner {
@@ -29,7 +31,17 @@ impl StageRunner {
         Ok(Self {
             stages: Stages::new(config, translator, device)?,
             accelerator: AcceleratorGate::new(device, resources),
+            parallel_inpainting: config.inpainting.method == crate::InpaintingMethod::Api,
+            hybrid_ocr: config.ocr.method == crate::OcrMethod::LocalApi,
         })
+    }
+
+    pub(crate) const fn parallel_inpainting(&self) -> bool {
+        self.parallel_inpainting
+    }
+
+    pub(crate) const fn hybrid_ocr(&self) -> bool {
+        self.hybrid_ocr
     }
 
     #[tracing::instrument(skip_all)]

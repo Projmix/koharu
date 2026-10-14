@@ -3,6 +3,7 @@
 import { useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import { ImageEditPreviewDialog } from '@/components/app/ImageEditPreviewDialog'
 import { TitleBar } from '@/components/app/TitleBar'
 import { Editor } from '@/components/editor/Editor'
 import { SettingsPage } from '@/components/preferences/SettingsPage'
@@ -57,6 +58,7 @@ export function KoharuApp() {
       ) : (
         <Editor />
       )}
+      <ImageEditPreviewDialog />
     </div>
   )
 }

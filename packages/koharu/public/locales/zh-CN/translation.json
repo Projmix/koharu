@@ -124,6 +124,10 @@
     "style": "样式"
   },
   "inference": {
+    "importChapterDone": "Translations imported",
+    "exportChapterHelp": "Extract the archive. Paste prompt.txt into your chosen chat and attach chapter.json. Save the response as translation.json and import it.",
+    "importChapter": "Import translated JSON",
+    "exportChapter": "Export for manual translation (ZIP)",
     "currentPage": "当前页面",
     "currentPageDescription": "仅处理画布中的页面。",
     "automatic": "自动",
@@ -162,6 +166,10 @@
     "typing": "排版"
   },
   "inspector": {
+    "transformTarget": "编辑对象",
+    "transformText": "文字",
+    "transformRegion": "OCR 区域",
+    "transformHint": "拖动文字块可移动，拖动控制点可调整大小。自动模式会根据边框调整字号。",
     "alignBottom": "底端对齐",
     "alignCenter": "居中对齐",
     "alignLeft": "左对齐",
@@ -178,6 +186,7 @@
     "color": "颜色",
     "customFrame": "自定义框架",
     "decreaseBorderWidth": "减小描边宽度",
+    "decreaseFontSize": "字体大小减小 1 磅",
     "direction": "方向",
     "font": "字体",
     "fontSize": "字体大小",
@@ -190,6 +199,7 @@
     "fontWeight": "字体粗细",
     "horizontal": "横排",
     "increaseBorderWidth": "增大描边宽度",
+    "increaseFontSize": "字体大小增大 1 磅",
     "opacity": "不透明度",
     "placement": "位置",
     "resetAutoFit": "重置为自动适配",
@@ -218,9 +228,11 @@
     "zh-TW": "繁體中文"
   },
   "layers": {
+    "collapse": "折叠 {{name}}",
     "delete": "删除 {{name}}",
     "edit": "编辑 {{name}}",
     "empty": "此页面上没有图层。",
+    "expand": "展开 {{name}}",
     "hide": "隐藏 {{name}}",
     "imageName": "图像 {{index}}",
     "kinds": {
@@ -308,6 +320,7 @@
     "noResults": "没有与此筛选条件匹配的页面。",
     "pageName": "页面名称",
     "pages": "页面",
+    "duplicate": "复制",
     "rename": "重命名",
     "renameDescription": "为此页面选择一个新名称。",
     "renameTitle": "重命名页面"
@@ -350,7 +363,8 @@
     "minimax": "MiniMax 语言模型。",
     "openai": "OpenAI 语言模型。",
     "openai-compatible": "任何提供 OpenAI 兼容 API 的服务器。",
-    "openrouter": "通过 OpenRouter 路由的模型。"
+    "openrouter": "通过 OpenRouter 路由的模型。",
+    "qwen-ocr": "通过阿里云调用专用 Qwen-VL-OCR，使用独立的 API 密钥和区域地址。"
   },
   "resources": {
     "cpu": "CPU",
@@ -419,13 +433,18 @@
         "instructionsPlaceholder": "可选的 OCR 专用说明",
         "local": "本地（CPU）",
         "localModel": "本地 OCR 模型",
-        "method": "OCR 方法"
+        "method": "OCR 方法",
+        "hybrid": "本地 + API",
+        "hybridDescription": "先完成整章所有页面的本地 OCR，再将每张裁剪图像及其识别文本发送给所选 API。结果自动应用。"
       },
       "inpainting": {
         "apiModel": "图像编辑模型",
-        "localModel": "本地修复模型",
-        "method": "修复方式",
-        "options": "API 修复选项",
+        "localModel": "本地清理模型",
+        "restorationModel": "修复模型",
+        "restorationProvider": "修复服务提供商",
+        "restorationPrompt": "修复提示词",
+        "method": "清理方式",
+        "options": "API 清理选项",
         "promptPreset": "提示词预设",
         "promptPresets": {
           "cleanup-all": "移除全部文字和水印",
@@ -433,7 +452,11 @@
           "custom": "自定义提示词",
           "translate-russian": "将文字替换为俄语"
         },
-        "provider": "图像提供商"
+        "provider": "图像提供商",
+        "removeDescription": "移除画笔使用的本地模型，独立于页面清理和矩形区域修复。",
+        "restorationDescription": "矩形选区修复工具使用的 API 模型，独立于页面清理和移除画笔。",
+        "previewBeforeSend": "发送到 API 前预览",
+        "previewBeforeSendDescription": "通过 API 清理页面或修复选区前，查看待发送的图像并编辑提示词。不影响本地移除功能。"
       },
       "processing": "正在处理",
       "stages": {
@@ -442,8 +465,8 @@
           "title": "检测"
         },
         "inpainting": {
-          "description": "重建已删除文本下方的图稿。",
-          "title": "修补"
+          "description": "用于页面处理的清理阶段。移除和修复工具在下方单独设置。",
+          "title": "修复"
         },
         "ocr": {
           "description": "读取检测区域内的原文。",
@@ -458,6 +481,7 @@
       "connections": "连接",
       "connectionsDescription": "凭据安全地存储在此设备上。",
       "falDescription": "Fal.ai 图像编辑模型使用的凭据。",
+      "replicateDescription": "使用 FLUX 编辑图像。Dev 和 Klein 已关闭输出安全检查；Pro、Max 和 Flex 仍受模型限制。",
       "credential": "凭据",
       "credentialLabel": "{{provider}} 凭据",
       "description": "连接翻译和语言模型提供商。",
@@ -465,7 +489,7 @@
       "title": "提供商"
     },
     "shortcuts": {
-      "description": "当文本字段未获得焦点时，请使用 Ctrl 加已配置的按键。",
+      "description": "当文本字段未获得焦点时，请使用 Alt 加已配置的按键。",
       "inputLabel": "{{action}} 快捷键",
       "title": "快捷键",
       "tools": "工具"
@@ -558,6 +582,7 @@
     "ocr": "OCR 区域",
     "pan": "平移",
     "remove": "移除",
+    "restore": "恢复",
     "select": "选择",
     "text": "文本"
   },
@@ -578,12 +603,35 @@
     "later": "稍后",
     "noNotes": "未提供发行说明。",
     "retry": "重试",
-    "update": "更新"
+    "update": "更新",
+    "upstream": {
+      "title": "原版 Koharu 有新版本",
+      "description": "原版 Koharu {{version}} 比已集成的 {{integratedVersion}} 更新，其中可能有适合此分支的改进。自动更新仅安装 Projmix/koharu 的发行版。",
+      "view": "查看原版发行说明",
+      "dismiss": "忽略此版本"
+    }
   },
   "window": {
     "close": "关闭",
     "maximize": "最大化",
     "minimize": "最小化",
     "restore": "还原"
+  },
+  "imageEditPreview": {
+    "title": "预览图像编辑请求",
+    "description": "检查待发送的图像和提示词。提示词修改仅对本次请求生效，不会保存到设置。",
+    "image": "待发送的图像",
+    "prompt": "本次请求的提示词",
+    "resetPrompt": "重置提示词",
+    "send": "发送到 API",
+    "cancel": "取消任务",
+    "close": "关闭",
+    "actualSize": "100%",
+    "fitImage": "适应窗口",
+    "restoration": "修复选区",
+    "cleanup": "页面清理",
+    "failed": "无法处理预览：{{error}}",
+    "cleanupLayers": "原图 + 可见的绘画图层。发送单张 PNG，不包含文字图层、蒙版和选择控件。",
+    "restorationLayers": "原图 + 按图层顺序合成的可见清理与绘画图层，仅发送选区。发送单张 PNG，不包含文字图层、蒙版和选择控件。"
   }
 }

@@ -30,6 +30,7 @@ pub struct OcrRequest {
     pub image: Arc<DynamicImage>,
     pub source_language: Option<Language>,
     pub instructions: Option<String>,
+    pub draft: Option<String>,
 }
 
 impl TranslationRequest {
@@ -177,7 +178,7 @@ impl TranslationRequest {
             .expect("translation metadata is aligned with segments")
     }
 
-    pub(crate) fn segment_id(&self, id: usize) -> &str {
+    pub fn segment_id(&self, id: usize) -> &str {
         self.segment_ids
             .get(id)
             .map(String::as_str)

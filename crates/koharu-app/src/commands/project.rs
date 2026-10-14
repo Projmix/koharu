@@ -1,6 +1,11 @@
-use std::{collections::HashSet, io::Cursor, path::PathBuf};
+use std::{
+    collections::{HashMap, HashSet},
+    io::Cursor,
+    path::PathBuf,
+};
 
 use anyhow::{Context as _, Result, anyhow, bail};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use image::{DynamicImage, ImageFormat, RgbaImage};
 use koharu_desktop::Frame;
 use koharu_scene::{
@@ -12,7 +17,7 @@ use koharu_scene::{
     TextLayoutKind, TextRegion, TextRole as SceneTextRole, Translation as SceneTranslation,
     Typography as SceneTypography, Visibility as SceneVisibility,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use specta::Type;
 use tokio::sync::Mutex;
 
@@ -146,30 +151,30 @@ pub struct AnalysisRegion {
     pub label: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Type)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, Type)]
 pub struct Geometry {
     pub points: Vec<Point>,
 }
 
-#[derive(Clone, Copy, Debug, Serialize, Type)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize, Type)]
 pub struct LayerVisibility {
     pub visible: bool,
     pub opacity: f32,
 }
 
-#[derive(Clone, Debug, Serialize, Type)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, Type)]
 pub struct SourceText {
     pub text: String,
     pub language: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Type)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, Type)]
 pub struct Translation {
     pub text: String,
     pub language: Option<String>,
 }
 
-#[derive(Clone, Debug, serde::Deserialize, Serialize, Type)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, Type)]
 pub struct Typography {
     pub preferred_font: Option<String>,
     pub font_weight: Option<u16>,
@@ -181,6 +186,43 @@ pub struct Typography {
     pub stroke_width: Option<f32>,
     pub alignment: Option<koharu_scene::TextAlignment>,
     pub writing_mode: Option<koharu_scene::WritingMode>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum TextTransferMode {
+    Copy,
+    Move,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, Type)]
+pub struct TextClipboardRegion {
+    pub id: EntityId,
+    pub geometry: Geometry,
+    pub label: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, Type)]
+pub struct TextClipboardLayer {
+    pub layer: EntityId,
+    pub content: EntityId,
+    pub source: Option<SourceText>,
+    pub translation: Option<Translation>,
+    pub role: Option<String>,
+    pub geometry: Option<Geometry>,
+    pub visibility: LayerVisibility,
+    pub typography: Option<Typography>,
+    pub layout: TextLayoutKind,
+    pub source_region: Option<TextClipboardRegion>,
+    pub automatic_region: Option<TextClipboardRegion>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, Type)]
+pub struct TextClipboardPayload {
+    pub version: u32,
+    pub mode: TextTransferMode,
+    pub source_page: EntityId,
+    pub layers: Vec<TextClipboardLayer>,
 }
 
 pub(crate) struct CurrentProject {
@@ -403,6 +445,614 @@ impl Project {
             Ok(())
         })?;
         self.commit(patch).await
+    }
+
+    pub(crate) async fn duplicate_pages(
+        &mut self,
+        pages: Vec<EntityId>,
+    ) -> Result<(Commit, Vec<EntityId>)> {
+        let snapshot = self.snapshot();
+        let mut duplicated = Vec::new();
+        let patch = snapshot.patch(|edit| {
+            duplicated = edit.duplicate_pages(&pages)?;
+            Ok(())
+        })?;
+        let commit = self.commit(patch).await?;
+        self.active_page = duplicated.first().copied();
+        Ok((commit, duplicated))
+    }
+
+    fn clipboard_region(snapshot: &Snapshot, id: EntityId) -> Result<TextClipboardRegion> {
+        let region = snapshot
+            .component::<SceneRegion>(id)?
+            .context("clipboard relation target is not a region")?;
+        if region.kind != TextRegion::kind() {
+            bail!("text clipboard regions must be text regions");
+        }
+        let region = Self::analysis_region(snapshot, id, region)?;
+        Ok(TextClipboardRegion {
+            id,
+            geometry: region.geometry,
+            label: region.label,
+        })
+    }
+
+    fn clipboard_layer(snapshot: &Snapshot, layer: EntityId) -> Result<TextClipboardLayer> {
+        let Layer::Text {
+            geometry,
+            visibility,
+            content,
+            typography,
+            layout,
+            automatic_region,
+            ..
+        } = Self::layer_view(snapshot, layer)?
+        else {
+            bail!("text clipboard contains a non-text layer");
+        };
+        let source_region = content
+            .source_region
+            .map(|region| Self::clipboard_region(snapshot, region))
+            .transpose()?;
+        let automatic_region = automatic_region
+            .map(|region| Self::clipboard_region(snapshot, region))
+            .transpose()?;
+        Ok(TextClipboardLayer {
+            layer,
+            content: content.id,
+            source: content.source,
+            translation: content.translation,
+            role: content.role,
+            geometry,
+            visibility,
+            typography,
+            layout,
+            source_region,
+            automatic_region,
+        })
+    }
+
+    fn clipboard_layer_matches(current: &TextClipboardLayer, payload: &TextClipboardLayer) -> bool {
+        current.layer == payload.layer
+            && current.content == payload.content
+            && current.source == payload.source
+            && current.translation == payload.translation
+            && current.role == payload.role
+            && Self::clipboard_geometry_matches(
+                current.geometry.as_ref(),
+                payload.geometry.as_ref(),
+            )
+            && current.visibility.visible == payload.visibility.visible
+            && Self::clipboard_float_matches(
+                f64::from(current.visibility.opacity),
+                f64::from(payload.visibility.opacity),
+            )
+            && Self::clipboard_typography_matches(
+                current.typography.as_ref(),
+                payload.typography.as_ref(),
+            )
+            && current.layout == payload.layout
+            && Self::clipboard_region_matches(
+                current.source_region.as_ref(),
+                payload.source_region.as_ref(),
+            )
+            && Self::clipboard_region_matches(
+                current.automatic_region.as_ref(),
+                payload.automatic_region.as_ref(),
+            )
+    }
+
+    fn clipboard_region_matches(
+        current: Option<&TextClipboardRegion>,
+        payload: Option<&TextClipboardRegion>,
+    ) -> bool {
+        match (current, payload) {
+            (None, None) => true,
+            (Some(current), Some(payload)) => {
+                current.id == payload.id
+                    && current.label == payload.label
+                    && Self::clipboard_geometry_matches(
+                        Some(&current.geometry),
+                        Some(&payload.geometry),
+                    )
+            }
+            _ => false,
+        }
+    }
+
+    fn clipboard_geometry_matches(current: Option<&Geometry>, payload: Option<&Geometry>) -> bool {
+        match (current, payload) {
+            (None, None) => true,
+            (Some(current), Some(payload)) => {
+                current.points.len() == payload.points.len()
+                    && current
+                        .points
+                        .iter()
+                        .zip(&payload.points)
+                        .all(|(current, payload)| {
+                            Self::clipboard_float_matches(current.x, payload.x)
+                                && Self::clipboard_float_matches(current.y, payload.y)
+                        })
+            }
+            _ => false,
+        }
+    }
+
+    fn clipboard_typography_matches(
+        current: Option<&Typography>,
+        payload: Option<&Typography>,
+    ) -> bool {
+        match (current, payload) {
+            (None, None) => true,
+            (Some(current), Some(payload)) => {
+                current.preferred_font == payload.preferred_font
+                    && current.font_weight == payload.font_weight
+                    && current.font_style == payload.font_style
+                    && Self::clipboard_optional_float_matches(current.size, payload.size)
+                    && current.auto_fit == payload.auto_fit
+                    && current.color == payload.color
+                    && current.stroke_color == payload.stroke_color
+                    && Self::clipboard_optional_float_matches(
+                        current.stroke_width,
+                        payload.stroke_width,
+                    )
+                    && current.alignment == payload.alignment
+                    && current.writing_mode == payload.writing_mode
+            }
+            _ => false,
+        }
+    }
+
+    fn clipboard_float_matches(current: f64, payload: f64) -> bool {
+        current == payload || (current - payload).abs() <= 1e-6
+    }
+
+    fn clipboard_optional_float_matches(current: Option<f32>, payload: Option<f32>) -> bool {
+        match (current, payload) {
+            (None, None) => true,
+            (Some(current), Some(payload)) => {
+                Self::clipboard_float_matches(f64::from(current), f64::from(payload))
+            }
+            _ => false,
+        }
+    }
+
+    fn clipboard_offset(payload: &TextClipboardPayload, position: Option<Point>) -> Result<Point> {
+        let Some(position) = position else {
+            return Ok(Point { x: 0.0, y: 0.0 });
+        };
+        if !position.x.is_finite() || !position.y.is_finite() {
+            bail!("text paste position must contain finite coordinates");
+        }
+        let mut bounds: Option<(f64, f64, f64, f64)> = None;
+        for geometry in payload.layers.iter().flat_map(|block| {
+            [
+                block.geometry.as_ref(),
+                block.source_region.as_ref().map(|region| &region.geometry),
+                block
+                    .automatic_region
+                    .as_ref()
+                    .map(|region| &region.geometry),
+            ]
+            .into_iter()
+            .flatten()
+        }) {
+            for point in &geometry.points {
+                bounds = Some(match bounds {
+                    Some((min_x, min_y, max_x, max_y)) => (
+                        min_x.min(point.x),
+                        min_y.min(point.y),
+                        max_x.max(point.x),
+                        max_y.max(point.y),
+                    ),
+                    None => (point.x, point.y, point.x, point.y),
+                });
+            }
+        }
+        let Some((min_x, min_y, max_x, max_y)) = bounds else {
+            return Ok(Point { x: 0.0, y: 0.0 });
+        };
+        Ok(Point {
+            x: position.x - (min_x + max_x) * 0.5,
+            y: position.y - (min_y + max_y) * 0.5,
+        })
+    }
+
+    fn translated_geometry(geometry: &Geometry, offset: Point) -> Geometry {
+        Geometry {
+            points: geometry
+                .points
+                .iter()
+                .map(|point| Point {
+                    x: point.x + offset.x,
+                    y: point.y + offset.y,
+                })
+                .collect(),
+        }
+    }
+
+    fn scene_geometry(geometry: &Geometry) -> SceneGeometry {
+        SceneGeometry {
+            origin: Origin::User,
+            points: geometry
+                .points
+                .iter()
+                .map(|point| ScenePoint {
+                    x: point.x,
+                    y: point.y,
+                })
+                .collect(),
+        }
+    }
+
+    fn add_clipboard_region(
+        edit: &mut koharu_scene::Edit,
+        page: EntityId,
+        region: &TextClipboardRegion,
+        offset: Point,
+    ) -> Result<EntityId, koharu_scene::Error> {
+        let geometry = Self::translated_geometry(&region.geometry, offset);
+        edit.add_analysis_region::<TextRegion>(
+            page,
+            At::End,
+            &Self::scene_geometry(&geometry),
+            region.label.clone(),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn transfer_clipboard_region(
+        edit: &mut koharu_scene::Edit,
+        snapshot: &Snapshot,
+        target_page: EntityId,
+        region: &TextClipboardRegion,
+        mode: TextTransferMode,
+        movable: &HashSet<EntityId>,
+        copies: &mut HashMap<EntityId, EntityId>,
+        relocated: &mut HashSet<EntityId>,
+        offset: Point,
+    ) -> Result<EntityId, koharu_scene::Error> {
+        if mode == TextTransferMode::Move && movable.contains(&region.id) {
+            if relocated.insert(region.id) {
+                edit.move_entity(region.id, Some(target_page), At::End)?;
+                for relation in snapshot
+                    .relations_from_as::<Inside>(region.id)
+                    .map(|relation| relation.id())
+                    .collect::<Vec<_>>()
+                {
+                    edit.remove_relation(relation)?;
+                }
+                if offset.x != 0.0 || offset.y != 0.0 {
+                    let geometry = Self::translated_geometry(&region.geometry, offset);
+                    edit.set(region.id, &Self::scene_geometry(&geometry))?;
+                }
+            }
+            Ok(region.id)
+        } else if let Some(region) = copies.get(&region.id) {
+            Ok(*region)
+        } else {
+            let copied = Self::add_clipboard_region(edit, target_page, region, offset)?;
+            copies.insert(region.id, copied);
+            Ok(copied)
+        }
+    }
+
+    fn add_clipboard_content(
+        edit: &mut koharu_scene::Edit,
+        page: EntityId,
+        block: &TextClipboardLayer,
+    ) -> Result<EntityId, koharu_scene::Error> {
+        let content = edit.add_text_content(page, At::End)?;
+        if let Some(source) = &block.source {
+            edit.set(
+                content,
+                &SceneSourceText {
+                    text: Authored::user(source.text.clone()),
+                    language: source
+                        .language
+                        .as_ref()
+                        .map(|language| koharu_scene::LanguageTag::new(language.clone()))
+                        .transpose()?,
+                },
+            )?;
+        }
+        if let Some(translation) = &block.translation {
+            edit.set(
+                content,
+                &SceneTranslation {
+                    text: Authored::user(translation.text.clone()),
+                    language: translation
+                        .language
+                        .as_ref()
+                        .map(|language| koharu_scene::LanguageTag::new(language.clone()))
+                        .transpose()?,
+                },
+            )?;
+        }
+        if let Some(role) = &block.role {
+            edit.set(
+                content,
+                &SceneTextRole {
+                    origin: Origin::User,
+                    role: role.clone(),
+                },
+            )?;
+        }
+        Ok(content)
+    }
+
+    fn set_clipboard_layer_components(
+        edit: &mut koharu_scene::Edit,
+        layer: EntityId,
+        block: &TextClipboardLayer,
+        offset: Point,
+    ) -> Result<(), koharu_scene::Error> {
+        if let Some(geometry) = &block.geometry {
+            let geometry = Self::translated_geometry(geometry, offset);
+            edit.set(layer, &Self::scene_geometry(&geometry))?;
+        }
+        edit.set(
+            layer,
+            &SceneVisibility {
+                origin: Origin::User,
+                visible: block.visibility.visible,
+                opacity: block.visibility.opacity,
+            },
+        )?;
+        if let Some(typography) = &block.typography {
+            edit.set(
+                layer,
+                &SceneTypography {
+                    origin: Origin::User,
+                    preferred_font: typography.preferred_font.clone(),
+                    font_weight: typography.font_weight,
+                    font_style: typography.font_style,
+                    size: typography.size,
+                    auto_fit: typography.auto_fit,
+                    color: typography.color,
+                    stroke_color: typography.stroke_color,
+                    stroke_width: typography.stroke_width,
+                    alignment: typography.alignment,
+                    writing_mode: typography.writing_mode,
+                    extensions: Default::default(),
+                },
+            )?;
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn paste_text_blocks(
+        &mut self,
+        target_page: EntityId,
+        payload: TextClipboardPayload,
+        position: Option<Point>,
+    ) -> Result<(Commit, Vec<EntityId>)> {
+        if payload.version != 1 {
+            bail!("unsupported text clipboard version {}", payload.version);
+        }
+        if payload.layers.is_empty() {
+            bail!("text clipboard is empty");
+        }
+        let snapshot = self.snapshot();
+        snapshot.page(target_page)?;
+        snapshot.page(payload.source_page)?;
+        let requested = payload
+            .layers
+            .iter()
+            .map(|block| block.layer)
+            .collect::<HashSet<_>>();
+        if requested.len() != payload.layers.len() {
+            bail!("text clipboard contains duplicate layers");
+        }
+        let source_order = Self::page(&snapshot, payload.source_page)?
+            .layers
+            .into_iter()
+            .filter_map(|layer| match layer {
+                Layer::Text { id, .. } if requested.contains(&id) => Some(id),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        if source_order
+            != payload
+                .layers
+                .iter()
+                .map(|block| block.layer)
+                .collect::<Vec<_>>()
+        {
+            bail!("text clipboard layer order is stale or invalid");
+        }
+        for block in &payload.layers {
+            let current = Self::clipboard_layer(&snapshot, block.layer)?;
+            if !Self::clipboard_layer_matches(&current, block) {
+                bail!("text clipboard contents are stale");
+            }
+        }
+        let offset = Self::clipboard_offset(&payload, position)?;
+
+        let moved_layers = requested;
+        let moved_contents = payload
+            .layers
+            .iter()
+            .map(|block| block.content)
+            .filter(|content| {
+                snapshot
+                    .relations_to_as::<Presents>(*content)
+                    .all(|relation| moved_layers.contains(&relation.value().source))
+            })
+            .collect::<HashSet<_>>();
+        let candidate_regions = payload
+            .layers
+            .iter()
+            .flat_map(|block| {
+                [
+                    block.source_region.as_ref(),
+                    block.automatic_region.as_ref(),
+                ]
+                .into_iter()
+                .flatten()
+                .map(|region| region.id)
+            })
+            .collect::<HashSet<_>>();
+        let moved_regions = candidate_regions
+            .into_iter()
+            .filter(|region| {
+                snapshot
+                    .relations_to_as::<RecognizedFrom>(*region)
+                    .all(|relation| moved_contents.contains(&relation.value().source))
+                    && snapshot
+                        .relations_to_as::<FitsTo>(*region)
+                        .all(|relation| moved_layers.contains(&relation.value().source))
+            })
+            .collect::<HashSet<_>>();
+        let cross_page = payload.source_page != target_page;
+        let mut transferred = Vec::new();
+        let patch = snapshot.patch(|edit| {
+            let group = edit.ensure_text_group(target_page)?;
+            let mut content_copies = HashMap::new();
+            let mut region_copies = HashMap::new();
+            let mut relocated_contents = HashSet::new();
+            let mut relocated_regions = HashSet::new();
+            let mut linked_contents = HashSet::new();
+            let mut shifted_same_page_regions = HashSet::new();
+
+            for block in &payload.layers {
+                if payload.mode == TextTransferMode::Move && !cross_page {
+                    edit.move_entity(block.layer, Some(group), At::End)?;
+                    if offset.x != 0.0 || offset.y != 0.0 {
+                        if let Some(geometry) = &block.geometry {
+                            let geometry = Self::translated_geometry(geometry, offset);
+                            edit.set(block.layer, &Self::scene_geometry(&geometry))?;
+                        }
+                        for region in [
+                            block.source_region.as_ref(),
+                            block.automatic_region.as_ref(),
+                        ]
+                        .into_iter()
+                        .flatten()
+                        {
+                            if moved_regions.contains(&region.id)
+                                && shifted_same_page_regions.insert(region.id)
+                            {
+                                let geometry = Self::translated_geometry(&region.geometry, offset);
+                                edit.set(region.id, &Self::scene_geometry(&geometry))?;
+                            }
+                        }
+                    }
+                    transferred.push(block.layer);
+                    continue;
+                }
+
+                let content = if payload.mode == TextTransferMode::Move
+                    && moved_contents.contains(&block.content)
+                {
+                    if relocated_contents.insert(block.content) {
+                        edit.move_entity(block.content, Some(target_page), At::End)?;
+                    }
+                    block.content
+                } else if let Some(content) = content_copies.get(&block.content) {
+                    *content
+                } else {
+                    let content = Self::add_clipboard_content(edit, target_page, block)?;
+                    content_copies.insert(block.content, content);
+                    content
+                };
+
+                if let Some(region) = &block.source_region {
+                    let target = Self::transfer_clipboard_region(
+                        edit,
+                        &snapshot,
+                        target_page,
+                        region,
+                        payload.mode,
+                        &moved_regions,
+                        &mut region_copies,
+                        &mut relocated_regions,
+                        offset,
+                    )?;
+                    if linked_contents.insert(content) {
+                        if content != block.content {
+                            edit.relate::<RecognizedFrom>(content, target)?;
+                        } else if target != region.id
+                            && let Some(relation) =
+                                snapshot.relation_from::<RecognizedFrom>(content)?
+                        {
+                            edit.remove_relation(relation.id())?;
+                            edit.relate::<RecognizedFrom>(content, target)?;
+                        }
+                    }
+                }
+
+                let layer = if payload.mode == TextTransferMode::Move {
+                    if content != block.content {
+                        let relation = snapshot
+                            .relation_from::<Presents>(block.layer)?
+                            .ok_or_else(|| {
+                                koharu_scene::Error::Invalid(
+                                    "text layer has no presentation relation".to_owned(),
+                                )
+                            })?;
+                        edit.remove_relation(relation.id())?;
+                        edit.relate::<Presents>(block.layer, content)?;
+                    }
+                    for relation in snapshot
+                        .relations_from_as::<FlowsIn>(block.layer)
+                        .map(|relation| relation.id())
+                        .collect::<Vec<_>>()
+                    {
+                        edit.remove_relation(relation)?;
+                    }
+                    edit.move_entity(block.layer, Some(group), At::End)?;
+                    if offset.x != 0.0 || offset.y != 0.0 {
+                        if let Some(geometry) = &block.geometry {
+                            let geometry = Self::translated_geometry(geometry, offset);
+                            edit.set(block.layer, &Self::scene_geometry(&geometry))?;
+                        }
+                    }
+                    block.layer
+                } else {
+                    let layer = edit.add_text_layer(
+                        target_page,
+                        At::End,
+                        content,
+                        &SceneTextLayout {
+                            origin: Origin::User,
+                            kind: block.layout,
+                        },
+                    )?;
+                    Self::set_clipboard_layer_components(edit, layer, block, offset)?;
+                    layer
+                };
+
+                if let Some(region) = &block.automatic_region {
+                    let target = Self::transfer_clipboard_region(
+                        edit,
+                        &snapshot,
+                        target_page,
+                        region,
+                        payload.mode,
+                        &moved_regions,
+                        &mut region_copies,
+                        &mut relocated_regions,
+                        offset,
+                    )?;
+                    if payload.mode == TextTransferMode::Move
+                        && let Some(relation) = snapshot.relation_from::<FitsTo>(block.layer)?
+                    {
+                        if relation.value().target != target {
+                            edit.remove_relation(relation.id())?;
+                            edit.relate::<FitsTo>(layer, target)?;
+                        }
+                    } else if payload.mode == TextTransferMode::Copy {
+                        edit.relate::<FitsTo>(layer, target)?;
+                    }
+                }
+                transferred.push(layer);
+            }
+            Ok(())
+        })?;
+        let commit = self.commit(patch).await?;
+        self.active_page = Some(target_page);
+        Ok((commit, transferred))
     }
 
     pub(crate) async fn move_page(&mut self, page: EntityId, index: usize) -> Result<Commit> {
@@ -998,6 +1648,22 @@ impl Project {
         if width == 0 || height == 0 {
             bail!("page dimensions must be positive");
         }
+        let layer = match layer {
+            Some(layer) => Some(layer),
+            None if mode == RasterStrokeMode::Erase => snapshot.children(page)?.find(|entity| {
+                snapshot
+                    .component::<SceneRasterLayer>(*entity)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|layer| layer.kind == RasterLayerKind::Cleanup)
+                    && snapshot
+                        .component::<SceneVisibility>(*entity)
+                        .ok()
+                        .flatten()
+                        .is_none_or(|visibility| visibility.visible)
+            }),
+            None => None,
+        };
         let mut raster_layer = None;
         let mut promote_layer = false;
         let mut image = if let Some(layer) = layer {
@@ -1092,6 +1758,117 @@ impl Project {
         Ok((
             self.commit(patch).await?,
             committed_layer.expect("raster layer was selected or added while building the patch"),
+        ))
+    }
+
+    pub(crate) async fn import_cleanup_image(
+        &mut self,
+        page: EntityId,
+        data_url: String,
+    ) -> Result<(Commit, EntityId)> {
+        let (header, encoded) = data_url
+            .split_once(',')
+            .context("cleanup image must be a data URL")?;
+        if !header.starts_with("data:image/") || !header.ends_with(";base64") {
+            bail!("cleanup image must be a base64 image data URL");
+        }
+        let bytes = STANDARD
+            .decode(encoded)
+            .context("cleanup image contains invalid base64")?;
+        let snapshot = self.snapshot();
+        let page_value = snapshot.page(page)?.page()?;
+        let width = page_value.width.round() as u32;
+        let height = page_value.height.round() as u32;
+        if width == 0 || height == 0 {
+            bail!("page dimensions must be positive");
+        }
+        let decoded = image::load_from_memory(&bytes).context("clipboard image is invalid")?;
+        let (source_width, source_height) = (decoded.width(), decoded.height());
+        if source_width == 0 || source_height == 0 {
+            bail!("clipboard image dimensions must be positive");
+        }
+        let source_ratio = source_width as f64 / source_height as f64;
+        let page_ratio = width as f64 / height as f64;
+        if ((source_ratio - page_ratio) / page_ratio).abs() > 0.01 {
+            bail!("clipboard image aspect ratio does not match the page");
+        }
+        let image = if (source_width, source_height) == (width, height) {
+            decoded.to_rgba8()
+        } else {
+            image::imageops::resize(
+                &decoded.to_rgba8(),
+                width,
+                height,
+                image::imageops::FilterType::Lanczos3,
+            )
+        };
+        let mut png = Cursor::new(Vec::new());
+        DynamicImage::ImageRgba8(image).write_to(&mut png, ImageFormat::Png)?;
+        let cleanup = snapshot
+            .children(page)?
+            .filter(|entity| {
+                snapshot
+                    .component::<SceneRasterLayer>(*entity)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|layer| layer.kind == RasterLayerKind::Cleanup)
+            })
+            .collect::<Vec<_>>();
+        if cleanup.len() > 1 {
+            bail!("page contains multiple cleanup layers");
+        }
+        let mut committed_layer = cleanup.first().copied();
+        let source = AssetRole::new("source")?;
+        let patch = snapshot.patch(|edit| {
+            let layer = if let Some(layer) = committed_layer {
+                edit.promote_entity_to_user(layer)?;
+                edit.set(
+                    layer,
+                    &SceneRasterLayer {
+                        origin: Origin::User,
+                        name: "Cleanup".to_owned(),
+                        kind: RasterLayerKind::Cleanup,
+                    },
+                )?;
+                layer
+            } else {
+                let layer = edit.add_entity(page, At::Start)?;
+                edit.set(
+                    layer,
+                    &SceneRasterLayer {
+                        origin: Origin::User,
+                        name: "Cleanup".to_owned(),
+                        kind: RasterLayerKind::Cleanup,
+                    },
+                )?;
+                edit.set(
+                    layer,
+                    &SceneVisibility {
+                        origin: Origin::User,
+                        visible: true,
+                        opacity: 1.0,
+                    },
+                )?;
+                committed_layer = Some(layer);
+                layer
+            };
+            edit.set_asset(
+                layer,
+                &source,
+                AssetInput::new(
+                    png.into_inner(),
+                    "image/png",
+                    AssetMetadata {
+                        width: Some(width),
+                        height: Some(height),
+                        attributes: Default::default(),
+                    },
+                ),
+            )
+        })?;
+        Ok((
+            self.commit(patch).await?,
+            committed_layer.expect("cleanup layer was selected or created while building patch"),
         ))
     }
 
@@ -1678,6 +2455,578 @@ mod tests {
         assert_eq!(
             Project::typography_view(typography).writing_mode,
             Some(WritingMode::Vertical)
+        );
+    }
+
+    #[tokio::test]
+    async fn frontend_clipboard_snapshot_round_trips_without_becoming_stale() {
+        let mut session = Session::memory().await.unwrap();
+        let mut setup = session.snapshot().edit();
+        let source_page = setup
+            .add_page(PageDraft::new("source", 100.0, 100.0), At::End)
+            .unwrap();
+        let target_page = setup
+            .add_page(PageDraft::new("target", 100.0, 100.0), At::End)
+            .unwrap();
+        let region = setup
+            .add_analysis_region::<TextRegion>(
+                source_page,
+                At::End,
+                &SceneGeometry::rectangle(10.0, 20.0, 30.0, 40.0),
+                Some("region".to_owned()),
+            )
+            .unwrap();
+        let content = setup.add_text_content(source_page, At::End).unwrap();
+        setup.relate::<RecognizedFrom>(content, region).unwrap();
+        let layer = setup
+            .add_text_layer(
+                source_page,
+                At::End,
+                content,
+                &SceneTextLayout {
+                    origin: Origin::User,
+                    kind: TextLayoutKind::Paragraph,
+                },
+            )
+            .unwrap();
+        setup.relate::<FitsTo>(layer, region).unwrap();
+        session.commit(setup.finish().unwrap()).await.unwrap();
+        let mut project = Project::new(session, "test".to_owned());
+
+        let page = Project::page(&project.snapshot(), source_page).unwrap();
+        let Layer::Text {
+            id,
+            geometry,
+            visibility,
+            content,
+            typography,
+            layout,
+            automatic_region,
+            ..
+        } = page
+            .layers
+            .into_iter()
+            .find(|candidate| match candidate {
+                Layer::Text { id, .. } => *id == layer,
+                _ => false,
+            })
+            .unwrap()
+        else {
+            panic!("clipboard source is a text layer");
+        };
+        let region = |id: Option<EntityId>| {
+            id.and_then(|id| page.regions.iter().find(|region| region.id == id))
+                .map(|region| TextClipboardRegion {
+                    id: region.id,
+                    geometry: region.geometry.clone(),
+                    label: region.label.clone(),
+                })
+        };
+        let payload = TextClipboardPayload {
+            version: 1,
+            mode: TextTransferMode::Copy,
+            source_page,
+            layers: vec![TextClipboardLayer {
+                layer: id,
+                content: content.id,
+                source: content.source,
+                translation: content.translation,
+                role: content.role,
+                geometry,
+                visibility,
+                typography,
+                layout,
+                source_region: region(content.source_region),
+                automatic_region: region(automatic_region),
+            }],
+        };
+        let mut payload: TextClipboardPayload =
+            serde_json::from_str(&serde_json::to_string(&payload).unwrap()).unwrap();
+        // Browser number formatting can move a scene coordinate by a tiny
+        // amount when a Rust float crosses the JSON/JavaScript boundary.
+        payload.layers[0]
+            .source_region
+            .as_mut()
+            .unwrap()
+            .geometry
+            .points[2]
+            .y += 1e-13;
+
+        let (_, transferred) = project
+            .paste_text_blocks(target_page, payload, Some(Point { x: 80.0, y: 70.0 }))
+            .await
+            .expect("a payload built from the frontend page view must not be stale");
+        let target = Project::page(&project.snapshot(), target_page).unwrap();
+        let Layer::Text { content, .. } = target
+            .layers
+            .into_iter()
+            .find(|layer| matches!(layer, Layer::Text { id, .. } if *id == transferred[0]))
+            .unwrap()
+        else {
+            panic!("pasted layer is text");
+        };
+        let region = target
+            .regions
+            .into_iter()
+            .find(|region| Some(region.id) == content.source_region)
+            .unwrap();
+        let min_x = region
+            .geometry
+            .points
+            .iter()
+            .map(|point| point.x)
+            .fold(f64::INFINITY, f64::min);
+        let max_x = region
+            .geometry
+            .points
+            .iter()
+            .map(|point| point.x)
+            .fold(f64::NEG_INFINITY, f64::max);
+        let min_y = region
+            .geometry
+            .points
+            .iter()
+            .map(|point| point.y)
+            .fold(f64::INFINITY, f64::min);
+        let max_y = region
+            .geometry
+            .points
+            .iter()
+            .map(|point| point.y)
+            .fold(f64::NEG_INFINITY, f64::max);
+        assert!((min_x + max_x).mul_add(0.5, -80.0).abs() < 1e-9);
+        assert!((min_y + max_y).mul_add(0.5, -70.0).abs() < 1e-9);
+    }
+
+    #[tokio::test]
+    async fn text_clipboard_same_page_copy_and_move_center_at_the_cursor() {
+        let mut session = Session::memory().await.unwrap();
+        let mut setup = session.snapshot().edit();
+        let page = setup
+            .add_page(PageDraft::new("page", 100.0, 100.0), At::End)
+            .unwrap();
+        let content = setup.add_text_content(page, At::End).unwrap();
+        let layer = setup
+            .add_text_layer(
+                page,
+                At::End,
+                content,
+                &SceneTextLayout {
+                    origin: Origin::User,
+                    kind: TextLayoutKind::Paragraph,
+                },
+            )
+            .unwrap();
+        setup
+            .set(layer, &SceneGeometry::rectangle(10.0, 20.0, 20.0, 10.0))
+            .unwrap();
+        session.commit(setup.finish().unwrap()).await.unwrap();
+        let mut project = Project::new(session, "test".to_owned());
+
+        let copied_payload = TextClipboardPayload {
+            version: 1,
+            mode: TextTransferMode::Copy,
+            source_page: page,
+            layers: vec![Project::clipboard_layer(&project.snapshot(), layer).unwrap()],
+        };
+        let (_, copied) = project
+            .paste_text_blocks(page, copied_payload, Some(Point { x: 80.0, y: 90.0 }))
+            .await
+            .unwrap();
+        let copied_geometry = Project::clipboard_layer(&project.snapshot(), copied[0])
+            .unwrap()
+            .geometry
+            .unwrap();
+        assert_eq!(copied_geometry.points[0], Point { x: 70.0, y: 85.0 });
+        assert_eq!(copied_geometry.points[2], Point { x: 90.0, y: 95.0 });
+
+        let moved_payload = TextClipboardPayload {
+            version: 1,
+            mode: TextTransferMode::Move,
+            source_page: page,
+            layers: vec![Project::clipboard_layer(&project.snapshot(), layer).unwrap()],
+        };
+        let (_, moved) = project
+            .paste_text_blocks(page, moved_payload, Some(Point { x: 60.0, y: 70.0 }))
+            .await
+            .unwrap();
+        assert_eq!(moved, [layer]);
+        let moved_geometry = Project::clipboard_layer(&project.snapshot(), layer)
+            .unwrap()
+            .geometry
+            .unwrap();
+        assert_eq!(moved_geometry.points[0], Point { x: 50.0, y: 65.0 });
+        assert_eq!(moved_geometry.points[2], Point { x: 70.0, y: 75.0 });
+    }
+
+    #[tokio::test]
+    async fn text_clipboard_copy_preserves_visible_data_and_internal_text_relations() {
+        let mut session = Session::memory().await.unwrap();
+        let mut setup = session.snapshot().edit();
+        let source_page = setup
+            .add_page(PageDraft::new("source", 100.0, 100.0), At::End)
+            .unwrap();
+        let target_page = setup
+            .add_page(PageDraft::new("target", 100.0, 100.0), At::End)
+            .unwrap();
+        let geometry = SceneGeometry {
+            origin: Origin::User,
+            points: vec![
+                ScenePoint { x: 10.0, y: 20.0 },
+                ScenePoint { x: 40.0, y: 20.0 },
+                ScenePoint { x: 40.0, y: 50.0 },
+                ScenePoint { x: 10.0, y: 50.0 },
+            ],
+        };
+        let region = setup
+            .add_analysis_region::<TextRegion>(source_page, At::End, &geometry, None)
+            .unwrap();
+        let content = setup.add_text_content(source_page, At::End).unwrap();
+        setup
+            .set(
+                content,
+                &SceneSourceText {
+                    text: Authored::user("原文".to_owned()),
+                    language: Some(koharu_scene::LanguageTag::new("ja").unwrap()),
+                },
+            )
+            .unwrap();
+        setup
+            .set(
+                content,
+                &SceneTranslation {
+                    text: Authored::user("Translation".to_owned()),
+                    language: Some(koharu_scene::LanguageTag::new("en").unwrap()),
+                },
+            )
+            .unwrap();
+        setup
+            .set(
+                content,
+                &SceneTextRole {
+                    origin: Origin::User,
+                    role: DIALOGUE_ROLE.to_owned(),
+                },
+            )
+            .unwrap();
+        setup.relate::<RecognizedFrom>(content, region).unwrap();
+        let layer = setup
+            .add_text_layer(
+                source_page,
+                At::End,
+                content,
+                &SceneTextLayout {
+                    origin: Origin::User,
+                    kind: TextLayoutKind::Paragraph,
+                },
+            )
+            .unwrap();
+        setup.set(layer, &geometry).unwrap();
+        setup
+            .set(
+                layer,
+                &SceneTypography {
+                    origin: Origin::User,
+                    preferred_font: Some("Noto Sans".to_owned()),
+                    font_weight: Some(700),
+                    font_style: None,
+                    size: Some(18.0),
+                    auto_fit: false,
+                    color: Some([1, 2, 3, 255]),
+                    stroke_color: None,
+                    stroke_width: None,
+                    alignment: Some(koharu_scene::TextAlignment::Center),
+                    writing_mode: Some(WritingMode::Vertical),
+                    extensions: Default::default(),
+                },
+            )
+            .unwrap();
+        setup.relate::<FitsTo>(layer, region).unwrap();
+        let second_layer = setup
+            .add_text_layer(
+                source_page,
+                At::End,
+                content,
+                &SceneTextLayout {
+                    origin: Origin::User,
+                    kind: TextLayoutKind::Paragraph,
+                },
+            )
+            .unwrap();
+        setup.set(second_layer, &geometry).unwrap();
+        setup.relate::<FitsTo>(second_layer, region).unwrap();
+        session.commit(setup.finish().unwrap()).await.unwrap();
+        let mut project = Project::new(session, "test".to_owned());
+        let payload = TextClipboardPayload {
+            version: 1,
+            mode: TextTransferMode::Copy,
+            source_page,
+            layers: vec![
+                Project::clipboard_layer(&project.snapshot(), layer).unwrap(),
+                Project::clipboard_layer(&project.snapshot(), second_layer).unwrap(),
+            ],
+        };
+
+        let (commit, copied) = project
+            .paste_text_blocks(target_page, payload.clone(), None)
+            .await
+            .unwrap();
+        project.record_commit(&commit);
+        let copied_layer = copied[0];
+        let copied_block = Project::clipboard_layer(&project.snapshot(), copied_layer).unwrap();
+        assert_ne!(copied_layer, layer);
+        assert_ne!(copied_block.content, content);
+        assert_eq!(copied_block.source, payload.layers[0].source);
+        assert_eq!(copied_block.translation, payload.layers[0].translation);
+        assert_eq!(copied_block.role, payload.layers[0].role);
+        assert_eq!(copied_block.geometry, payload.layers[0].geometry);
+        assert_eq!(copied_block.typography, payload.layers[0].typography);
+        assert_ne!(
+            copied_block.source_region.as_ref().unwrap().id,
+            payload.layers[0].source_region.as_ref().unwrap().id
+        );
+        assert_eq!(
+            copied_block.source_region.as_ref().unwrap().id,
+            copied_block.automatic_region.as_ref().unwrap().id
+        );
+        assert_eq!(
+            project
+                .snapshot()
+                .relations_from_as::<FlowsIn>(copied_layer)
+                .count(),
+            0
+        );
+        assert_eq!(
+            project
+                .snapshot()
+                .relation_from::<Presents>(copied[1])
+                .unwrap()
+                .unwrap()
+                .value()
+                .target,
+            copied_block.content
+        );
+
+        project.undo().await.unwrap();
+        assert!(project.snapshot().entity(copied_layer).is_err());
+    }
+
+    #[tokio::test]
+    async fn moving_one_of_two_shared_text_layers_uses_copy_on_write() {
+        let mut session = Session::memory().await.unwrap();
+        let mut setup = session.snapshot().edit();
+        let source_page = setup
+            .add_page(PageDraft::new("source", 100.0, 100.0), At::End)
+            .unwrap();
+        let target_page = setup
+            .add_page(PageDraft::new("target", 100.0, 100.0), At::End)
+            .unwrap();
+        let content = setup.add_text_content(source_page, At::End).unwrap();
+        setup
+            .set(
+                content,
+                &SceneSourceText {
+                    text: Authored::user("shared".to_owned()),
+                    language: None,
+                },
+            )
+            .unwrap();
+        let layout = SceneTextLayout {
+            origin: Origin::User,
+            kind: TextLayoutKind::Paragraph,
+        };
+        let moved = setup
+            .add_text_layer(source_page, At::End, content, &layout)
+            .unwrap();
+        let retained = setup
+            .add_text_layer(source_page, At::End, content, &layout)
+            .unwrap();
+        session.commit(setup.finish().unwrap()).await.unwrap();
+        let mut project = Project::new(session, "test".to_owned());
+        let payload = TextClipboardPayload {
+            version: 1,
+            mode: TextTransferMode::Move,
+            source_page,
+            layers: vec![Project::clipboard_layer(&project.snapshot(), moved).unwrap()],
+        };
+
+        let (commit, layers) = project
+            .paste_text_blocks(target_page, payload, None)
+            .await
+            .unwrap();
+        project.record_commit(&commit);
+        assert_eq!(layers, [moved]);
+        let snapshot = project.snapshot();
+        let moved_content = snapshot
+            .relation_from::<Presents>(moved)
+            .unwrap()
+            .unwrap()
+            .value()
+            .target;
+        assert_ne!(moved_content, content);
+        assert_eq!(
+            snapshot
+                .relation_from::<Presents>(retained)
+                .unwrap()
+                .unwrap()
+                .value()
+                .target,
+            content
+        );
+        assert_eq!(
+            snapshot
+                .component::<SceneSourceText>(moved_content)
+                .unwrap()
+                .unwrap()
+                .text
+                .value,
+            "shared"
+        );
+
+        let exclusive = TextClipboardPayload {
+            version: 1,
+            mode: TextTransferMode::Move,
+            source_page,
+            layers: vec![Project::clipboard_layer(&project.snapshot(), retained).unwrap()],
+        };
+        let (exclusive_commit, exclusive_layers) = project
+            .paste_text_blocks(target_page, exclusive, None)
+            .await
+            .unwrap();
+        project.record_commit(&exclusive_commit);
+        assert_eq!(exclusive_layers, [retained]);
+        assert_eq!(
+            project
+                .snapshot()
+                .relation_from::<Presents>(retained)
+                .unwrap()
+                .unwrap()
+                .value()
+                .target,
+            content
+        );
+
+        project.undo().await.unwrap();
+        project.undo().await.unwrap();
+        let snapshot = project.snapshot();
+        assert_eq!(
+            snapshot
+                .relation_from::<Presents>(moved)
+                .unwrap()
+                .unwrap()
+                .value()
+                .target,
+            content
+        );
+    }
+
+    #[tokio::test]
+    async fn cleanup_import_scales_reuses_the_layer_and_is_the_default_eraser_target() {
+        let mut session = Session::memory().await.unwrap();
+        let mut setup = session.snapshot().edit();
+        let page = setup
+            .add_page(PageDraft::new("page", 4.0, 4.0), At::End)
+            .unwrap();
+        session.commit(setup.finish().unwrap()).await.unwrap();
+        let mut project = Project::new(session, "test".to_owned());
+        let mut source = Cursor::new(Vec::new());
+        DynamicImage::ImageRgba8(RgbaImage::from_pixel(2, 2, image::Rgba([9, 8, 7, 123])))
+            .write_to(&mut source, ImageFormat::Png)
+            .unwrap();
+        let data_url = format!(
+            "data:image/png;base64,{}",
+            STANDARD.encode(source.into_inner())
+        );
+
+        let mut wide = Cursor::new(Vec::new());
+        DynamicImage::ImageRgba8(RgbaImage::new(2, 1))
+            .write_to(&mut wide, ImageFormat::Png)
+            .unwrap();
+        assert!(
+            project
+                .import_cleanup_image(
+                    page,
+                    format!(
+                        "data:image/png;base64,{}",
+                        STANDARD.encode(wide.into_inner())
+                    ),
+                )
+                .await
+                .is_err()
+        );
+
+        let (first, cleanup) = project
+            .import_cleanup_image(page, data_url.clone())
+            .await
+            .unwrap();
+        project.record_commit(&first);
+        let first_blob = project
+            .snapshot()
+            .asset(cleanup, &AssetRole::new("source").unwrap())
+            .unwrap()
+            .unwrap()
+            .blob;
+        let first_image =
+            image::load_from_memory(&project.snapshot().read_blob(first_blob).await.unwrap())
+                .unwrap()
+                .to_rgba8();
+        assert!(first_image.pixels().all(|pixel| pixel[3] == 123));
+        let (second, replacement) = project.import_cleanup_image(page, data_url).await.unwrap();
+        project.record_commit(&second);
+        assert_eq!(replacement, cleanup);
+        assert_eq!(
+            project
+                .snapshot()
+                .asset(cleanup, &AssetRole::new("source").unwrap())
+                .unwrap()
+                .unwrap()
+                .metadata
+                .width,
+            Some(4)
+        );
+        assert_eq!(
+            project
+                .snapshot()
+                .component::<SceneRasterLayer>(cleanup)
+                .unwrap()
+                .unwrap()
+                .kind,
+            RasterLayerKind::Cleanup
+        );
+
+        let (erased, erased_layer) = project
+            .apply_raster_stroke(
+                page,
+                None,
+                RasterStrokeMode::Erase,
+                [0; 4],
+                3.0,
+                vec![ScenePoint { x: 2.0, y: 2.0 }],
+            )
+            .await
+            .unwrap();
+        project.record_commit(&erased);
+        assert_eq!(erased_layer, cleanup);
+        let asset = project
+            .snapshot()
+            .asset(cleanup, &AssetRole::new("source").unwrap())
+            .unwrap()
+            .unwrap();
+        let image =
+            image::load_from_memory(&project.snapshot().read_blob(asset.blob).await.unwrap())
+                .unwrap()
+                .to_rgba8();
+        assert!(image.pixels().any(|pixel| pixel[3] == 0));
+
+        project.undo().await.unwrap();
+        assert_eq!(
+            project
+                .snapshot()
+                .asset(cleanup, &AssetRole::new("source").unwrap())
+                .unwrap()
+                .unwrap()
+                .blob,
+            first_blob
         );
     }
 

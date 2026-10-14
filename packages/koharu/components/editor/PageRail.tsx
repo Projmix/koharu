@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query'
 import { observeElementRect, useVirtualizer } from '@tanstack/react-virtual'
 import {
   CircleAlert,
+  Copy,
   FilePlus2,
   FolderOpen,
   LoaderCircle,
@@ -210,6 +211,20 @@ export function PageRail() {
       return refresh(projectKey, pagesKey, pageKey)
     })
 
+  const duplicatePages = (page: string) => {
+    const targets = selected.includes(page) ? selectedPageIds : [page]
+    void call(commands.duplicatePages, targets)
+      .then((result) => {
+        selectionRequest.current += 1
+        queryClient.setQueryData(projectKey, result.project)
+        queryClient.setQueryData(pageKey, result.page)
+        selectPages(result.duplicated)
+        selectLayers([])
+        return refresh(pagesKey)
+      })
+      .catch(() => undefined)
+  }
+
   const requestDelete = (page: string) => {
     const targets = selected.includes(page) ? selectedPageIds : [page]
     if (targets.length === pages.length) {
@@ -352,6 +367,7 @@ export function PageRail() {
                       onDragStart={() => setDragged(page.id)}
                       onDragEnd={() => setDragged(null)}
                       onRename={() => openRename(page)}
+                      onDuplicate={() => duplicatePages(page.id)}
                       onDelete={() => requestDelete(page.id)}
                       onDrop={() => {
                         if (dragged && dragged !== page.id) {
@@ -505,6 +521,7 @@ function PageItem({
   onDragStart,
   onDragEnd,
   onRename,
+  onDuplicate,
   onDelete,
   onDrop,
 }: {
@@ -517,6 +534,7 @@ function PageItem({
   onDragStart: () => void
   onDragEnd: () => void
   onRename: () => void
+  onDuplicate: () => void
   onDelete: () => void
   onDrop: () => void
 }) {
@@ -592,6 +610,9 @@ function PageItem({
               <MoreHorizontal />
             </DropdownMenuTrigger>
             <DropdownMenuContent align='end'>
+              <DropdownMenuItem onClick={onDuplicate}>
+                <Copy /> {t('navigator.duplicate')}
+              </DropdownMenuItem>
               <DropdownMenuItem onClick={onRename}>{t('navigator.rename')}</DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem variant='destructive' onClick={onDelete}>

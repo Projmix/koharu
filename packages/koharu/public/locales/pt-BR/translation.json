@@ -124,6 +124,10 @@
     "style": "Estilo"
   },
   "inference": {
+    "importChapterDone": "Translations imported",
+    "exportChapterHelp": "Extract the archive. Paste prompt.txt into your chosen chat and attach chapter.json. Save the response as translation.json and import it.",
+    "importChapter": "Import translated JSON",
+    "exportChapter": "Export for manual translation (ZIP)",
     "currentPage": "Página atual",
     "currentPageDescription": "Processa somente a página na tela.",
     "automatic": "Automático",
@@ -162,6 +166,10 @@
     "typing": "Letreiramento"
   },
   "inspector": {
+    "transformTarget": "Transformar",
+    "transformText": "Texto",
+    "transformRegion": "Região OCR",
+    "transformHint": "Arraste o bloco para mover ou as alças para redimensionar. O modo automático ajusta a fonte ao quadro.",
     "alignBottom": "Alinhar embaixo",
     "alignCenter": "Centralizar",
     "alignLeft": "Alinhar à esquerda",
@@ -178,6 +186,7 @@
     "color": "Cor",
     "customFrame": "Quadro personalizado",
     "decreaseBorderWidth": "Diminuir largura do contorno",
+    "decreaseFontSize": "Diminuir o tamanho da fonte em 1 pt",
     "direction": "Direção",
     "font": "Fonte",
     "fontSize": "Tamanho da fonte",
@@ -190,6 +199,7 @@
     "fontWeight": "Peso da fonte",
     "horizontal": "Horizontal",
     "increaseBorderWidth": "Aumentar largura do contorno",
+    "increaseFontSize": "Aumentar o tamanho da fonte em 1 pt",
     "opacity": "Opacidade",
     "placement": "Posicionamento",
     "resetAutoFit": "Redefinir para ajuste automático",
@@ -218,9 +228,11 @@
     "zh-TW": "繁體中文"
   },
   "layers": {
+    "collapse": "Recolher {{name}}",
     "delete": "Excluir {{name}}",
     "edit": "Editar {{name}}",
     "empty": "Não há camadas nesta página.",
+    "expand": "Expandir {{name}}",
     "hide": "Ocultar {{name}}",
     "imageName": "Imagem {{index}}",
     "kinds": {
@@ -308,6 +320,7 @@
     "noResults": "Nenhuma página corresponde a este filtro.",
     "pageName": "Nome da página",
     "pages": "Páginas",
+    "duplicate": "Duplicar",
     "rename": "Renomear",
     "renameDescription": "Escolha um novo nome para esta página.",
     "renameTitle": "Renomear página"
@@ -350,7 +363,8 @@
     "minimax": "Modelos de linguagem da MiniMax.",
     "openai": "Modelos de linguagem da OpenAI.",
     "openai-compatible": "Qualquer servidor que ofereça uma API compatível com a OpenAI.",
-    "openrouter": "Modelos roteados pelo OpenRouter."
+    "openrouter": "Modelos roteados pelo OpenRouter.",
+    "qwen-ocr": "Qwen-VL-OCR especializado via Alibaba Cloud, com chave e endereço regional separados."
   },
   "resources": {
     "cpu": "CPU",
@@ -419,13 +433,18 @@
         "instructionsPlaceholder": "Orientações opcionais para OCR",
         "local": "Local (CPU)",
         "localModel": "Modelo OCR local",
-        "method": "Método de OCR"
+        "method": "Método de OCR",
+        "hybrid": "Local + API",
+        "hybridDescription": "Primeiro, o OCR local processa todas as páginas do capítulo. Depois, cada recorte e seu texto são enviados à API selecionada. Os resultados são aplicados automaticamente."
       },
       "inpainting": {
         "apiModel": "Modelo de edição de imagem",
-        "localModel": "Modelo local de restauração",
-        "method": "Método de restauração",
-        "options": "Opções de restauração por API",
+        "localModel": "Modelo local de limpeza",
+        "restorationModel": "Modelo de restauração",
+        "restorationProvider": "Provedor de restauração",
+        "restorationPrompt": "Prompt de restauração",
+        "method": "Método de limpeza",
+        "options": "Opções de limpeza por API",
         "promptPreset": "Predefinição do prompt",
         "promptPresets": {
           "cleanup-all": "Remover todo o texto e marcas-d'água",
@@ -433,7 +452,11 @@
           "custom": "Prompt personalizado",
           "translate-russian": "Substituir os textos por russo"
         },
-        "provider": "Provedor de imagens"
+        "provider": "Provedor de imagens",
+        "removeDescription": "Modelo local para o pincel de remoção, independente da limpeza de páginas e da restauração retangular.",
+        "restorationDescription": "Modelo de API para restaurar uma seleção retangular, independente da limpeza de páginas e do pincel de remoção.",
+        "previewBeforeSend": "Prévia antes de enviar à API",
+        "previewBeforeSendDescription": "Mostra a imagem e permite editar o prompt antes da limpeza de páginas via API ou da restauração da seleção. A remoção local não muda."
       },
       "processing": "Processando",
       "stages": {
@@ -442,8 +465,8 @@
           "title": "Detecção"
         },
         "inpainting": {
-          "description": "Reconstrói a arte sob o texto removido.",
-          "title": "Preenchimento"
+          "description": "Usado na etapa de limpeza de páginas. As ferramentas de remoção e restauração são configuradas separadamente abaixo.",
+          "title": "Limpar"
         },
         "ocr": {
           "description": "Lê o texto de origem nas regiões detectadas.",
@@ -458,6 +481,7 @@
       "connections": "Conexões",
       "connectionsDescription": "As credenciais são armazenadas com segurança neste dispositivo.",
       "falDescription": "Credencial usada pelos modelos de edição de imagem da Fal.ai.",
+      "replicateDescription": "Edição de imagens com FLUX. Dev e Klein desativam a verificação da saída; Pro, Max e Flex mantêm as restrições do modelo.",
       "credential": "Credencial",
       "credentialLabel": "Credencial de {{provider}}",
       "description": "Conecte provedores de tradução e modelos de linguagem.",
@@ -465,7 +489,7 @@
       "title": "Provedores"
     },
     "shortcuts": {
-      "description": "Use Ctrl mais a tecla configurada quando nenhum campo de texto estiver em foco.",
+      "description": "Use Alt mais a tecla configurada quando nenhum campo de texto estiver em foco.",
       "inputLabel": "Atalho de {{action}}",
       "title": "Atalhos",
       "tools": "Ferramentas"
@@ -558,6 +582,7 @@
     "ocr": "Região OCR",
     "pan": "Mover",
     "remove": "Remover",
+    "restore": "Restaurar",
     "select": "Selecionar",
     "text": "Texto"
   },
@@ -578,12 +603,35 @@
     "later": "Mais tarde",
     "noNotes": "Nenhuma nota de versão fornecida.",
     "retry": "Tentar novamente",
-    "update": "Atualizar"
+    "update": "Atualizar",
+    "upstream": {
+      "title": "O Koharu original tem uma atualização",
+      "description": "O Koharu original {{version}} é mais recente que a versão integrada {{integratedVersion}}. Suas mudanças podem ser úteis para este fork. As atualizações automáticas instalam apenas versões de Projmix/koharu.",
+      "view": "Ver versão original",
+      "dismiss": "Ocultar esta versão"
+    }
   },
   "window": {
     "close": "Fechar",
     "maximize": "Maximizar",
     "minimize": "Minimizar",
     "restore": "Restaurar"
+  },
+  "imageEditPreview": {
+    "title": "Prévia da solicitação de edição de imagem",
+    "description": "Confira a imagem e o prompt que serão enviados. As alterações do prompt valem apenas para esta solicitação e não são salvas nas configurações.",
+    "image": "Imagem a enviar",
+    "prompt": "Prompt desta solicitação",
+    "resetPrompt": "Redefinir prompt",
+    "send": "Enviar à API",
+    "cancel": "Cancelar tarefa",
+    "close": "Fechar",
+    "actualSize": "100%",
+    "fitImage": "Ajustar imagem",
+    "restoration": "Restaurar seleção",
+    "cleanup": "Limpeza de página",
+    "failed": "Não foi possível resolver a prévia: {{error}}",
+    "cleanupLayers": "Original + camadas de pintura visíveis. Um PNG; camadas de texto, máscaras e alças de seleção são excluídas.",
+    "restorationLayers": "Área selecionada do original + camadas visíveis de limpeza e pintura, na ordem das camadas. Um PNG; camadas de texto, máscaras e alças de seleção são excluídas."
   }
 }

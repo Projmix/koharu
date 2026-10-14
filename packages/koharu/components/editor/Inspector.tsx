@@ -9,6 +9,7 @@ import {
   ArrowUp,
   Brush,
   ChevronDown,
+  ChevronRight,
   Eye,
   EyeOff,
   Folder,
@@ -21,7 +22,7 @@ import {
   Trash2,
   Type,
 } from 'lucide-react'
-import { type MouseEvent, useEffect, useId, useMemo, useRef, useState } from 'react'
+import { type MouseEvent, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { ColorWell } from '@/components/controls/ColorWell'
@@ -148,9 +149,11 @@ function TypeInspector() {
   const page = usePage().data
   const selectedIds = useKoharuStore((state) => state.selectedLayers)
   const availableFonts = useFonts().data
-  const expandedSelection = page ? expandLayerSelection(page.layers, selectedIds) : []
-  const selected =
-    page?.layers.filter(isTextLayer).filter((layer) => expandedSelection.includes(layer.id)) ?? []
+  const selected = useMemo(() => {
+    if (!page) return []
+    const expanded = expandLayerSelection(page.layers, selectedIds)
+    return page.layers.filter(isTextLayer).filter((layer) => expanded.includes(layer.id))
+  }, [page, selectedIds])
   const current = selected[0]
   const [draft, setDraft] = useState<{
     layer: EntityId
@@ -160,22 +163,25 @@ function TypeInspector() {
 
   useEffect(() => setDraft(null), [current?.id])
 
-  const apply = (update: (value: Typography) => Typography) => {
-    if (!selected.length) return
-    const updates = selected.map((layer) => ({
-      layer: layer.id,
-      typography: update(layer.typography ?? defaultTypography),
-    }))
-    const optimistic = current && updates.find(({ layer }) => layer === current.id)
-    if (optimistic) setDraft(optimistic)
-    const sequence = ++updateSequence.current
-    void call(commands.setTypography, updates)
-      .then(() => refresh(projectKey, pageKey))
-      .catch(() => undefined)
-      .finally(() => {
-        if (updateSequence.current === sequence) setDraft(null)
-      })
-  }
+  const apply = useCallback(
+    (update: (value: Typography) => Typography) => {
+      if (!selected.length) return
+      const updates = selected.map((layer) => ({
+        layer: layer.id,
+        typography: update(layer.typography ?? defaultTypography),
+      }))
+      const optimistic = current && updates.find(({ layer }) => layer === current.id)
+      if (optimistic) setDraft(optimistic)
+      const sequence = ++updateSequence.current
+      void call(commands.setTypography, updates)
+        .then(() => refresh(projectKey, pageKey))
+        .catch(() => undefined)
+        .finally(() => {
+          if (updateSequence.current === sequence) setDraft(null)
+        })
+    },
+    [current, selected],
+  )
 
   const typography =
     current && draft?.layer === current.id
@@ -206,6 +212,43 @@ function TypeInspector() {
   const writingModeChoice = typography.writing_mode ?? 'Auto'
   const effectiveAlignment =
     typography.alignment ?? (writingMode === 'Vertical' ? 'Start' : 'Center')
+
+  const changeFontSize = useCallback(
+    (delta: -1 | 1) => {
+      const next = Math.min(300, Math.max(0.5, size + delta))
+      if (next === size) return
+      apply((value) => ({ ...value, size: next, auto_fit: false }))
+    },
+    [apply, size],
+  )
+
+  useEffect(() => {
+    const handleFontSizeShortcut = (event: KeyboardEvent) => {
+      if (disabled || event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey) {
+        return
+      }
+      const delta =
+        event.key === '+' || event.code === 'NumpadAdd'
+          ? 1
+          : event.key === '-' || event.code === 'NumpadSubtract'
+            ? -1
+            : null
+      if (delta === null) return
+      const target = event.target
+      if (
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target instanceof HTMLSelectElement ||
+        (target instanceof HTMLElement && target.isContentEditable)
+      ) {
+        return
+      }
+      event.preventDefault()
+      changeFontSize(delta)
+    }
+    window.addEventListener('keydown', handleFontSizeShortcut)
+    return () => window.removeEventListener('keydown', handleFontSizeShortcut)
+  }, [changeFontSize, disabled])
 
   return (
     <div className='min-w-0 p-2' data-testid='type-inspector' aria-disabled={disabled}>
@@ -249,6 +292,7 @@ function TypeInspector() {
               disabled={disabled}
               value={size}
               autoFit={typography.auto_fit}
+              onStep={changeFontSize}
               onChange={(next) => apply((value) => ({ ...value, size: next, auto_fit: false }))}
               onAutoFit={() =>
                 apply((value) => ({
@@ -489,12 +533,12 @@ function normalizeFontName(value: string): string {
   return value.normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase()
 }
 
-function displayedLayers(layers: Layer[], page: EntityId) {
+function displayedLayers(layers: Layer[], page: EntityId, collapsed: ReadonlySet<EntityId>) {
   const indexes = new Map(layers.map((layer, index) => [layer.id, index]))
   const rows: { layer: Layer; index: number; depth: number }[] = []
   const append = (layer: Layer, depth: number) => {
     rows.push({ layer, index: indexes.get(layer.id) ?? 0, depth })
-    if (!isGroupLayer(layer)) return
+    if (!isGroupLayer(layer) || collapsed.has(layer.id)) return
     const children = layerChildren(layers, layer.id)
     const ordered = layer.role === 'text' ? children : [...children].reverse()
     for (const child of ordered) append(child, depth + 1)
@@ -509,6 +553,7 @@ function LayersInspector() {
   const page = usePage().data
   const selected = useKoharuStore((state) => state.selectedLayers)
   const selectLayers = useKoharuStore((state) => state.selectLayers)
+  const pendingTextFocus = useKoharuStore((state) => state.pendingTextFocus)
   const [expandedLayer, setExpandedLayer] = useState<EntityId | null>(
     selected.length === 1 ? (selected[0] ?? null) : null,
   )
@@ -517,18 +562,31 @@ function LayersInspector() {
   const [changingRole, setChangingRole] = useState<EntityId | null>(null)
   const [dragPreview, setDragPreview] = useState<OcrDragPreview | null>(null)
   const anchor = useRef<EntityId | null>(null)
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<EntityId>>(() => new Set())
 
   useEffect(() => {
     setExpandedLayer(selected.length === 1 ? (selected[0] ?? null) : null)
   }, [selected])
+
+  useEffect(() => {
+    if (!pendingTextFocus || !page) return
+    setExpandedLayer(pendingTextFocus)
+    const parents = new Set<EntityId>()
+    let parent = page.layers.find((layer) => layer.id === pendingTextFocus)?.parent
+    while (parent && parent !== page.id && !parents.has(parent)) {
+      parents.add(parent)
+      parent = page.layers.find((layer) => layer.id === parent)?.parent
+    }
+    setCollapsedGroups((current) => new Set([...current].filter((id) => !parents.has(id))))
+  }, [pendingTextFocus, page])
 
   const previewLayers = useMemo(
     () => (page ? applyOcrDragPreview(page.layers, page.id, dragPreview) : []),
     [page, dragPreview],
   )
   const layers = useMemo(
-    () => (page ? displayedLayers(previewLayers, page.id) : []),
-    [page, previewLayers],
+    () => (page ? displayedLayers(previewLayers, page.id, collapsedGroups) : []),
+    [page, previewLayers, collapsedGroups],
   )
   const { layerNumbers } = useMemo(() => ocrNumbering(previewLayers), [previewLayers])
 
@@ -720,6 +778,14 @@ function LayersInspector() {
     )
   }
 
+  const toggleGroup = (group: EntityId) =>
+    setCollapsedGroups((current) => {
+      const next = new Set(current)
+      if (next.has(group)) next.delete(group)
+      else next.add(group)
+      return next
+    })
+
   return (
     <div className='flex min-h-0 flex-1 flex-col'>
       <header className='flex h-8 shrink-0 items-center gap-1.5 border-b border-border/80 px-2'>
@@ -745,6 +811,7 @@ function LayersInspector() {
                 ? storedSiblings
                 : [...storedSiblings].reverse()
             const position = siblings.findIndex((candidate) => candidate.id === layer.id)
+            const groupCollapsed = isGroupLayer(layer) && collapsedGroups.has(layer.id)
             return (
               <LayerRow
                 key={`${layer.type}:${layer.id}`}
@@ -756,6 +823,8 @@ function LayersInspector() {
                 selected={selected.includes(layer.id)}
                 expanded={!locked && expandedLayer === layer.id}
                 locked={locked}
+                groupCollapsed={groupCollapsed}
+                onGroupToggle={isGroupLayer(layer) ? () => toggleGroup(layer.id) : undefined}
                 onSelect={(event) =>
                   selectLayer(layer.id, event.ctrlKey || event.metaKey, event.shiftKey)
                 }
@@ -811,6 +880,8 @@ function LayerRow({
   selected,
   expanded,
   locked,
+  groupCollapsed,
+  onGroupToggle,
   onSelect,
   onToggle,
   onMove,
@@ -835,6 +906,8 @@ function LayerRow({
   expanded: boolean
   locked: boolean
   onSelect: (event: MouseEvent<HTMLButtonElement>) => void
+  groupCollapsed: boolean
+  onGroupToggle?: () => void
   onToggle: () => void
   onMove: (delta: number) => void
   onNumberChange: (number: number) => void
@@ -909,13 +982,28 @@ function LayerRow({
         className='min-w-0 overflow-hidden rounded-lg transition-colors duration-150 data-[selected=true]:bg-accent motion-reduce:transition-none'
       >
         <div className='relative flex min-w-0 items-center gap-0.5'>
+          {onGroupToggle && (
+            <button
+              type='button'
+              aria-label={t(groupCollapsed ? 'layers.expand' : 'layers.collapse', { name })}
+              aria-expanded={!groupCollapsed}
+              className='grid size-5 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/25'
+              onClick={onGroupToggle}
+            >
+              {groupCollapsed ? (
+                <ChevronRight className='size-3.5' />
+              ) : (
+                <ChevronDown className='size-3.5' />
+              )}
+            </button>
+          )}
           <button
             type='button'
             aria-label={t('layers.edit', { name })}
             aria-expanded={locked ? undefined : expanded}
             disabled={locked}
             className='flex min-w-0 flex-1 items-center gap-1.5 rounded-lg px-1.5 py-1 text-left hover:bg-foreground/[0.05] focus-visible:ring-2 focus-visible:ring-ring/25'
-            onClick={(event) => onSelect(event.shiftKey)}
+            onClick={onSelect}
           >
             {number === undefined ? (
               <Icon className='size-3.5 shrink-0 text-muted-foreground' />
@@ -1060,6 +1148,16 @@ function LayerRow({
 
 function LayerEditor({ layer, onDelete }: { layer: Layer; onDelete?: () => void }) {
   const { t } = useTranslation()
+  const translationInput = useRef<HTMLTextAreaElement>(null)
+  const pendingTextFocus = useKoharuStore((state) => state.pendingTextFocus)
+  const textTransformTarget = useKoharuStore((state) => state.textTransformTarget)
+  useEffect(() => {
+    if (pendingTextFocus !== layer.id || !translationInput.current) return
+    translationInput.current.focus()
+    translationInput.current.select()
+    translationInput.current.scrollIntoView({ block: 'nearest' })
+    useKoharuStore.setState({ pendingTextFocus: null })
+  }, [pendingTextFocus, layer.id])
   const name = localizedLayerName(layer, 0, t)
   const [opacity, setOpacity] = useState(layer.visibility.opacity * 100)
 
@@ -1131,6 +1229,26 @@ function LayerEditor({ layer, onDelete }: { layer: Layer; onDelete?: () => void 
       </div>
       {isTextLayer(layer) && (
         <>
+          {layer.content.source_region && (
+            <div className='flex gap-1' role='group' aria-label={t('inspector.transformTarget')}>
+              {(['text', 'region'] as const).map((target) => (
+                <Button
+                  key={target}
+                  size='xs'
+                  variant={textTransformTarget === target ? 'secondary' : 'ghost'}
+                  aria-pressed={textTransformTarget === target}
+                  onClick={() =>
+                    useKoharuStore.setState({ textTransformTarget: target, tool: 'select' })
+                  }
+                >
+                  {t(target === 'text' ? 'inspector.transformText' : 'inspector.transformRegion')}
+                </Button>
+              ))}
+            </div>
+          )}
+          <p className='text-[10px] leading-4 text-muted-foreground'>
+            {t('inspector.transformHint')}
+          </p>
           <div className='flex h-5 min-w-0 items-center gap-1.5'>
             <span className='text-[8px] font-medium text-muted-foreground uppercase'>
               {t('inspector.placement')}
@@ -1180,6 +1298,7 @@ function LayerEditor({ layer, onDelete }: { layer: Layer; onDelete?: () => void 
           <InspectorField label={t('inspector.translation')}>
             <CommitTextarea
               data-testid={`edit-translation-${layer.id}`}
+              ref={translationInput}
               aria-label={t('layers.translationLabel', { name })}
               wrap='soft'
               className='max-h-16 min-h-9 w-full max-w-full min-w-0 resize-y overflow-y-auto rounded-md border-primary/25 bg-background px-1.5 py-1 text-[12px] leading-4 md:text-[12px]'
@@ -1214,12 +1333,14 @@ function FontSizeField({
   value,
   autoFit,
   disabled,
+  onStep,
   onChange,
   onAutoFit,
 }: {
   value: number
   autoFit: boolean
   disabled: boolean
+  onStep: (delta: -1 | 1) => void
   onChange: (value: number) => void
   onAutoFit: () => void
 }) {
@@ -1266,12 +1387,30 @@ function FontSizeField({
       onValueCommitted={commit}
     >
       <NumberFieldGroup>
+        <button
+          type='button'
+          disabled={disabled || value <= 0.5}
+          aria-label={t('inspector.decreaseFontSize')}
+          className='grid size-6 shrink-0 place-items-center border-r border-input text-muted-foreground transition-colors outline-none hover:bg-muted hover:text-foreground focus-visible:bg-muted focus-visible:text-foreground disabled:pointer-events-none disabled:opacity-40 [&_svg]:size-3'
+          onClick={() => onStep(-1)}
+        >
+          <Minus />
+        </button>
         <NumberFieldInput
           data-testid='type-size'
           aria-label={t('inspector.fontSize')}
           placeholder={t('inspector.auto')}
           className='px-2 text-left'
         />
+        <button
+          type='button'
+          disabled={disabled || value >= 300}
+          aria-label={t('inspector.increaseFontSize')}
+          className='grid size-6 shrink-0 place-items-center border-l border-input text-muted-foreground transition-colors outline-none hover:bg-muted hover:text-foreground focus-visible:bg-muted focus-visible:text-foreground disabled:pointer-events-none disabled:opacity-40 [&_svg]:size-3'
+          onClick={() => onStep(1)}
+        >
+          <Plus />
+        </button>
         <DropdownMenu>
           <DropdownMenuTrigger
             disabled={disabled}

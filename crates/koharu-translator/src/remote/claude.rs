@@ -68,6 +68,12 @@ pub(super) async fn translate(
         thinking: generation.reasoning.map(|enabled| ThinkingConfig {
             kind: if enabled { "adaptive" } else { "disabled" },
         }),
+        output_config: OutputConfig {
+            format: JsonOutputFormat {
+                kind: "json_schema",
+                schema: prompt::output_schema(),
+            },
+        },
     };
     let response: Response = send_json(
         "claude",
@@ -96,6 +102,19 @@ struct Request<'a> {
     temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     thinking: Option<ThinkingConfig>,
+    output_config: OutputConfig,
+}
+
+#[derive(Serialize)]
+struct OutputConfig {
+    format: JsonOutputFormat,
+}
+
+#[derive(Serialize)]
+struct JsonOutputFormat {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    schema: serde_json::Value,
 }
 
 #[derive(Serialize)]

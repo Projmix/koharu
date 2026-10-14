@@ -124,6 +124,10 @@
     "style": "Stil"
   },
   "inference": {
+    "importChapterDone": "Translations imported",
+    "exportChapterHelp": "Extract the archive. Paste prompt.txt into your chosen chat and attach chapter.json. Save the response as translation.json and import it.",
+    "importChapter": "Import translated JSON",
+    "exportChapter": "Export for manual translation (ZIP)",
     "currentPage": "Geçerli sayfa",
     "currentPageDescription": "Yalnızca tuvaldeki sayfayı işler.",
     "automatic": "Otomatik",
@@ -162,6 +166,10 @@
     "typing": "Dizgi"
   },
   "inspector": {
+    "transformTarget": "Dönüştür",
+    "transformText": "Metin",
+    "transformRegion": "OCR bölgesi",
+    "transformHint": "Taşımak için bloğu, boyutlandırmak için tutamaçları sürükleyin. Otomatik mod yazı boyutunu çerçeveye uyarlar.",
     "alignBottom": "Alta hizala",
     "alignCenter": "Ortala",
     "alignLeft": "Sola hizala",
@@ -178,6 +186,7 @@
     "color": "Renk",
     "customFrame": "Özel çerçeve",
     "decreaseBorderWidth": "Kenarlık genişliğini azalt",
+    "decreaseFontSize": "Yazı tipi boyutunu 1 pt azalt",
     "direction": "Yön",
     "font": "Yazı tipi",
     "fontSize": "Yazı tipi boyutu",
@@ -190,6 +199,7 @@
     "fontWeight": "Yazı tipi kalınlığı",
     "horizontal": "Yatay",
     "increaseBorderWidth": "Kenarlık genişliğini artır",
+    "increaseFontSize": "Yazı tipi boyutunu 1 pt artır",
     "opacity": "Opaklık",
     "placement": "Yerleşim",
     "resetAutoFit": "Otomatik sığdırmaya sıfırla",
@@ -218,9 +228,11 @@
     "zh-TW": "繁體中文"
   },
   "layers": {
+    "collapse": "{{name}} grubunu daralt",
     "delete": "{{name}} öğesini sil",
     "edit": "{{name}} öğesini düzenle",
     "empty": "Bu sayfada katman yok.",
+    "expand": "{{name}} grubunu genişlet",
     "hide": "{{name}} öğesini gizle",
     "imageName": "Görüntü {{index}}",
     "kinds": {
@@ -308,6 +320,7 @@
     "noResults": "Bu filtreyle eşleşen sayfa yok.",
     "pageName": "Sayfa adı",
     "pages": "Sayfalar",
+    "duplicate": "Çoğalt",
     "rename": "Yeniden adlandır",
     "renameDescription": "Bu sayfa için yeni bir ad seçin.",
     "renameTitle": "Sayfayı yeniden adlandır"
@@ -350,7 +363,8 @@
     "minimax": "MiniMax dil modelleri.",
     "openai": "OpenAI dil modelleri.",
     "openai-compatible": "OpenAI uyumlu API sunan herhangi bir sunucu.",
-    "openrouter": "OpenRouter üzerinden yönlendirilen modeller."
+    "openrouter": "OpenRouter üzerinden yönlendirilen modeller.",
+    "qwen-ocr": "Alibaba Cloud üzerinden özel Qwen-VL-OCR. Ayrı API anahtarı ve bölgesel adres kullanır."
   },
   "resources": {
     "cpu": "CPU",
@@ -419,13 +433,18 @@
         "instructionsPlaceholder": "İsteğe bağlı OCR yönergeleri",
         "local": "Yerel (CPU)",
         "localModel": "Yerel OCR modeli",
-        "method": "OCR yöntemi"
+        "method": "OCR yöntemi",
+        "hybrid": "Yerel + API",
+        "hybridDescription": "Önce bölümdeki tüm sayfalarda yerel OCR tamamlanır, ardından her görüntü ve tanınan metin seçilen API modeline gönderilir. Sonuçlar otomatik uygulanır."
       },
       "inpainting": {
         "apiModel": "Görüntü düzenleme modeli",
-        "localModel": "Yerel restorasyon modeli",
-        "method": "Restorasyon yöntemi",
-        "options": "API restorasyon seçenekleri",
+        "localModel": "Yerel temizleme modeli",
+        "restorationModel": "Restorasyon modeli",
+        "restorationProvider": "Restorasyon sağlayıcısı",
+        "restorationPrompt": "Restorasyon istemi",
+        "method": "Temizleme yöntemi",
+        "options": "API temizleme seçenekleri",
         "promptPreset": "İstem ön ayarı",
         "promptPresets": {
           "cleanup-all": "Tüm metni ve filigranları kaldır",
@@ -433,7 +452,11 @@
           "custom": "Özel istem",
           "translate-russian": "Yazıları Rusça ile değiştir"
         },
-        "provider": "Görüntü sağlayıcısı"
+        "provider": "Görüntü sağlayıcısı",
+        "removeDescription": "Kaldırma fırçası için yerel model. Sayfa temizliğinden ve dikdörtgen alan onarımından bağımsızdır.",
+        "restorationDescription": "Dikdörtgen seçimli onarma aracı için API modeli. Sayfa temizliğinden ve kaldırma fırçasından bağımsızdır.",
+        "previewBeforeSend": "API’ye göndermeden önce önizle",
+        "previewBeforeSendDescription": "API ile sayfa temizleme veya seçili alanı onarma öncesinde gönderilecek görüntüyü gösterir ve istemi düzenlemenizi sağlar. Yerel kaldırma etkilenmez."
       },
       "processing": "İşleniyor",
       "stages": {
@@ -442,8 +465,8 @@
           "title": "Algılama"
         },
         "inpainting": {
-          "description": "Kaldırılan metnin altındaki çizimi yeniden oluşturur.",
-          "title": "Doldurma"
+          "description": "Sayfa işlemenin temizleme aşamasında kullanılır. Kaldırma ve onarma araçları aşağıda ayrı yapılandırılır.",
+          "title": "Temizle"
         },
         "ocr": {
           "description": "Algılanan bölgelerdeki kaynak metni okur.",
@@ -458,6 +481,7 @@
       "connections": "Bağlantılar",
       "connectionsDescription": "Kimlik bilgileri bu cihazda güvenli bir şekilde saklanır.",
       "falDescription": "Fal.ai görüntü düzenleme modellerinin kullandığı kimlik bilgisi.",
+      "replicateDescription": "FLUX ile görüntü düzenleme. Dev ve Klein için çıktı güvenlik denetimi kapalıdır; Pro, Max ve Flex model kısıtlamalarını korur.",
       "credential": "Kimlik bilgisi",
       "credentialLabel": "{{provider}} kimlik bilgisi",
       "description": "Çeviri ve dil modeli sağlayıcılarını bağlayın.",
@@ -465,7 +489,7 @@
       "title": "Sağlayıcılar"
     },
     "shortcuts": {
-      "description": "Bir metin alanına odaklanılmadığında Ctrl ile ayarlanan tuşu kullanın.",
+      "description": "Bir metin alanına odaklanılmadığında Alt ile ayarlanan tuşu kullanın.",
       "inputLabel": "{{action}} kısayolu",
       "title": "Kısayollar",
       "tools": "Araçlar"
@@ -558,6 +582,7 @@
     "ocr": "OCR alanı",
     "pan": "Kaydır",
     "remove": "Kaldır",
+    "restore": "Geri yükle",
     "select": "Seç",
     "text": "Metin"
   },
@@ -578,12 +603,35 @@
     "later": "Daha sonra",
     "noNotes": "Sürüm notu sağlanmadı.",
     "retry": "Tekrar dene",
-    "update": "Güncelle"
+    "update": "Güncelle",
+    "upstream": {
+      "title": "Orijinal Koharu için güncelleme var",
+      "description": "Orijinal Koharu {{version}}, entegre edilen {{integratedVersion}} sürümünden daha yeni. Değişiklikleri bu çatala yararlı olabilir. Otomatik güncellemeler yalnızca Projmix/koharu sürümlerini yükler.",
+      "view": "Orijinal sürümü görüntüle",
+      "dismiss": "Bu sürümü gizle"
+    }
   },
   "window": {
     "close": "Kapat",
     "maximize": "Ekranı kapla",
     "minimize": "Simge durumuna küçült",
     "restore": "Geri yükle"
+  },
+  "imageEditPreview": {
+    "title": "Görüntü düzenleme isteğini önizle",
+    "description": "Gönderilecek görüntüyü ve istemi inceleyin. İstem değişiklikleri yalnızca bu istek için geçerlidir ve ayarlara kaydedilmez.",
+    "image": "Gönderilecek görüntü",
+    "prompt": "Bu isteğin istemi",
+    "resetPrompt": "İstemi sıfırla",
+    "send": "API’ye gönder",
+    "cancel": "İşi iptal et",
+    "close": "Kapat",
+    "actualSize": "100%",
+    "fitImage": "Görüntüyü sığdır",
+    "restoration": "Seçili alanı onar",
+    "cleanup": "Sayfa temizleme",
+    "failed": "Önizleme işlenemedi: {{error}}",
+    "cleanupLayers": "Orijinal + görünür boyama katmanları. Tek PNG; metin katmanları, maskeler ve seçim tutamaçları dahil değildir.",
+    "restorationLayers": "Orijinal + görünür temizleme ve boyama katmanlarının katman sırasıyla birleştirilmiş seçili alanı. Tek PNG; metin katmanları, maskeler ve seçim tutamaçları dahil değildir."
   }
 }

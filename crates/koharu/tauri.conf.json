@@ -4,7 +4,7 @@
   "build": {
     "devUrl": "http://localhost:3000",
     "frontendDist": "../../packages/koharu/out",
-    "beforeDevCommand": "bun run --filter @koharu/bridge build && bun run --parallel --filter @koharu/bridge --filter @koharu/app dev",
+    "beforeDevCommand": "bun run --filter @koharu/bridge build:dev && bun run --parallel --filter @koharu/bridge --filter @koharu/app dev",
     "beforeBuildCommand": "bun run --filter @koharu/bridge build && bun run --filter @koharu/app build"
   },
   "app": {
@@ -44,8 +44,8 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQ1QjAxQjRENzYxOTE1MDYKUldRR0ZSbDJUUnV3MWFXN09pNjhoRmNMSTV2Ylh3Wm9CZHhiRE01RVZtYXFLWVd4Vi9SbkE4QnUK",
-      "endpoints": ["https://github.com/koharu-rs/koharu/releases/latest/download/latest.json"],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDJERTYzMTVBMUQwNEY4NjgKUldSbytBUWRXakhtTGFlMHhZVVhUOHpJOTRwVDAxWVZKUEVYNzY4SEtPK1U0M3MwU3ROYlZMdkcK",
+      "endpoints": ["https://github.com/Projmix/koharu/releases/latest/download/latest.json"],
       "windows": {
         "installMode": "quiet"
       }

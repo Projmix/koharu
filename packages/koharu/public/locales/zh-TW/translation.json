@@ -124,6 +124,10 @@
     "style": "樣式"
   },
   "inference": {
+    "importChapterDone": "Translations imported",
+    "exportChapterHelp": "Extract the archive. Paste prompt.txt into your chosen chat and attach chapter.json. Save the response as translation.json and import it.",
+    "importChapter": "Import translated JSON",
+    "exportChapter": "Export for manual translation (ZIP)",
     "currentPage": "目前頁面",
     "currentPageDescription": "只處理畫布中的頁面。",
     "automatic": "自動",
@@ -162,6 +166,10 @@
     "typing": "排版"
   },
   "inspector": {
+    "transformTarget": "編輯對象",
+    "transformText": "文字",
+    "transformRegion": "OCR 區域",
+    "transformHint": "拖曳文字區塊可移動，拖曳控制點可調整大小。自動模式會依邊框調整字級。",
     "alignBottom": "底端對齊",
     "alignCenter": "置中對齊",
     "alignLeft": "靠左對齊",
@@ -178,6 +186,7 @@
     "color": "顏色",
     "customFrame": "自訂框架",
     "decreaseBorderWidth": "減少描邊寬度",
+    "decreaseFontSize": "字型大小減少 1 點",
     "direction": "方向",
     "font": "字體",
     "fontSize": "字型大小",
@@ -190,6 +199,7 @@
     "fontWeight": "字型粗細",
     "horizontal": "橫排",
     "increaseBorderWidth": "增加描邊寬度",
+    "increaseFontSize": "字型大小增加 1 點",
     "opacity": "不透明度",
     "placement": "位置",
     "resetAutoFit": "重設為自動符合",
@@ -218,9 +228,11 @@
     "zh-TW": "繁體中文"
   },
   "layers": {
+    "collapse": "收合 {{name}}",
     "delete": "刪除 {{name}}",
     "edit": "編輯 {{name}}",
     "empty": "此頁面沒有圖層。",
+    "expand": "展開 {{name}}",
     "hide": "隱藏 {{name}}",
     "imageName": "影像 {{index}}",
     "kinds": {
@@ -308,6 +320,7 @@
     "noResults": "沒有符合此篩選條件的頁面。",
     "pageName": "頁面名稱",
     "pages": "頁面",
+    "duplicate": "複製",
     "rename": "重新命名",
     "renameDescription": "為此頁面選擇新名稱。",
     "renameTitle": "重新命名頁面"
@@ -350,7 +363,8 @@
     "minimax": "MiniMax 語言模型。",
     "openai": "OpenAI 語言模型。",
     "openai-compatible": "任何提供 OpenAI 相容 API 的伺服器。",
-    "openrouter": "透過 OpenRouter 路由的模型。"
+    "openrouter": "透過 OpenRouter 路由的模型。",
+    "qwen-ocr": "透過阿里雲呼叫專用 Qwen-VL-OCR，使用獨立的 API 金鑰和區域位址。"
   },
   "resources": {
     "cpu": "CPU",
@@ -419,13 +433,18 @@
         "instructionsPlaceholder": "可選的 OCR 專用說明",
         "local": "本機（CPU）",
         "localModel": "本機 OCR 模型",
-        "method": "OCR 方法"
+        "method": "OCR 方法",
+        "hybrid": "本機 + API",
+        "hybridDescription": "先完成整章所有頁面的本機 OCR，再將每張裁剪影像及其辨識文字傳送給所選 API。結果自動套用。"
       },
       "inpainting": {
         "apiModel": "影像編輯模型",
-        "localModel": "本機修復模型",
-        "method": "修復方式",
-        "options": "API 修復選項",
+        "localModel": "本機清理模型",
+        "restorationModel": "修復模型",
+        "restorationProvider": "修復服務供應商",
+        "restorationPrompt": "修復提示詞",
+        "method": "清理方式",
+        "options": "API 清理選項",
         "promptPreset": "提示詞預設",
         "promptPresets": {
           "cleanup-all": "移除全部文字和浮水印",
@@ -433,7 +452,11 @@
           "custom": "自訂提示詞",
           "translate-russian": "將文字替換為俄語"
         },
-        "provider": "影像供應商"
+        "provider": "影像供應商",
+        "removeDescription": "移除筆刷使用的本機模型，獨立於頁面清理和矩形區域修復。",
+        "restorationDescription": "矩形選取範圍修復工具使用的 API 模型，獨立於頁面清理和移除筆刷。",
+        "previewBeforeSend": "傳送至 API 前預覽",
+        "previewBeforeSendDescription": "透過 API 清理頁面或修復選取區域前，檢視待傳送的影像並編輯提示詞。不影響本機移除功能。"
       },
       "processing": "正在處理",
       "stages": {
@@ -442,8 +465,8 @@
           "title": "偵測"
         },
         "inpainting": {
-          "description": "重建已移除文字下方的圖稿。",
-          "title": "修補"
+          "description": "用於頁面處理的清理階段。移除和修復工具在下方分別設定。",
+          "title": "修復"
         },
         "ocr": {
           "description": "讀取偵測區域內的原文。",
@@ -458,6 +481,7 @@
       "connections": "連線",
       "connectionsDescription": "認證資訊會安全地儲存在此裝置上。",
       "falDescription": "Fal.ai 圖像編輯模型使用的認證資訊。",
+      "replicateDescription": "使用 FLUX 編輯影像。Dev 和 Klein 已關閉輸出安全檢查；Pro、Max 和 Flex 仍受模型限制。",
       "credential": "認證資訊",
       "credentialLabel": "{{provider}} 認證資訊",
       "description": "連線翻譯和語言模型提供者。",
@@ -465,7 +489,7 @@
       "title": "提供者"
     },
     "shortcuts": {
-      "description": "當文字欄位未取得焦點時，請使用 Ctrl 加上已設定的按鍵。",
+      "description": "當文字欄位未取得焦點時，請使用 Alt 加上已設定的按鍵。",
       "inputLabel": "{{action}} 快速鍵",
       "title": "快捷鍵",
       "tools": "工具"
@@ -558,6 +582,7 @@
     "ocr": "OCR 區域",
     "pan": "平移",
     "remove": "移除",
+    "restore": "修復",
     "select": "選取",
     "text": "文字"
   },
@@ -578,12 +603,35 @@
     "later": "稍後",
     "noNotes": "未提供發行說明。",
     "retry": "重試",
-    "update": "更新"
+    "update": "更新",
+    "upstream": {
+      "title": "原版 Koharu 有新版本",
+      "description": "原版 Koharu {{version}} 比已整合的 {{integratedVersion}} 更新，其中可能有適合此分支的改進。自動更新僅安裝 Projmix/koharu 的發行版。",
+      "view": "查看原版發行說明",
+      "dismiss": "忽略此版本"
+    }
   },
   "window": {
     "close": "關閉",
     "maximize": "最大化",
     "minimize": "最小化",
     "restore": "還原"
+  },
+  "imageEditPreview": {
+    "title": "預覽影像編輯請求",
+    "description": "檢查待傳送的影像和提示詞。提示詞修改僅對本次請求生效，不會儲存至設定。",
+    "image": "待傳送的影像",
+    "prompt": "本次請求的提示詞",
+    "resetPrompt": "重設提示詞",
+    "send": "傳送至 API",
+    "cancel": "取消工作",
+    "close": "關閉",
+    "actualSize": "100%",
+    "fitImage": "符合視窗",
+    "restoration": "修復選取區域",
+    "cleanup": "頁面清理",
+    "failed": "無法處理預覽：{{error}}",
+    "cleanupLayers": "原圖 + 可見的繪圖圖層。傳送單張 PNG，不包含文字圖層、遮色片和選取控制點。",
+    "restorationLayers": "原圖 + 按圖層順序合成的可見清理與繪圖圖層，僅傳送選取區域。傳送單張 PNG，不包含文字圖層、遮色片和選取控制點。"
   }
 }

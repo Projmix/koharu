@@ -13,6 +13,7 @@ use super::{
     ChannelExt as _, Error,
     agent::AgentState,
     canvas::CanvasChannel,
+    image_edit_preview::{ImageEditPreview, ImageEditPreviews},
     import,
     preferences::Preferences,
     processing::{Job, JobChannel, Processing},
@@ -25,6 +26,7 @@ use super::{
 pub struct StartupState {
     pub preferences: Preferences,
     pub jobs: Vec<Job>,
+    pub image_edit_previews: Vec<ImageEditPreview>,
     pub canvas: CanvasState,
 }
 
@@ -156,6 +158,7 @@ pub(crate) async fn subscribe(
     on_download: Channel<Download>,
     on_resources: Channel<ModelResources>,
     on_project: Channel<Option<ProjectInfo>>,
+    on_image_edit_preview: Channel<Vec<ImageEditPreview>>,
 ) -> std::result::Result<StartupState, Error> {
     handle.state::<Initialization>().wait().await?;
 
@@ -164,11 +167,15 @@ pub(crate) async fn subscribe(
     *handle.state::<DownloadChannel>().channel.lock() = Some(on_download);
     *handle.state::<ResourceChannel>().channel.lock() = Some(on_resources);
     *handle.state::<ProjectChannel>().channel.lock() = Some(on_project);
+    handle
+        .state::<ImageEditPreviews>()
+        .subscribe(on_image_edit_preview)?;
 
     let canvas = handle.state::<Desktop>().canvas_state();
     let preferences = Preferences::load()?;
     Ok(StartupState {
         preferences,
+        image_edit_previews: handle.state::<ImageEditPreviews>().pending(),
         jobs: handle
             .state::<Processing>()
             .jobs
@@ -186,6 +193,7 @@ async fn replace_project(handle: &AppHandle<CefRuntime>, opened: Project) -> Res
     let info = opened.info();
 
     handle.state::<AgentState>().reset().await;
+    handle.state::<ImageEditPreviews>().cancel_all();
     let processing = handle.state::<Processing>();
     processing.clear_warnings();
     for stop in processing.stops.lock().values() {
@@ -343,6 +351,7 @@ pub(crate) async fn delete_project(
 
 async fn close_current_project(handle: &AppHandle<CefRuntime>) -> Result<()> {
     handle.state::<AgentState>().reset().await;
+    handle.state::<ImageEditPreviews>().cancel_all();
     let processing = handle.state::<Processing>();
     processing.clear_warnings();
     for stop in processing.stops.lock().values() {

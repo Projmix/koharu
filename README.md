@@ -20,6 +20,8 @@
 
 Koharu introduces a local-first workflow for manga translation, utilizing the power of ML to automate the process. It combines the capabilities of object detection, OCR, inpainting, and LLMs to create a seamless translation experience.
 
+To translate a chapter in an external chat, export its prompt and source JSON, then import the completed translation. See the [manual translation guide](docs/manual-translation.md).
+
 > [!NOTE]
 > Koharu runs its vision models and LLMs **locally** on your machine to keep your data private and secure.
 
@@ -192,6 +194,22 @@ bun dev
 ```
 
 ### Build
+
+On Windows, double-click `build-and-run.cmd` or run it from PowerShell:
+
+```powershell
+.\build-and-run.cmd
+```
+
+This requires PowerShell 7 (`pwsh`), gracefully closes this checkout's running
+application, installs the locked frontend dependencies, generates the bridge
+protocol, and builds the WASM canvas, embedded frontend, and desktop executable
+in debug mode. It then launches the freshly built `target/debug/koharu.exe`.
+Any failed build stops the script; it never falls back to launching an old binary.
+No development server or installer is required. Subsequent runs reuse build caches.
+Use `bun dev` instead when you want live reload while editing the source.
+
+For a release build:
 
 ```bash
 bun run build

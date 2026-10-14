@@ -6,6 +6,7 @@ use tokio::sync::Mutex;
 use crate::commands::{
     agent::AgentState,
     canvas::CanvasChannel,
+    image_edit_preview::ImageEditPreviews,
     lifecycle::{
         Download, DownloadChannel, DownloadState, Initialization, ModelResources, ProjectChannel,
         ResourceChannel,
@@ -129,6 +130,7 @@ pub fn run(context: tauri::Context<CefRuntime>) -> Result<()> {
             application.manage(Processing::default());
             application.manage(CanvasChannel::default());
             application.manage(JobChannel::default());
+            application.manage(ImageEditPreviews::default());
             application.manage(DownloadChannel::default());
             application.manage(ResourceChannel::default());
             application.manage(ProjectChannel::default());

@@ -124,6 +124,10 @@
     "style": "スタイル"
   },
   "inference": {
+    "importChapterDone": "Translations imported",
+    "exportChapterHelp": "Extract the archive. Paste prompt.txt into your chosen chat and attach chapter.json. Save the response as translation.json and import it.",
+    "importChapter": "Import translated JSON",
+    "exportChapter": "Export for manual translation (ZIP)",
     "currentPage": "現在のページ",
     "currentPageDescription": "キャンバスに表示中のページだけを処理します。",
     "automatic": "自動",
@@ -162,6 +166,10 @@
     "typing": "写植"
   },
   "inspector": {
+    "transformTarget": "編集対象",
+    "transformText": "テキスト",
+    "transformRegion": "OCR領域",
+    "transformHint": "ブロックをドラッグして移動、ハンドルでサイズ変更。自動で枠に合う文字サイズを選びます。",
     "alignBottom": "下揃え",
     "alignCenter": "中央揃え",
     "alignLeft": "左揃え",
@@ -178,6 +186,7 @@
     "color": "色",
     "customFrame": "カスタムフレーム",
     "decreaseBorderWidth": "縁取り幅を縮小",
+    "decreaseFontSize": "フォントサイズを1pt小さくする",
     "direction": "方向",
     "font": "フォント",
     "fontSize": "フォントサイズ",
@@ -190,6 +199,7 @@
     "fontWeight": "フォントの太さ",
     "horizontal": "横書き",
     "increaseBorderWidth": "縁取り幅を拡大",
+    "increaseFontSize": "フォントサイズを1pt大きくする",
     "opacity": "不透明度",
     "placement": "配置",
     "resetAutoFit": "自動調整に戻す",
@@ -218,9 +228,11 @@
     "zh-TW": "繁體中文"
   },
   "layers": {
+    "collapse": "{{name}}を折りたたむ",
     "delete": "{{name}}を削除",
     "edit": "{{name}}を編集",
     "empty": "このページにはレイヤーがありません。",
+    "expand": "{{name}}を展開",
     "hide": "{{name}}を隠す",
     "imageName": "画像 {{index}}",
     "kinds": {
@@ -308,6 +320,7 @@
     "noResults": "このフィルターに一致するページはありません。",
     "pageName": "ページ名",
     "pages": "ページ",
+    "duplicate": "複製",
     "rename": "名前を変更",
     "renameDescription": "このページの新しい名前を入力します。",
     "renameTitle": "ページ名を変更"
@@ -350,7 +363,8 @@
     "minimax": "MiniMax 言語モデル。",
     "openai": "OpenAI の言語モデル。",
     "openai-compatible": "OpenAI 互換 API を公開する任意のサーバー。",
-    "openrouter": "OpenRouter 経由で提供されるモデル。"
+    "openrouter": "OpenRouter 経由で提供されるモデル。",
+    "qwen-ocr": "Alibaba Cloudの専用Qwen-VL-OCR。個別のAPIキーとリージョン別URLを使用します。"
   },
   "resources": {
     "cpu": "CPU",
@@ -419,13 +433,18 @@
         "instructionsPlaceholder": "OCR固有の指示（任意）",
         "local": "ローカル（CPU）",
         "localModel": "ローカルOCRモデル",
-        "method": "OCR方式"
+        "method": "OCR方式",
+        "hybrid": "ローカル + API",
+        "hybridDescription": "章の全ページでローカルOCRを完了してから、各画像と認識テキストを選択したAPIに送信します。結果は自動適用されます。"
       },
       "inpainting": {
         "apiModel": "画像編集モデル",
-        "localModel": "ローカル修復モデル",
-        "method": "修復方法",
-        "options": "API修復オプション",
+        "localModel": "ローカルクリーニングモデル",
+        "restorationModel": "修復モデル",
+        "restorationProvider": "修復プロバイダー",
+        "restorationPrompt": "修復プロンプト",
+        "method": "クリーニング方法",
+        "options": "APIクリーニング設定",
         "promptPreset": "プロンプトプリセット",
         "promptPresets": {
           "cleanup-all": "すべての文字と透かしを除去",
@@ -433,7 +452,11 @@
           "custom": "カスタムプロンプト",
           "translate-russian": "文字をロシア語に置換"
         },
-        "provider": "画像プロバイダー"
+        "provider": "画像プロバイダー",
+        "removeDescription": "削除ブラシ用のローカルモデルです。ページのクリーニングや矩形領域の復元とは独立しています。",
+        "restorationDescription": "矩形選択の復元ツール用APIモデルです。ページのクリーニングや削除ブラシとは独立しています。",
+        "previewBeforeSend": "API送信前にプレビュー",
+        "previewBeforeSendDescription": "APIによるページのクリーニングや選択範囲の復元の前に、送信画像を確認してプロンプトを編集できます。ローカルの除去には影響しません。"
       },
       "processing": "処理中",
       "stages": {
@@ -442,8 +465,8 @@
           "title": "検出"
         },
         "inpainting": {
-          "description": "削除した文字の下にあるアートワークを再構築します。",
-          "title": "インペイント"
+          "description": "ページ処理のクリーニング工程に使用します。削除ツールと復元ツールは以下で個別に設定します。",
+          "title": "修復"
         },
         "ocr": {
           "description": "検出領域内の原文を読み取ります。",
@@ -458,6 +481,7 @@
       "connections": "接続",
       "connectionsDescription": "認証情報はこのデバイスに安全に保存されます。",
       "falDescription": "Fal.ai 画像編集モデルで使用する認証情報です。",
+      "replicateDescription": "FLUXによる画像編集。DevとKleinは出力の安全性チェックを無効化します。Pro、Max、Flexにはモデルの制限が適用されます。",
       "credential": "認証情報",
       "credentialLabel": "{{provider}}の認証情報",
       "description": "翻訳および言語モデルのプロバイダーに接続します。",
@@ -465,7 +489,7 @@
       "title": "プロバイダー"
     },
     "shortcuts": {
-      "description": "テキスト入力欄にフォーカスがないときは、Ctrl と設定したキーを使用します。",
+      "description": "テキスト入力欄にフォーカスがないときは、Alt と設定したキーを使用します。",
       "inputLabel": "{{action}}のショートカット",
       "title": "ショートカット",
       "tools": "ツール"
@@ -558,6 +582,7 @@
     "ocr": "OCR領域",
     "pan": "移動",
     "remove": "削除",
+    "restore": "修復",
     "select": "選択",
     "text": "テキスト"
   },
@@ -578,12 +603,35 @@
     "later": "後で",
     "noNotes": "リリースノートはありません。",
     "retry": "再試行",
-    "update": "更新"
+    "update": "更新",
+    "upstream": {
+      "title": "オリジナルのKoharuに更新があります",
+      "description": "オリジナルのKoharu {{version}}は統合済みの{{integratedVersion}}より新しいバージョンです。このフォークにも有用な変更がある可能性があります。自動更新ではProjmix/koharuのリリースのみをインストールします。",
+      "view": "オリジナルのリリースを見る",
+      "dismiss": "このバージョンを非表示"
+    }
   },
   "window": {
     "close": "閉じる",
     "maximize": "最大化",
     "minimize": "最小化",
     "restore": "元のサイズに戻す"
+  },
+  "imageEditPreview": {
+    "title": "画像編集リクエストのプレビュー",
+    "description": "送信する画像とプロンプトを確認してください。プロンプトの変更はこのリクエストにのみ適用され、設定には保存されません。",
+    "image": "送信する画像",
+    "prompt": "このリクエストのプロンプト",
+    "resetPrompt": "プロンプトをリセット",
+    "send": "APIに送信",
+    "cancel": "ジョブをキャンセル",
+    "close": "閉じる",
+    "actualSize": "100%",
+    "fitImage": "画像を全体表示",
+    "restoration": "選択範囲の復元",
+    "cleanup": "ページのクリーニング",
+    "failed": "プレビューを処理できませんでした：{{error}}",
+    "cleanupLayers": "元画像＋表示中の描画レイヤー。PNG 1枚で送信します。テキストレイヤー、マスク、選択ハンドルは含まれません。",
+    "restorationLayers": "元画像＋表示中のクリーニング・描画レイヤーをレイヤー順に合成した選択範囲。PNG 1枚で送信します。テキストレイヤー、マスク、選択ハンドルは含まれません。"
   }
 }

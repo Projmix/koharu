@@ -286,7 +286,7 @@ pub(crate) async fn commit_paint(
 #[specta::specta]
 pub(crate) async fn commit_erase(
     expected_revision: Revision,
-    layer: EntityId,
+    layer: Option<EntityId>,
     points: Vec<Point>,
     diameter: f32,
     desktop: State<'_, Desktop>,
@@ -295,7 +295,7 @@ pub(crate) async fn commit_erase(
 ) -> Result<LayerCommit, Error> {
     commit_raster_stroke(
         expected_revision,
-        Some(layer),
+        layer,
         points,
         diameter,
         [0; 4],
@@ -305,6 +305,46 @@ pub(crate) async fn commit_erase(
         &canvas_channel,
     )
     .await
+}
+
+#[tracing::instrument(
+    target = "koharu_metrics",
+    name = "cleanup_image_imported",
+    skip_all,
+    fields(origin = "user")
+)]
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn import_cleanup_image(
+    data_url: String,
+    desktop: State<'_, Desktop>,
+    project: State<'_, CurrentProject>,
+    processing: State<'_, Processing>,
+    canvas_channel: State<'_, CanvasChannel>,
+) -> Result<LayerCommit, Error> {
+    if !processing.stops.lock().is_empty() {
+        return Err(
+            anyhow!("cleanup images cannot be imported while processing is running").into(),
+        );
+    }
+    let (commit, page, layer) = {
+        let mut project = project.project.lock().await;
+        let project = project.as_mut().context("no project is open")?;
+        let page = project
+            .active_page()
+            .context("the project has no active page")?;
+        let (commit, layer) = project.import_cleanup_image(page, data_url).await?;
+        project.record_commit(&commit);
+        (commit, page, layer)
+    };
+    desktop
+        .synchronize(&commit.snapshot, Some(page), &commit)
+        .await?;
+    canvas_channel.channel.publish(desktop.canvas_state());
+    Ok(LayerCommit {
+        revision: commit.revision,
+        layer,
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -431,12 +471,13 @@ pub(crate) async fn commit_inpaint(
         tokio::task::spawn_blocking(move || encode_mask(width, height, &points, diameter))
             .await
             .context("inpaint mask worker stopped unexpectedly")??;
-    *handle.state::<Processing>().inpainting_mask.lock() = Some(koharu_pipeline::InpaintingMask {
+    let mask = koharu_pipeline::InpaintingMask {
         page,
         png: Arc::from(png),
-    });
+        intent: koharu_pipeline::InpaintingIntent::Remove,
+    };
     Ok(Some(
-        processing::process(
+        processing::process_with_mask(
             handle.clone(),
             koharu_pipeline::Scope::Region { page, bounds },
             koharu_pipeline::Operation::Only {
@@ -445,6 +486,52 @@ pub(crate) async fn commit_inpaint(
             handle.state::<CurrentProject>(),
             handle.state::<Processing>(),
             handle.state::<JobChannel>(),
+            Some(mask),
+        )
+        .await?,
+    ))
+}
+
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn commit_restore(
+    expected_revision: Revision,
+    frame: Frame,
+    handle: AppHandle<CefRuntime>,
+    project: State<'_, CurrentProject>,
+) -> Result<Option<JobId>, Error> {
+    let (page, width, height) = {
+        let project = project.project.lock().await;
+        let project = project.as_ref().context("no project is open")?;
+        let snapshot = project.snapshot();
+        ensure_revision(snapshot.revision(), expected_revision)?;
+        let page = project
+            .active_page()
+            .context("the project has no active page")?;
+        let page_value = snapshot.page(page)?.page()?;
+        (
+            page,
+            page_value.width.round() as u32,
+            page_value.height.round() as u32,
+        )
+    };
+    let (png, bounds) = encode_rectangle_mask(width, height, frame)?;
+    let mask = koharu_pipeline::InpaintingMask {
+        page,
+        png: Arc::from(png),
+        intent: koharu_pipeline::InpaintingIntent::Restore,
+    };
+    Ok(Some(
+        processing::process_with_mask(
+            handle.clone(),
+            koharu_pipeline::Scope::Region { page, bounds },
+            koharu_pipeline::Operation::Only {
+                stage: koharu_pipeline::Stage::Inpainting,
+            },
+            handle.state::<CurrentProject>(),
+            handle.state::<Processing>(),
+            handle.state::<JobChannel>(),
+            Some(mask),
         )
         .await?,
     ))
@@ -529,4 +616,116 @@ fn encode_mask(
             height: f64::from(bottom - top + 1),
         },
     ))
+}
+
+fn encode_rectangle_mask(
+    width: u32,
+    height: u32,
+    frame: Frame,
+) -> anyhow::Result<(Vec<u8>, koharu_pipeline::Bounds)> {
+    if width == 0 || height == 0 {
+        bail!("page dimensions must be positive");
+    }
+    if !frame.x.is_finite()
+        || !frame.y.is_finite()
+        || !frame.width.is_finite()
+        || !frame.height.is_finite()
+        || !frame.angle_degrees.is_finite()
+        || frame.x < 0.0
+        || frame.y < 0.0
+        || frame.width <= 0.0
+        || frame.height <= 0.0
+        || frame.angle_degrees != 0.0
+        || frame.x + frame.width > width as f32
+        || frame.y + frame.height > height as f32
+    {
+        bail!("restore frame must be an axis-aligned rectangle inside the page");
+    }
+    let left = frame.x.floor() as u32;
+    let top = frame.y.floor() as u32;
+    let right = (frame.x + frame.width).ceil() as u32;
+    let bottom = (frame.y + frame.height).ceil() as u32;
+    let mut image = GrayImage::new(width, height);
+    for y in top..bottom {
+        for x in left..right {
+            image.get_pixel_mut(x, y).0[0] = 255;
+        }
+    }
+    let mut png = Vec::new();
+    PngEncoder::new(&mut png).write_image(
+        image.as_raw(),
+        width,
+        height,
+        image::ExtendedColorType::L8,
+    )?;
+    Ok((
+        png,
+        koharu_pipeline::Bounds {
+            x: f64::from(left),
+            y: f64::from(top),
+            width: f64::from(right - left),
+            height: f64::from(bottom - top),
+        },
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rectangle_restore_mask_uses_exact_rounded_page_bounds() {
+        let (png, bounds) = encode_rectangle_mask(
+            8,
+            6,
+            Frame {
+                x: 2.25,
+                y: 1.5,
+                width: 3.5,
+                height: 2.25,
+                angle_degrees: 0.0,
+            },
+        )
+        .unwrap();
+        let mask = image::load_from_memory(&png).unwrap().to_luma8();
+
+        assert_eq!(bounds.x, 2.0);
+        assert_eq!(bounds.y, 1.0);
+        assert_eq!(bounds.width, 4.0);
+        assert_eq!(bounds.height, 3.0);
+        assert_eq!(mask.pixels().filter(|pixel| pixel[0] == 255).count(), 12);
+        assert_eq!(mask.get_pixel(2, 1)[0], 255);
+        assert_eq!(mask.get_pixel(5, 3)[0], 255);
+        assert_eq!(mask.get_pixel(1, 1)[0], 0);
+        assert_eq!(mask.get_pixel(6, 3)[0], 0);
+    }
+
+    #[test]
+    fn rectangle_restore_mask_rejects_invalid_page_coordinates() {
+        for frame in [
+            Frame {
+                x: -1.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+                angle_degrees: 0.0,
+            },
+            Frame {
+                x: 7.5,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+                angle_degrees: 0.0,
+            },
+            Frame {
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+                angle_degrees: 1.0,
+            },
+        ] {
+            assert!(encode_rectangle_mask(8, 6, frame).is_err());
+        }
+    }
 }

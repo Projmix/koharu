@@ -17,6 +17,7 @@ import {
   framePoints,
   geometryFrame,
   hitTestEditorSelection,
+  hitTestLayers,
   pagePoint,
   physicalPoint,
   selectableLayer,
@@ -41,11 +42,25 @@ import {
   useKoharuStore,
   type CanvasTool,
 } from '@/lib/store'
-import { prefetchCanvasPages, workspaceColor, type CanvasColor } from '@koharu/bridge/canvas'
-import { commands, type Frame, type Point, type TransformFrame } from '@koharu/bridge/protocol'
+import {
+  prefetchCanvasPages,
+  workspaceColor,
+  type Canvas,
+  type CanvasColor,
+} from '@koharu/bridge/canvas'
+import {
+  commands,
+  type Frame,
+  type Page,
+  type Point,
+  type TextClipboardPayload,
+  type TextTransferMode,
+  type TransformFrame,
+} from '@koharu/bridge/protocol'
 import { Button } from '@koharu/ui/components/button'
 
 const BRUSH_DIAMETER_STEP = 4
+const TEXT_CLIPBOARD_MIME = 'application/x-koharu-text-layers+json'
 
 const canvasCursors = {
   select: undefined,
@@ -55,6 +70,7 @@ const canvasCursors = {
   eraser: 'none',
   color_picker: 'crosshair',
   remove: 'none',
+  restore: 'crosshair',
   pan: 'grab',
 } as const satisfies Record<CanvasTool, string | undefined>
 
@@ -68,7 +84,13 @@ type Gesture =
       collapseTo: string | null
       moved: boolean
     }
-  | { kind: 'text' | 'ocr'; pointer: number; start: Point; frame: Frame }
+  | {
+      kind: 'text' | 'ocr' | 'restore'
+      pointer: number
+      revision: number
+      start: Point
+      frame: Frame
+    }
   | StrokeGesture
 
 interface StrokeGesture {
@@ -97,6 +119,53 @@ function shortcutKey(event: KeyboardEvent): string {
   return event.key.toLowerCase()
 }
 
+function textClipboardPayload(
+  page: Page,
+  selected: string[],
+  mode: TextTransferMode,
+): TextClipboardPayload | null {
+  const selectedLayers = new Set(expandLayerSelection(page.layers, selected))
+  const layers = page.layers
+    .filter((layer) => layer.type === 'text' && selectedLayers.has(layer.id))
+    .map((layer) => {
+      if (layer.type !== 'text') throw new Error('unreachable non-text clipboard layer')
+      const region = (id: string | null) => {
+        const value = id ? page.regions.find((candidate) => candidate.id === id) : undefined
+        return value ? { id: value.id, geometry: value.geometry, label: value.label } : null
+      }
+      return {
+        layer: layer.id,
+        content: layer.content.id,
+        source: layer.content.source,
+        translation: layer.content.translation,
+        role: layer.content.role,
+        geometry: layer.geometry,
+        visibility: layer.visibility,
+        typography: layer.typography,
+        layout: layer.layout,
+        source_region: region(layer.content.source_region),
+        automatic_region: region(layer.automatic_region),
+      }
+    })
+  return layers.length ? { version: 1, mode, source_page: page.id, layers } : null
+}
+
+function clipboardPlainText(payload: TextClipboardPayload): string {
+  return payload.layers
+    .map((layer) => layer.translation?.text || layer.source?.text || '')
+    .filter(Boolean)
+    .join('\n')
+}
+
+function readDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onerror = () => reject(reader.error ?? new Error('Failed to read clipboard image'))
+    reader.onload = () => resolve(String(reader.result))
+    reader.readAsDataURL(file)
+  })
+}
+
 export function CanvasWorkspace() {
   const { t } = useTranslation()
   const surface = useRef<HTMLDivElement>(null)
@@ -110,11 +179,18 @@ export function CanvasWorkspace() {
   const transformFinal = useRef<TransformFrame[]>([])
   const transformInitial = useRef<TransformFrame[]>([])
   const commitPending = useRef(false)
+  const [committedEdit, setCommittedEdit] = useState<{
+    canvas: Canvas
+    page: string
+    revision: number
+    kind: 'stroke' | 'transform'
+  } | null>(null)
   const commandQueue = useRef<Promise<void>>(Promise.resolve())
   const [previews, setPreviews] = useState<Record<string, Frame>>({})
   const [draft, setDraft] = useState<Frame | null>(null)
   const [hovered, setHovered] = useState<string | null>(null)
   const [cursor, setCursor] = useState<Point | null>(null)
+  const cursorPage = useRef<Point | null>(null)
   const colorSampling = useColorSampling()
 
   const page = usePage().data
@@ -127,6 +203,8 @@ export function CanvasWorkspace() {
   const fitCanvasRequest = useKoharuStore((state) => state.fitCanvasRequest)
   const layerFrames = useKoharuStore((state) => state.layerFrames)
   const tool = useKoharuStore((state) => state.tool)
+  const textTransformTarget = useKoharuStore((state) => state.textTransformTarget)
+  const editTextLayer = useKoharuStore((state) => state.editTextLayer)
   const brush = useKoharuStore((state) => state.brush)
   const selected = useKoharuStore((state) => state.selectedLayers)
   const selectLayers = useKoharuStore((state) => state.selectLayers)
@@ -138,10 +216,15 @@ export function CanvasWorkspace() {
   const pageId = page?.id
   const pageWidth = canvasSize[0] || page?.size.width
   const pageHeight = canvasSize[1] || page?.size.height
-  const activeRaster =
+  const selectedRaster =
     selected.length === 1
       ? page?.layers.find((layer) => layer.id === selected[0] && layer.type === 'raster')
       : undefined
+  const eraserRaster =
+    selectedRaster ??
+    page?.layers.find(
+      (layer) => layer.type === 'raster' && layer.kind === 'cleanup' && layer.visibility.visible,
+    )
 
   const enqueue = useCallback(<Result,>(operation: () => Promise<Result>): Promise<Result> => {
     const pending = commandQueue.current.then(operation)
@@ -160,6 +243,39 @@ export function CanvasWorkspace() {
     mergeStrokeUpdates,
   )
 
+  useEffect(() => {
+    if (!committedEdit) return
+    // The native commit can finish before its frame is installed in WebGPU.
+    // Keep the preview and edit lock until that frame is usable, including
+    // no-op commits that keep the same revision and never replace the frame.
+    if (
+      committedEdit.canvas === canvas &&
+      committedEdit.page === canvasPage &&
+      canvasState.status !== 'error' &&
+      (canvasState.status !== 'ready' ||
+        canvasState.generation !== canvasGeneration ||
+        canvasRevision === null ||
+        canvasRevision < committedEdit.revision)
+    )
+      return
+    try {
+      if (committedEdit.kind === 'stroke') committedEdit.canvas.cancelStroke()
+      else committedEdit.canvas.cancelTransform()
+    } catch (error) {
+      if (committedEdit.canvas === canvas) receiveError(errorMessage(error))
+    } finally {
+      setCommittedEdit(null)
+    }
+  }, [
+    canvas,
+    canvasGeneration,
+    canvasPage,
+    canvasRevision,
+    canvasState.generation,
+    canvasState.status,
+    committedEdit,
+  ])
+
   const beginTransform = useCallback(
     (elements: TransformFrame[]) => {
       if (
@@ -167,7 +283,10 @@ export function CanvasWorkspace() {
         canvasRevision === null ||
         !elements.length ||
         transformActive.current ||
-        commitPending.current
+        commitPending.current ||
+        committedEdit ||
+        canvasState.status !== 'ready' ||
+        canvasState.generation !== canvasGeneration
       )
         return
       transformUpdates.clear()
@@ -187,7 +306,16 @@ export function CanvasWorkspace() {
         receiveError(errorMessage(error))
       }
     },
-    [canvas, canvasRevision, page, transformUpdates],
+    [
+      canvas,
+      canvasGeneration,
+      canvasRevision,
+      canvasState.generation,
+      canvasState.status,
+      committedEdit,
+      page,
+      transformUpdates,
+    ],
   )
 
   const updateTransform = useCallback(
@@ -238,6 +366,7 @@ export function CanvasWorkspace() {
     try {
       canvas?.finishTransform()
     } catch (error) {
+      canvas?.cancelTransform()
       receiveError(errorMessage(error))
       setPreviews({})
       return
@@ -249,13 +378,24 @@ export function CanvasWorkspace() {
     }
     commitPending.current = true
     void enqueue(() => call(commands.commitTransform, revision, elements))
-      .then((revision) => (revision === null ? undefined : refresh(projectKey, pagesKey, pageKey)))
-      .catch(() => canvas?.cancelTransform())
+      .then((revision) => {
+        if (revision === null) {
+          canvas?.cancelTransform()
+          return
+        }
+        if (canvas && pageId)
+          setCommittedEdit({ canvas, page: pageId, revision, kind: 'transform' })
+        return refresh(projectKey, pagesKey, pageKey)
+      })
+      .catch(() => {
+        canvas?.cancelTransform()
+        setCommittedEdit(null)
+      })
       .finally(() => {
         commitPending.current = false
         setPreviews({})
       })
-  }, [canvas, enqueue, transformUpdates])
+  }, [canvas, enqueue, pageId, transformUpdates])
 
   const cancelGesture = useCallback(() => {
     const current = gesture.current
@@ -363,7 +503,14 @@ export function CanvasWorkspace() {
     fitCanvas()
   }, [fitCanvas, fitCanvasRequest])
 
-  useEffect(() => cancelGesture, [cancelGesture, canvasGeneration, canvasRevision, page?.id, tool])
+  useEffect(
+    () => cancelGesture,
+    [cancelGesture, canvasGeneration, canvasRevision, page?.id, tool, textTransformTarget],
+  )
+
+  useEffect(() => {
+    cursorPage.current = null
+  }, [canvasGeneration, pageId])
 
   useEffect(() => {
     const editable = (target: EventTarget | null) =>
@@ -372,10 +519,6 @@ export function CanvasWorkspace() {
       (target instanceof HTMLElement && target.isContentEditable)
 
     const down = (event: KeyboardEvent) => {
-      if (event.key === 'Alt') {
-        event.preventDefault()
-        return
-      }
       const state = useKoharuStore.getState()
       if (event.key === 'Escape') {
         event.preventDefault()
@@ -389,24 +532,60 @@ export function CanvasWorkspace() {
         return
       }
       if (editable(event.target)) return
-      if (event.code === 'Space') {
+      if (event.key === 'Alt') {
+        event.preventDefault()
+        return
+      }
+      if (
+        event.code === 'Space' &&
+        !event.altKey &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !event.shiftKey
+      ) {
         spaceHeld.current = true
         event.preventDefault()
         return
       }
       const command = event.ctrlKey || event.metaKey
+      const brushDelta =
+        event.key === '+' || event.code === 'NumpadAdd'
+          ? 1
+          : event.key === '-' || event.code === 'NumpadSubtract'
+            ? -1
+            : null
+      if (
+        brushDelta !== null &&
+        !event.defaultPrevented &&
+        !command &&
+        !event.altKey &&
+        isBrushTool(state.tool)
+      ) {
+        event.preventDefault()
+        event.stopPropagation()
+        const diameter = clamp(
+          state.brush.diameter + brushDelta,
+          MIN_BRUSH_DIAMETER,
+          MAX_BRUSH_DIAMETER,
+        )
+        if (diameter !== state.brush.diameter) {
+          state.setBrush({ ...state.brush, diameter })
+        }
+        return
+      }
       const historyKey = historyShortcutKey(event)
       // KoharuApp owns the global listener. Keep this local fallback for an
       // embedded workspace, while honoring a parent listener that handled it.
-      if (!event.defaultPrevented && page && command && historyKey !== null) {
+      if (!event.defaultPrevented && page && command && !event.altKey && historyKey !== null) {
         event.preventDefault()
         void enqueueHistory(historyKey === 'y' || event.shiftKey ? 'redo' : 'undo').catch(
           () => undefined,
         )
         return
       }
-      if (command && event.key.toLowerCase() === 'a' && page) {
+      if (command && !event.altKey && event.key.toLowerCase() === 'a' && page) {
         event.preventDefault()
+        event.stopPropagation()
         selectLayers(page.layers.filter(selectableLayer).map((layer) => layer.id))
         return
       }
@@ -421,23 +600,36 @@ export function CanvasWorkspace() {
         return
       }
       const key = shortcutKey(event)
-      if (command && key === state.shortcuts.fit) {
+      const toolShortcut = event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey
+      if (toolShortcut && key === state.shortcuts.fit) {
         event.preventDefault()
+        event.stopPropagation()
         requestCanvasFit()
         return
       }
-      if (!command) return
+      if (!toolShortcut) return
       const next = (
-        ['select', 'text', 'ocr', 'draw', 'eraser', 'color_picker', 'remove', 'pan'] as const
+        [
+          'select',
+          'text',
+          'ocr',
+          'draw',
+          'eraser',
+          'color_picker',
+          'remove',
+          'restore',
+          'pan',
+        ] as const
       ).find((action) => state.shortcuts[action] === key)
       if (next) {
         event.preventDefault()
+        event.stopPropagation()
         setTool(next)
       }
     }
 
     const up = (event: KeyboardEvent) => {
-      if (event.key === 'Alt') event.preventDefault()
+      if (event.key === 'Alt' && !editable(event.target)) event.preventDefault()
       if (event.code === 'Space') spaceHeld.current = false
     }
     const blur = () => {
@@ -454,6 +646,77 @@ export function CanvasWorkspace() {
       window.removeEventListener('blur', blur)
     }
   }, [cancelGesture, colorSampling, enqueue, page, requestCanvasFit, selectLayers, setTool])
+
+  useEffect(() => {
+    const editable = (target: EventTarget | null) =>
+      target instanceof HTMLInputElement ||
+      target instanceof HTMLTextAreaElement ||
+      (target instanceof HTMLElement && target.isContentEditable)
+
+    const copy = (event: ClipboardEvent, mode: TextTransferMode) => {
+      if (!page || editable(event.target)) return
+      const payload = textClipboardPayload(page, useKoharuStore.getState().selectedLayers, mode)
+      if (!payload || !event.clipboardData) return
+      event.preventDefault()
+      event.stopPropagation()
+      event.clipboardData.setData(TEXT_CLIPBOARD_MIME, JSON.stringify(payload))
+      event.clipboardData.setData('text/plain', clipboardPlainText(payload))
+    }
+    const paste = (event: ClipboardEvent) => {
+      if (!page || editable(event.target) || !event.clipboardData) return
+      const encoded = event.clipboardData.getData(TEXT_CLIPBOARD_MIME)
+      if (event.clipboardData.types.includes(TEXT_CLIPBOARD_MIME)) {
+        event.preventDefault()
+        event.stopPropagation()
+        if (!encoded) {
+          receiveError('The Koharu clipboard data is damaged.')
+          return
+        }
+        let payload: TextClipboardPayload
+        try {
+          payload = JSON.parse(encoded) as TextClipboardPayload
+        } catch {
+          receiveError('The Koharu clipboard data is damaged.')
+          return
+        }
+        void call(commands.pasteTextBlocks, page.id, payload, cursorPage.current)
+          .then((result) => {
+            queryClient.setQueryData(projectKey, result.project)
+            queryClient.setQueryData(pageKey, result.page)
+            if (useKoharuStore.getState().canvasPage === page.id) {
+              if (result.layers.length === 1 && result.layers[0]) editTextLayer(result.layers[0])
+              else selectLayers(result.layers)
+            }
+            return refresh(pagesKey)
+          })
+          .catch(() => undefined)
+        return
+      }
+      const image = [...event.clipboardData.items]
+        .find((item) => item.kind === 'file' && item.type.startsWith('image/'))
+        ?.getAsFile()
+      if (!image) return
+      event.preventDefault()
+      event.stopPropagation()
+      void readDataUrl(image)
+        .then((dataUrl) => call(commands.importCleanupImage, dataUrl))
+        .then((result) => {
+          selectLayers([result.layer])
+          return refresh(projectKey, pagesKey, pageKey)
+        })
+        .catch((error: unknown) => receiveError(errorMessage(error)))
+    }
+    const onCopy = (event: ClipboardEvent) => copy(event, 'copy')
+    const onCut = (event: ClipboardEvent) => copy(event, 'move')
+    window.addEventListener('copy', onCopy, true)
+    window.addEventListener('cut', onCut, true)
+    window.addEventListener('paste', paste, true)
+    return () => {
+      window.removeEventListener('copy', onCopy, true)
+      window.removeEventListener('cut', onCut, true)
+      window.removeEventListener('paste', paste, true)
+    }
+  }, [page, selectLayers, editTextLayer])
 
   const clientPagePoint = (clientX: number, clientY: number) =>
     pagePoint(
@@ -479,10 +742,20 @@ export function CanvasWorkspace() {
       .catch((error: unknown) => receiveError(errorMessage(error)))
   }
 
+  const selectionAt = (point: Point) => {
+    if (!page) return null
+    if (textTransformTarget === 'text') {
+      const visible = hitTestLayers(page.layers, point, layerFrames)
+      if (visible?.type === 'text') return visible
+    }
+    return hitTestEditorSelection(page.layers, page.regions, point, layerFrames)
+  }
+
   const framesFor = (layers: string[]): TransformFrame[] => {
     const ids = expandLayerSelection(page?.layers ?? [], layers)
     const selectedLayers = ids.map((id) => page?.layers.find((candidate) => candidate.id === id))
     if (
+      textTransformTarget === 'region' &&
       selectedLayers.length > 0 &&
       selectedLayers.every(
         (layer) => layer?.type === 'text' && Boolean(layer.content.source_region),
@@ -516,17 +789,11 @@ export function CanvasWorkspace() {
     const sample = samples.at(-1)
     if (!page || !sample) return
     const physical = clientPhysicalPoint(sample.clientX, sample.clientY)
+    cursorPage.current = clientPagePoint(sample.clientX, sample.clientY)
     setCursor(physical)
     if (!current || current.pointer !== pointer) {
       if (tool === 'select') {
-        setHovered(
-          hitTestEditorSelection(
-            page.layers,
-            page.regions,
-            clientPagePoint(sample.clientX, sample.clientY),
-            layerFrames,
-          )?.id ?? null,
-        )
+        setHovered(selectionAt(clientPagePoint(sample.clientX, sample.clientY))?.id ?? null)
       }
       return
     }
@@ -557,11 +824,13 @@ export function CanvasWorkspace() {
       const delta = { x: point.x - current.start.x, y: point.y - current.start.y }
       current.moved ||= delta.x !== 0 || delta.y !== 0
       updateTransform(translateFrames(current.originals, delta))
-    } else if (current.kind === 'text' || current.kind === 'ocr') {
+    } else if (current.kind === 'text' || current.kind === 'ocr' || current.kind === 'restore') {
       const end =
-        current.kind === 'ocr' ? clampPagePoint(point, page.size.width, page.size.height) : point
+        current.kind === 'text' ? point : clampPagePoint(point, page.size.width, page.size.height)
       current.frame =
-        current.kind === 'ocr' ? rectangleFrame(current.start, end) : draftFrame(current.start, end)
+        current.kind === 'text'
+          ? draftFrame(current.start, end)
+          : rectangleFrame(current.start, end)
       setDraft(current.frame)
     } else if (current.kind === 'paint' || current.kind === 'erase' || current.kind === 'inpaint') {
       current.points.push(...points)
@@ -586,18 +855,13 @@ export function CanvasWorkspace() {
           : call(commands.addTextBox, current.frame)
       )
         .then((result) => {
-          selectLayers([result.layer])
+          if (useKoharuStore.getState().canvasPage === page.id) editTextLayer(result.layer)
           return refresh(projectKey, pagesKey, pageKey)
         })
         .catch(() => undefined)
     } else if (current.kind === 'ocr') {
       setDraft(null)
-      if (
-        current.frame.width < 4 / camera.zoom ||
-        current.frame.height < 4 / camera.zoom ||
-        hasRunningJob()
-      )
-        return
+      if (current.frame.width < 4 / camera.zoom || current.frame.height < 4 / camera.zoom) return
       commitPending.current = true
       void call(commands.addOcrRegion, current.frame)
         .then(async (result) => {
@@ -611,11 +875,19 @@ export function CanvasWorkspace() {
         })
         .catch(() => undefined)
         .finally(() => (commitPending.current = false))
+    } else if (current.kind === 'restore') {
+      setDraft(null)
+      if (current.frame.width < 4 / camera.zoom || current.frame.height < 4 / camera.zoom) return
+      commitPending.current = true
+      void enqueue(() => call(commands.commitRestore, current.revision, current.frame))
+        .catch(() => undefined)
+        .finally(() => (commitPending.current = false))
     } else if (current.kind === 'paint' || current.kind === 'erase' || current.kind === 'inpaint') {
       strokeUpdates.commit()
       try {
         canvas?.finishStroke()
       } catch (error) {
+        canvas?.cancelStroke()
         receiveError(errorMessage(error))
         return
       }
@@ -627,6 +899,13 @@ export function CanvasWorkspace() {
                 color: current.color!,
               }),
             ).then((result) => {
+              if (canvas)
+                setCommittedEdit({
+                  canvas,
+                  page: page.id,
+                  revision: result.revision,
+                  kind: 'stroke',
+                })
               selectLayers([result.layer])
               return refresh(projectKey, pagesKey, pageKey)
             })
@@ -640,6 +919,13 @@ export function CanvasWorkspace() {
                   current.diameter,
                 ),
               ).then((result) => {
+                if (canvas)
+                  setCommittedEdit({
+                    canvas,
+                    page: page.id,
+                    revision: result.revision,
+                    kind: 'stroke',
+                  })
                 selectLayers([result.layer])
                 return refresh(projectKey, pagesKey, pageKey)
               })
@@ -648,7 +934,13 @@ export function CanvasWorkspace() {
               )
       commitPending.current = true
       void operation
-        .catch(() => canvas?.cancelStroke())
+        .then(() => {
+          if (current.kind === 'inpaint') canvas?.cancelStroke()
+        })
+        .catch(() => {
+          canvas?.cancelStroke()
+          setCommittedEdit(null)
+        })
         .finally(() => (commitPending.current = false))
     }
   }
@@ -673,9 +965,12 @@ export function CanvasWorkspace() {
               !page ||
               !canvas ||
               canvasState.status !== 'ready' ||
+              canvasState.generation !== canvasGeneration ||
               canvasRevision === null ||
               commitPending.current ||
-              (tool === 'ocr' && hasRunningJob()) ||
+              committedEdit ||
+              gesture.current ||
+              transformActive.current ||
               event.button > 1
             )
               return
@@ -685,6 +980,7 @@ export function CanvasWorkspace() {
             event.currentTarget.setPointerCapture(event.pointerId)
             const physical = clientPhysicalPoint(event.clientX, event.clientY)
             const point = clientPagePoint(event.clientX, event.clientY)
+            cursorPage.current = point
             setCursor(physical)
 
             if (event.button === 1 && tool === 'draw') {
@@ -697,7 +993,7 @@ export function CanvasWorkspace() {
                 translation: camera.translation,
               }
             } else if (tool === 'select') {
-              const target = hitTestEditorSelection(page.layers, page.regions, point, layerFrames)
+              const target = selectionAt(point)
               const additive = event.shiftKey || event.ctrlKey || event.metaKey
               if (!target) {
                 if (!additive) selectLayers([])
@@ -724,11 +1020,18 @@ export function CanvasWorkspace() {
                 moved: false,
               }
               beginTransform(originals)
-            } else if (tool === 'text' || tool === 'ocr') {
+            } else if (tool === 'text' || tool === 'ocr' || tool === 'restore') {
               const start =
-                tool === 'ocr' ? clampPagePoint(point, page.size.width, page.size.height) : point
-              const frame = tool === 'ocr' ? rectangleFrame(start, start) : draftFrame(start, start)
-              gesture.current = { kind: tool, pointer: event.pointerId, start, frame }
+                tool === 'text' ? point : clampPagePoint(point, page.size.width, page.size.height)
+              const frame =
+                tool === 'text' ? draftFrame(start, start) : rectangleFrame(start, start)
+              gesture.current = {
+                kind: tool,
+                pointer: event.pointerId,
+                revision: canvasRevision,
+                start,
+                frame,
+              }
               setDraft(frame)
             } else if (tool === 'draw') {
               strokeUpdates.clear()
@@ -737,7 +1040,7 @@ export function CanvasWorkspace() {
                 kind: 'paint',
                 pointer: event.pointerId,
                 revision: canvasRevision,
-                layer: activeRaster?.id ?? null,
+                layer: selectedRaster?.id ?? null,
                 points: [point],
                 diameter: brush.diameter,
                 color,
@@ -745,7 +1048,7 @@ export function CanvasWorkspace() {
               try {
                 canvas.beginStroke({
                   kind: 'paint',
-                  layer: activeRaster?.id ?? null,
+                  layer: selectedRaster?.id ?? null,
                   point,
                   diameter: brush.diameter,
                   color,
@@ -755,8 +1058,8 @@ export function CanvasWorkspace() {
                 receiveError(errorMessage(error))
               }
             } else if (tool === 'eraser') {
-              if (!activeRaster) {
-                receiveError('Select a paint or cleanup layer before using the Eraser.')
+              if (!eraserRaster) {
+                receiveError('Paste or select a cleanup layer before using the Eraser.')
                 return
               }
               strokeUpdates.clear()
@@ -764,14 +1067,14 @@ export function CanvasWorkspace() {
                 kind: 'erase',
                 pointer: event.pointerId,
                 revision: canvasRevision,
-                layer: activeRaster.id,
+                layer: eraserRaster.id,
                 points: [point],
                 diameter: brush.diameter,
               }
               try {
                 canvas.beginStroke({
                   kind: 'erase',
-                  layer: activeRaster.id,
+                  layer: eraserRaster.id,
                   point,
                   diameter: brush.diameter,
                 })
@@ -811,14 +1114,25 @@ export function CanvasWorkspace() {
             moveGesture(event.pointerId, coalesced.length ? coalesced : [event.nativeEvent])
           }}
           onPointerUp={(event) => {
+            if (gesture.current?.pointer !== event.pointerId) return
             moveGesture(event.pointerId, [event.nativeEvent])
             finishGesture()
             if (event.currentTarget.hasPointerCapture(event.pointerId)) {
               event.currentTarget.releasePointerCapture(event.pointerId)
             }
           }}
-          onPointerCancel={() => cancelGesture()}
+          onPointerCancel={(event) => {
+            if (gesture.current?.pointer !== event.pointerId) return
+            cursorPage.current = null
+            cancelGesture()
+          }}
+          onLostPointerCapture={(event) => {
+            if (gesture.current?.pointer !== event.pointerId) return
+            cursorPage.current = null
+            cancelGesture()
+          }}
           onPointerLeave={(event) => {
+            cursorPage.current = null
             if (!event.currentTarget.hasPointerCapture(event.pointerId)) {
               setHovered(null)
               setCursor(null)
@@ -828,6 +1142,8 @@ export function CanvasWorkspace() {
             if (!page) return
             event.preventDefault()
             if (event.altKey && isBrushTool(tool)) {
+              cursorPage.current = clientPagePoint(event.clientX, event.clientY)
+              setCursor(clientPhysicalPoint(event.clientX, event.clientY))
               if (event.deltaY !== 0) {
                 const currentBrush = useKoharuStore.getState().brush
                 const delta = event.deltaY < 0 ? BRUSH_DIAMETER_STEP : -BRUSH_DIAMETER_STEP
@@ -981,10 +1297,6 @@ function rectangleFrame(start: Point, end: Point): Frame {
     height: Math.abs(end.y - start.y),
     angle_degrees: 0,
   }
-}
-
-function hasRunningJob(): boolean {
-  return Object.values(useKoharuStore.getState().jobs).some((job) => job.state === 'running')
 }
 
 function sameTransformFrames(left: TransformFrame[], right: TransformFrame[]): boolean {

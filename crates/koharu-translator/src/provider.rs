@@ -8,7 +8,7 @@ use crate::{
     remote::{
         AtlasCloudConfig, CaiyunConfig, ClaudeConfig, DeepLConfig, DeepSeekConfig, GeminiConfig,
         GoogleCloudConfig, GrokConfig, LmStudioConfig, MiniMaxConfig, OpenAiCompatibleConfig,
-        OpenAiConfig, OpenRouterConfig,
+        OpenAiConfig, OpenRouterConfig, QwenOcrConfig,
     },
 };
 
@@ -175,6 +175,12 @@ define_providers! {
         field: openrouter,
         config: OpenRouterConfig,
     }
+    QwenOcr {
+        id: "qwen-ocr",
+        name: "Qwen OCR (Alibaba Cloud)",
+        field: qwen_ocr,
+        config: QwenOcrConfig,
+    }
     LmStudio {
         id: "lm-studio",
         name: "LM Studio",
@@ -204,5 +210,20 @@ define_providers! {
 impl ProvidersConfig {
     pub fn load() -> anyhow::Result<koharu_config::Config<Self>> {
         koharu_config::load("providers")
+    }
+}
+
+impl Provider {
+    #[must_use]
+    pub const fn supports_ocr(self) -> bool {
+        matches!(
+            self,
+            Self::OpenAi | Self::OpenAiCompatible | Self::OpenRouter | Self::QwenOcr
+        )
+    }
+
+    #[must_use]
+    pub const fn supports_translation(self) -> bool {
+        !matches!(self, Self::QwenOcr)
     }
 }

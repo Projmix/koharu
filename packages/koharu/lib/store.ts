@@ -6,6 +6,7 @@ import type {
   CanvasState,
   Download,
   EntityId,
+  ImageEditPreview,
   Job,
   InpaintingModelChoice,
   Model,
@@ -25,6 +26,7 @@ export type CanvasTool =
   | 'eraser'
   | 'color_picker'
   | 'remove'
+  | 'restore'
   | 'pan'
 export const MIN_BRUSH_DIAMETER = 1
 export const MAX_BRUSH_DIAMETER = 128
@@ -48,6 +50,7 @@ interface KoharuStore {
   preferences: Preferences | null
   translationModels: Model[]
   inpaintingModels: InpaintingModelChoice[]
+  imageEditPreviews: ImageEditPreview[]
   resources: ModelResources | null
   jobs: Record<string, Job>
   downloads: Record<string, Download>
@@ -59,6 +62,8 @@ interface KoharuStore {
   fitCanvasRequest: number
   layerFrames: Record<EntityId, Frame>
   selectedLayers: EntityId[]
+  pendingTextFocus: EntityId | null
+  textTransformTarget: 'text' | 'region'
   selectedPages: EntityId[]
   tool: CanvasTool
   brush: CanvasBrush
@@ -73,6 +78,7 @@ interface KoharuStore {
   setProcessingStages: (stages: Stage[]) => void
   setSettingsOpen: (open: boolean) => void
   selectLayers: (layers: EntityId[]) => void
+  editTextLayer: (layer: EntityId) => void
   setTool: (tool: CanvasTool) => void
   setBrush: (brush: CanvasBrush) => void
   setShortcut: (action: ShortcutAction, key: string) => void
@@ -89,8 +95,9 @@ export const defaultShortcuts: Shortcuts = {
   eraser: 'e',
   color_picker: 'i',
   remove: 'j',
+  restore: 'r',
   pan: 'h',
-  fit: '0',
+  fit: 'f',
 }
 
 export const useKoharuStore = create<KoharuStore>()((set) => ({
@@ -98,6 +105,7 @@ export const useKoharuStore = create<KoharuStore>()((set) => ({
   preferences: null,
   translationModels: [],
   inpaintingModels: [],
+  imageEditPreviews: [],
   resources: null,
   jobs: {},
   downloads: {},
@@ -109,6 +117,8 @@ export const useKoharuStore = create<KoharuStore>()((set) => ({
   fitCanvasRequest: 0,
   layerFrames: {},
   selectedLayers: [],
+  pendingTextFocus: null,
+  textTransformTarget: 'text',
   selectedPages: [],
   tool: 'select',
   brush: { diameter: 48, color: '#FFFFFF' },
@@ -122,7 +132,15 @@ export const useKoharuStore = create<KoharuStore>()((set) => ({
   setProcessingScope: (processingScope) => set({ processingScope }),
   setProcessingStages: (processingStages) => set({ processingStages }),
   setSettingsOpen: (settingsOpen) => set({ settingsOpen }),
-  selectLayers: (selectedLayers) => set({ selectedLayers: [...new Set(selectedLayers)] }),
+  selectLayers: (selectedLayers) =>
+    set({ selectedLayers: [...new Set(selectedLayers)], pendingTextFocus: null }),
+  editTextLayer: (layer) =>
+    set({
+      selectedLayers: [layer],
+      pendingTextFocus: layer,
+      tool: 'select',
+      textTransformTarget: 'text',
+    }),
   setTool: (tool) => set({ tool }),
   setBrush: (brush) => set({ brush }),
   setShortcut: (action, key) =>
@@ -148,6 +166,7 @@ export function receiveStartupState(state: StartupState): void {
   useKoharuStore.setState({
     initialized: true,
     preferences: state.preferences,
+    imageEditPreviews: state.image_edit_previews,
     jobs: byId(state.jobs),
     ...canvasSnapshot(state.canvas),
   })
@@ -159,6 +178,10 @@ export function receiveCanvas(canvas: CanvasState): void {
 
 export function receiveJob(job: Job): void {
   useKoharuStore.setState((state) => ({ jobs: { ...state.jobs, [job.id]: job } }))
+}
+
+export function receiveImageEditPreviews(imageEditPreviews: ImageEditPreview[]): void {
+  useKoharuStore.setState({ imageEditPreviews })
 }
 
 export function receiveDownload(download: Download): void {

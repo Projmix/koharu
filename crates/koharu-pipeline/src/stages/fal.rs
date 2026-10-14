@@ -1,4 +1,4 @@
-use std::{io::Cursor, time::Duration};
+use std::{future::Future, io::Cursor, time::Duration};
 
 use anyhow::{Context as _, Result, bail, ensure};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -6,16 +6,22 @@ use futures::StreamExt as _;
 use image::{DynamicImage, ImageFormat, imageops::FilterType};
 use koharu_secrets::ExposeSecret as _;
 use reqwest::{Response, StatusCode, Url, header::CONTENT_TYPE};
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use specta::Type;
 
 use crate::StopToken;
 
+#[cfg(test)]
+pub(super) use tests::submit_reviewed_image;
+
 const MAX_IMAGE_BYTES: usize = 64 * 1024 * 1024;
 const MAX_ERROR_BYTES: usize = 16 * 1024;
 const MAX_ERROR_DETAIL_CHARS: usize = 2 * 1024;
 const POLL_INTERVAL: Duration = Duration::from_millis(750);
+const READ_ATTEMPTS: u32 = 4;
+const READ_RETRY_DELAY: Duration = Duration::from_secs(1);
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 pub(crate) const DEFAULT_CLEANUP_PROMPT: &str = "Remove all visible text from the image. Do not leave any text behind. This includes dialogue, captions, labels, credits, signatures, logos, watermarks, re-upload notices, and especially stylized onomatopoeia and sound-effect lettering, even when it is rotated, distorted, hand-drawn, outlined, partly occluded, or outside speech bubbles. Preserve every speech bubble and caption box exactly as drawn: do not remove, redraw, reshape, move, resize, recolor, or change their outlines, tails, fills, or textures. Only after preserving those containers, reconstruct the artwork and background hidden behind the removed text. Do not alter characters, panel borders, or any non-text artwork.";
 const PREVIOUS_CLEANUP_PROMPTS: [&str; 3] = [
     "Remove all visible text from the image, including dialogue, captions, sound-effect lettering, watermarks, credits, signatures, logos, and re-upload notices. Preserve every speech bubble and caption box exactly as drawn: do not remove, redraw, reshape, move, resize, recolor, or change their outlines, tails, fills, or textures. Only after preserving those containers, reconstruct the artwork and background hidden behind the removed text. Do not alter characters, panel borders, or any non-text artwork.",
@@ -59,22 +65,77 @@ impl Default for ImageEditConfig {
     }
 }
 
-#[derive(Clone, Copy)]
-pub(super) enum FalModel {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FalModel {
     MaiImage2_5Edit,
     MaiImage2_5ProEdit,
+    FluxKontextDev,
+    FluxKontextPro,
+    FluxKontextMax,
+    Flux2Dev,
+    Flux2Pro,
+    Flux2Flex,
+    Flux2Klein4B,
+    Flux2Klein9B,
+    QwenImageEdit2511,
+    Seedream4_5Edit,
 }
 
 impl FalModel {
-    pub(super) const fn id(self) -> &'static str {
+    pub(crate) const ALL: [Self; 12] = [
+        Self::MaiImage2_5Edit,
+        Self::MaiImage2_5ProEdit,
+        Self::FluxKontextDev,
+        Self::FluxKontextPro,
+        Self::FluxKontextMax,
+        Self::Flux2Dev,
+        Self::Flux2Pro,
+        Self::Flux2Flex,
+        Self::Flux2Klein4B,
+        Self::Flux2Klein9B,
+        Self::QwenImageEdit2511,
+        Self::Seedream4_5Edit,
+    ];
+
+    pub(crate) fn from_id(id: &str) -> Result<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|model| model.id() == id)
+            .with_context(|| format!("unsupported Fal.ai image editing model {id}"))
+    }
+
+    pub(crate) const fn id(self) -> &'static str {
         match self {
             Self::MaiImage2_5Edit => "microsoft/mai-image-2.5/edit",
             Self::MaiImage2_5ProEdit => "microsoft/mai-image-2.5-pro/edit",
+            Self::FluxKontextDev => "fal-ai/flux-kontext/dev",
+            Self::FluxKontextPro => "fal-ai/flux-pro/kontext",
+            Self::FluxKontextMax => "fal-ai/flux-pro/kontext/max",
+            Self::Flux2Dev => "fal-ai/flux-2/edit",
+            Self::Flux2Pro => "fal-ai/flux-2-pro/edit",
+            Self::Flux2Flex => "fal-ai/flux-2-flex/edit",
+            Self::Flux2Klein4B => "fal-ai/flux-2/klein/4b/edit",
+            Self::Flux2Klein9B => "fal-ai/flux-2/klein/9b/edit",
+            Self::QwenImageEdit2511 => "fal-ai/qwen-image-edit-2511",
+            Self::Seedream4_5Edit => "fal-ai/bytedance/seedream/v4.5/edit",
         }
     }
 
-    const fn pro(self) -> bool {
-        matches!(self, Self::MaiImage2_5ProEdit)
+    pub(super) const fn name(self) -> &'static str {
+        match self {
+            Self::MaiImage2_5Edit => "Microsoft MAI Image 2.5 Edit",
+            Self::MaiImage2_5ProEdit => "Microsoft MAI Image 2.5 Pro Edit",
+            Self::FluxKontextDev => "FLUX.1 Kontext Dev",
+            Self::FluxKontextPro => "FLUX.1 Kontext Pro",
+            Self::FluxKontextMax => "FLUX.1 Kontext Max",
+            Self::Flux2Dev => "FLUX.2 Dev Edit",
+            Self::Flux2Pro => "FLUX.2 Pro Edit",
+            Self::Flux2Flex => "FLUX.2 Flex Edit",
+            Self::Flux2Klein4B => "FLUX.2 Klein 4B Edit",
+            Self::Flux2Klein9B => "FLUX.2 Klein 9B Edit",
+            Self::QwenImageEdit2511 => "Qwen Image Edit 2511",
+            Self::Seedream4_5Edit => "ByteDance Seedream 4.5 Edit",
+        }
     }
 }
 
@@ -83,6 +144,7 @@ pub(super) struct Fal {
     client: reqwest::Client,
     queue_base: Url,
     poll_interval: Duration,
+    retry_delay: Duration,
 }
 
 impl Fal {
@@ -91,6 +153,7 @@ impl Fal {
             client: koharu_runtime::http_client()?,
             queue_base: Url::parse("https://queue.fal.run/")?,
             poll_interval: POLL_INTERVAL,
+            retry_delay: READ_RETRY_DELAY,
         })
     }
 
@@ -124,27 +187,24 @@ impl Fal {
             STANDARD.encode(encoded.into_inner())
         );
         let submit_url = self.queue_base.join(model.id())?;
-        let response = self
-            .send(
-                self.client
+        // A lost submission response can still represent an accepted, billable job.
+        // Only reads of the returned job URLs may be retried below.
+        let submission = tokio::select! {
+            biased;
+            () = stop.cancelled() => return Ok(None),
+            result = async {
+                let response = self.client
                     .post(submit_url)
+                    .timeout(REQUEST_TIMEOUT)
                     .header("Authorization", format!("Key {key}"))
-                    .json(&request_body(model, config, &data_uri)),
-                stop,
-                None,
-                key,
-            )
-            .await?;
-        let Some(response) = response else {
-            return Ok(None);
-        };
-        let response =
-            authenticated_response(response, "Fal.ai queue submission failed", key).await?;
-        let Some(submission) = self
-            .json::<QueueSubmission>(response, stop, None, key)
-            .await?
-        else {
-            return Ok(None);
+                    .json(&request_body(model, config, &data_uri))
+                    .send()
+                    .await
+                    .context("Fal.ai queue submission could not be confirmed. Check Fal.ai Requests before retrying; Koharu did not automatically resubmit the paid job")?;
+                let response = authenticated_response(response, "Fal.ai queue submission failed", key).await?;
+                response.json::<QueueSubmission>().await
+                    .context("Fal.ai queue acknowledgement could not be read. Check Fal.ai Requests before retrying; Koharu did not automatically resubmit the paid job")
+            } => result?,
         };
         for url in [
             &submission.status_url,
@@ -162,24 +222,20 @@ impl Fal {
                 }
                 () = tokio::time::sleep(self.poll_interval) => {}
             }
-            let response = self
-                .send(
-                    self.client
-                        .get(submission.status_url.clone())
-                        .header("Authorization", format!("Key {key}")),
-                    stop,
-                    Some(&submission.cancel_url),
-                    key,
-                )
-                .await?;
-            let Some(response) = response else {
-                return Ok(None);
-            };
-            let response =
-                authenticated_response(response, "Fal.ai status request failed", key).await?;
             let Some(status) = self
-                .json::<QueueStatus>(response, stop, Some(&submission.cancel_url), key)
-                .await?
+                .get(
+                    &submission.status_url,
+                    stop,
+                    &submission.cancel_url,
+                    key,
+                    true,
+                    |response| async move {
+                        let response = authenticated_response(response, "Fal.ai status request failed", key).await?;
+                        Ok(response.json::<QueueStatus>().await?)
+                    },
+                )
+                .await
+                .with_context(|| format!("Fal.ai status could not be retrieved; existing job: {}. The paid job was not resubmitted", submission.status_url))?
             else {
                 return Ok(None);
             };
@@ -190,40 +246,27 @@ impl Fal {
             }
         }
 
-        let response = self
-            .send(
-                self.client
-                    .get(submission.response_url.clone())
-                    .header("Authorization", format!("Key {key}")),
-                stop,
-                Some(&submission.cancel_url),
-                key,
-            )
-            .await?;
-        let Some(response) = response else {
-            return Ok(None);
-        };
-        if response.status() == StatusCode::UNPROCESSABLE_ENTITY {
-            let request_id = response
-                .headers()
-                .get("x-fal-request-id")
-                .and_then(|value| value.to_str().ok())
-                .unwrap_or("not provided")
-                .to_owned();
-            let detail = safe_error_detail(response, key).await;
-            bail!(
-                "Fal.ai result request failed: 422 Unprocessable Entity; Fal request ID: {}; detail: {detail}",
-                redact_sensitive(&request_id, key)
-            );
-        }
-        let response =
-            authenticated_response(response, "Fal.ai result request failed", key).await?;
         let Some(result) = self
-            .json::<FalResult>(response, stop, Some(&submission.cancel_url), key)
-            .await?
+            .get(
+                &submission.response_url,
+                stop,
+                &submission.cancel_url,
+                key,
+                true,
+                |response| async move {
+                    let response = authenticated_response(response, "Fal.ai result request failed", key).await?;
+                    Ok(response.json::<FalResult>().await?)
+                },
+            )
+            .await
+            .with_context(|| format!("Fal.ai result could not be retrieved; existing job: {}. The paid job was not resubmitted", submission.response_url))?
         else {
             return Ok(None);
         };
+        ensure!(
+            !result.has_nsfw_concepts.iter().any(|flagged| *flagged),
+            "Fal.ai blocked the generated image with its safety checker; the result was not applied"
+        );
         let [output] = result.images.as_slice() else {
             bail!(
                 "Fal.ai returned {} images, expected exactly one",
@@ -238,38 +281,17 @@ impl Fal {
             );
         }
 
-        let response = self
-            .send(
-                self.client.get(output.url.clone()),
-                stop,
-                Some(&submission.cancel_url),
-                key,
-            )
-            .await?;
-        let Some(response) = response else {
-            return Ok(None);
-        };
-        let response = response
-            .error_for_status()
-            .context("Fal.ai image download failed")?;
-        let content_type = response
-            .headers()
-            .get(CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok())
-            .context("Fal.ai image response has no valid content type")?;
-        ensure!(
-            content_type.starts_with("image/"),
-            "Fal.ai image response has invalid content type {content_type}"
-        );
-        if let Some(length) = response.content_length() {
-            ensure!(
-                length <= MAX_IMAGE_BYTES as u64,
-                "Fal.ai image exceeds the 64 MiB limit"
-            );
-        }
         let Some(bytes) = self
-            .download(response, stop, &submission.cancel_url, key)
-            .await?
+            .get(
+                &output.url,
+                stop,
+                &submission.cancel_url,
+                key,
+                false,
+                read_image,
+            )
+            .await
+            .with_context(|| format!("Fal.ai image download failed. The image was already generated; download it from {}. The paid job was not resubmitted", output.url))?
         else {
             return Ok(None);
         };
@@ -294,70 +316,61 @@ impl Fal {
         Ok(())
     }
 
-    async fn send(
+    async fn get<T, F, Fut>(
         &self,
-        request: reqwest::RequestBuilder,
-        stop: &StopToken,
-        cancel_url: Option<&Url>,
-        key: &str,
-    ) -> Result<Option<Response>> {
-        tokio::select! {
-            response = request.send() => Ok(Some(response?)),
-            () = stop.cancelled() => {
-                if let Some(cancel_url) = cancel_url {
-                    self.cancel(cancel_url, key);
-                }
-                Ok(None)
-            }
-        }
-    }
-
-    async fn json<T: DeserializeOwned>(
-        &self,
-        response: Response,
-        stop: &StopToken,
-        cancel_url: Option<&Url>,
-        key: &str,
-    ) -> Result<Option<T>> {
-        tokio::select! {
-            result = response.json() => Ok(Some(result?)),
-            () = stop.cancelled() => {
-                if let Some(cancel_url) = cancel_url {
-                    self.cancel(cancel_url, key);
-                }
-                Ok(None)
-            }
-        }
-    }
-
-    async fn download(
-        &self,
-        response: Response,
+        url: &Url,
         stop: &StopToken,
         cancel_url: &Url,
         key: &str,
-    ) -> Result<Option<Vec<u8>>> {
-        let mut bytes = Vec::new();
-        let mut stream = response.bytes_stream();
-        loop {
-            let chunk = tokio::select! {
-                chunk = stream.next() => chunk,
+        authenticated: bool,
+        read: F,
+    ) -> Result<Option<T>>
+    where
+        F: Fn(Response) -> Fut,
+        Fut: Future<Output = Result<T>>,
+    {
+        for attempt in 1..=READ_ATTEMPTS {
+            let mut request = self.client.get(url.clone()).timeout(REQUEST_TIMEOUT);
+            if authenticated {
+                request = request.header("Authorization", format!("Key {key}"));
+            }
+            let result = tokio::select! {
+                biased;
                 () = stop.cancelled() => {
                     self.cancel(cancel_url, key);
                     return Ok(None);
                 }
+                result = async {
+                    let response = request.send().await?;
+                    if retryable_status(response.status()) {
+                        return Err(response.error_for_status().unwrap_err().into());
+                    }
+                    read(response).await
+                } => result,
             };
-            let Some(chunk) = chunk else {
-                break;
+            match result {
+                Ok(value) => return Ok(Some(value)),
+                Err(error) if retryable_read(&error) && attempt < READ_ATTEMPTS => {
+                    tracing::warn!(
+                        attempt,
+                        "Fal.ai read failed; retrying the same URL without resubmitting the job"
+                    );
+                }
+                Err(error) => {
+                    return Err(error)
+                        .with_context(|| format!("Fal.ai read failed after {attempt} attempt(s)"));
+                }
+            }
+            tokio::select! {
+                biased;
+                () = stop.cancelled() => {
+                    self.cancel(cancel_url, key);
+                    return Ok(None);
+                }
+                () = tokio::time::sleep(self.retry_delay * (1 << (attempt - 1))) => {}
             };
-            let chunk = chunk?;
-            ensure!(
-                bytes.len().saturating_add(chunk.len()) <= MAX_IMAGE_BYTES,
-                "Fal.ai image exceeds the 64 MiB limit"
-            );
-            bytes.extend_from_slice(&chunk);
         }
-        Ok(Some(bytes))
+        unreachable!("the final read attempt always returns")
     }
 
     fn cancel(&self, cancel_url: &Url, key: &str) {
@@ -367,6 +380,7 @@ impl Fal {
         drop(tokio::spawn(async move {
             match client
                 .put(cancel_url)
+                .timeout(Duration::from_secs(10))
                 .header("Authorization", authorization)
                 .send()
                 .await
@@ -379,6 +393,62 @@ impl Fal {
             }
         }));
     }
+}
+
+fn retryable_status(status: StatusCode) -> bool {
+    matches!(
+        status,
+        StatusCode::REQUEST_TIMEOUT
+            | StatusCode::BAD_GATEWAY
+            | StatusCode::SERVICE_UNAVAILABLE
+            | StatusCode::GATEWAY_TIMEOUT
+    )
+}
+
+fn retryable_read(error: &anyhow::Error) -> bool {
+    // Reqwest wraps interrupted JSON downloads in a Decode error whose source
+    // is a Body error. A well-downloaded but invalid JSON document is not retried.
+    error.chain().any(|source| {
+        source
+            .downcast_ref::<reqwest::Error>()
+            .is_some_and(|error| {
+                error.is_connect()
+                    || error.is_timeout()
+                    || error.is_request()
+                    || error.is_body()
+                    || error.status().is_some_and(retryable_status)
+            })
+    })
+}
+
+async fn read_image(response: Response) -> Result<Vec<u8>> {
+    let response = response.error_for_status()?;
+    let content_type = response
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .context("Fal.ai image response has no valid content type")?;
+    ensure!(
+        content_type.starts_with("image/"),
+        "Fal.ai image response has invalid content type {content_type}"
+    );
+    if let Some(length) = response.content_length() {
+        ensure!(
+            length <= MAX_IMAGE_BYTES as u64,
+            "Fal.ai image exceeds the 64 MiB limit"
+        );
+    }
+    let mut bytes = Vec::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk?;
+        ensure!(
+            bytes.len().saturating_add(chunk.len()) <= MAX_IMAGE_BYTES,
+            "Fal.ai image exceeds the 64 MiB limit"
+        );
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(bytes)
 }
 
 async fn authenticated_response(
@@ -571,20 +641,33 @@ fn normalize_key(credential: &str) -> Result<&str> {
 }
 
 fn request_body(model: FalModel, config: &ImageEditConfig, data_uri: &str) -> Value {
-    let prompt = match config.prompt.trim() {
-        DEFAULT_CLEANUP_PROMPT => DEFAULT_CLEANUP_PROMPT.to_owned(),
-        prompt => format!("{prompt}\n\nSafety boundary: {DEFAULT_CLEANUP_PROMPT}"),
-    };
     let mut body = json!({
-        "prompt": prompt,
-        "num_images": 1,
-        "aspect_ratio": "auto",
-        "output_format": "png",
+        "prompt": config.prompt,
     });
-    if model.pro() {
-        body["image_url"] = Value::String(data_uri.to_owned());
-    } else {
-        body["image_urls"] = Value::Array(vec![Value::String(data_uri.to_owned())]);
+    match model {
+        FalModel::MaiImage2_5ProEdit
+        | FalModel::FluxKontextDev
+        | FalModel::FluxKontextPro
+        | FalModel::FluxKontextMax => body["image_url"] = json!(data_uri),
+        _ => body["image_urls"] = json!([data_uri]),
+    }
+    if !matches!(model, FalModel::Seedream4_5Edit) {
+        body["output_format"] = json!("png");
+    }
+    if !matches!(model, FalModel::Flux2Pro | FalModel::Flux2Flex) {
+        body["num_images"] = json!(1);
+    }
+    // Each edit endpoint owns its sizing defaults; MAI's "auto" is invalid for Kontext.
+    match model {
+        FalModel::MaiImage2_5Edit | FalModel::MaiImage2_5ProEdit => {
+            body["aspect_ratio"] = json!("auto");
+        }
+        FalModel::FluxKontextDev => body["resolution_mode"] = json!("match_input"),
+        FalModel::Seedream4_5Edit => {
+            body["max_images"] = json!(1);
+            body["image_size"] = json!("auto_2K");
+        }
+        _ => {}
     }
     body
 }
@@ -604,6 +687,8 @@ struct QueueStatus {
 #[derive(Deserialize)]
 struct FalResult {
     images: Vec<FalImage>,
+    #[serde(default)]
+    has_nsfw_concepts: Vec<bool>,
 }
 
 #[derive(Deserialize)]
@@ -624,7 +709,10 @@ mod tests {
 
     #[test]
     fn published_model_endpoints_use_their_exact_image_fields() {
-        let config = ImageEditConfig::default();
+        let config = ImageEditConfig {
+            prompt: "  exact restoration prompt  ".to_owned(),
+            ..ImageEditConfig::default()
+        };
         let normal = request_body(
             FalModel::MaiImage2_5Edit,
             &config,
@@ -649,10 +737,88 @@ mod tests {
         assert_eq!(pro["image_url"], "data:image/png;base64,x");
         assert!(pro.get("image_urls").is_none());
         for body in [&normal, &pro] {
+            assert_eq!(body["prompt"], "  exact restoration prompt  ");
             assert_eq!(body["num_images"], 1);
             assert_eq!(body["aspect_ratio"], "auto");
             assert_eq!(body["output_format"], "png");
         }
+    }
+
+    #[test]
+    fn editing_requests_match_each_documented_fal_schema() {
+        let config = ImageEditConfig {
+            prompt: "Restore this crop.".to_owned(),
+            ..ImageEditConfig::default()
+        };
+        for (endpoints, expected) in [
+            (
+                vec!["fal-ai/flux-kontext/dev"],
+                json!({"prompt": "Restore this crop.", "image_url": "data:image/png;base64,x",
+                    "num_images": 1, "output_format": "png", "resolution_mode": "match_input"}),
+            ),
+            (
+                vec!["fal-ai/flux-pro/kontext", "fal-ai/flux-pro/kontext/max"],
+                json!({"prompt": "Restore this crop.", "image_url": "data:image/png;base64,x",
+                    "num_images": 1, "output_format": "png"}),
+            ),
+            (
+                vec![
+                    "fal-ai/flux-2/edit",
+                    "fal-ai/flux-2/klein/4b/edit",
+                    "fal-ai/flux-2/klein/9b/edit",
+                    "fal-ai/qwen-image-edit-2511",
+                ],
+                json!({"prompt": "Restore this crop.", "image_urls": ["data:image/png;base64,x"],
+                    "num_images": 1, "output_format": "png"}),
+            ),
+            (
+                vec!["fal-ai/flux-2-pro/edit", "fal-ai/flux-2-flex/edit"],
+                json!({"prompt": "Restore this crop.", "image_urls": ["data:image/png;base64,x"],
+                    "output_format": "png"}),
+            ),
+            (
+                vec!["fal-ai/bytedance/seedream/v4.5/edit"],
+                json!({"prompt": "Restore this crop.", "image_urls": ["data:image/png;base64,x"],
+                    "num_images": 1, "max_images": 1, "image_size": "auto_2K"}),
+            ),
+        ] {
+            for endpoint in endpoints {
+                let model = FalModel::from_id(endpoint).unwrap();
+                assert_eq!(model.id(), endpoint);
+                assert_eq!(
+                    request_body(model, &config, "data:image/png;base64,x"),
+                    expected,
+                    "{endpoint}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn flagged_result_does_not_download_or_apply_a_black_placeholder() {
+        let server = MockFal::start(MockMode::FlaggedImage).await;
+        let result = server
+            .client(Duration::from_millis(1))
+            .edit_with_key(
+                FalModel::Flux2Klein9B,
+                &ImageEditConfig::default(),
+                &DynamicImage::new_rgb8(3, 2),
+                &StopToken::default(),
+                "test-key",
+            )
+            .await;
+        assert!(
+            result.is_err(),
+            "a flagged placeholder must not reach the canvas"
+        );
+        assert!(
+            !server
+                .requests
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|request| request == "GET /image")
+        );
     }
 
     #[test]
@@ -738,6 +904,199 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn transient_read_failures_recover_without_resubmitting_the_paid_job() {
+        for (path, failure) in [
+            ("/status", ReadFailure::Disconnect),
+            ("/result", ReadFailure::Truncated),
+            ("/image", ReadFailure::Disconnect),
+            ("/image", ReadFailure::Truncated),
+            ("/image", ReadFailure::Unavailable),
+            ("/image", ReadFailure::Stall),
+        ] {
+            let server = MockFal::start(MockMode::ReadFailure {
+                path,
+                failure,
+                recover: true,
+            })
+            .await;
+            let result = server
+                .client(Duration::from_millis(1))
+                .edit_with_key(
+                    FalModel::Flux2Flex,
+                    &ImageEditConfig::default(),
+                    &DynamicImage::new_rgb8(3, 2),
+                    &StopToken::default(),
+                    "test-key",
+                )
+                .await
+                .unwrap_or_else(|error| panic!("{path} {failure:?}: {error:#}"))
+                .unwrap();
+            assert_eq!((result.width(), result.height()), (3, 2));
+            let requests = server.requests.lock().unwrap();
+            assert_eq!(
+                requests.iter().filter(|r| r.starts_with("POST ")).count(),
+                1
+            );
+            assert_eq!(
+                requests
+                    .iter()
+                    .filter(|r| *r == &format!("GET {path}"))
+                    .count(),
+                if path == "/status" { 3 } else { 2 }
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn exhausted_download_retries_report_the_existing_image_url() {
+        for failure in [
+            ReadFailure::Disconnect,
+            ReadFailure::Truncated,
+            ReadFailure::Unavailable,
+        ] {
+            let server = MockFal::start(MockMode::ReadFailure {
+                path: "/image",
+                failure,
+                recover: false,
+            })
+            .await;
+            let error = server
+                .client(Duration::from_millis(1))
+                .edit_with_key(
+                    FalModel::Flux2Flex,
+                    &ImageEditConfig::default(),
+                    &DynamicImage::new_rgb8(1, 1),
+                    &StopToken::default(),
+                    "test-key",
+                )
+                .await
+                .unwrap_err();
+            let message = format!("{error:#}");
+            assert!(message.contains("already generated"), "{message}");
+            assert!(
+                message.contains(server.base.join("image").unwrap().as_str()),
+                "{message}"
+            );
+            assert!(message.contains("4 attempt(s)"), "{message}");
+            let requests = server.requests.lock().unwrap();
+            assert_eq!(
+                requests.iter().filter(|r| r.starts_with("POST ")).count(),
+                1
+            );
+            assert_eq!(requests.iter().filter(|r| *r == "GET /image").count(), 4);
+        }
+    }
+
+    #[tokio::test]
+    async fn invalid_json_and_rejected_reads_are_not_retried() {
+        for failure in [ReadFailure::InvalidJson, ReadFailure::Unauthorized] {
+            let server = MockFal::start(MockMode::ReadFailure {
+                path: "/result",
+                failure,
+                recover: false,
+            })
+            .await;
+            let error = server
+                .client(Duration::from_millis(1))
+                .edit_with_key(
+                    FalModel::Flux2Flex,
+                    &ImageEditConfig::default(),
+                    &DynamicImage::new_rgb8(1, 1),
+                    &StopToken::default(),
+                    "test-key",
+                )
+                .await
+                .unwrap_err();
+            let message = format!("{error:#}");
+            assert!(!message.contains("test-key"), "{message}");
+            let requests = server.requests.lock().unwrap();
+            assert_eq!(
+                requests.iter().filter(|r| r.starts_with("POST ")).count(),
+                1
+            );
+            assert_eq!(requests.iter().filter(|r| *r == "GET /result").count(), 1);
+            assert!(!requests.iter().any(|r| r == "GET /image"));
+        }
+    }
+
+    #[tokio::test]
+    async fn lost_submission_acknowledgements_are_not_retried() {
+        for truncated in [false, true] {
+            let server = MockFal::start(MockMode::SubmissionFailure { truncated }).await;
+            let error = server
+                .client(Duration::from_millis(1))
+                .edit_with_key(
+                    FalModel::QwenImageEdit2511,
+                    &ImageEditConfig::default(),
+                    &DynamicImage::new_rgb8(1, 1),
+                    &StopToken::default(),
+                    "test-key",
+                )
+                .await
+                .unwrap_err();
+            let message = format!("{error:#}");
+            assert!(message.contains("could not be"), "{message}");
+            assert!(
+                message.contains("did not automatically resubmit"),
+                "{message}"
+            );
+            assert_eq!(
+                server.requests.lock().unwrap().as_slice(),
+                ["POST /fal-ai/qwen-image-edit-2511"]
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn stop_interrupts_read_backoff_and_a_stalled_body() {
+        for failure in [ReadFailure::Unavailable, ReadFailure::Stall] {
+            let server = MockFal::start(MockMode::ReadFailure {
+                path: "/image",
+                failure,
+                recover: false,
+            })
+            .await;
+            let mut fal = server.client(Duration::from_millis(1));
+            fal.retry_delay = Duration::from_secs(10);
+            let stop = StopToken::default();
+            let task = tokio::spawn({
+                let stop = stop.clone();
+                async move {
+                    fal.edit_with_key(
+                        FalModel::Flux2Flex,
+                        &ImageEditConfig::default(),
+                        &DynamicImage::new_rgb8(1, 1),
+                        &stop,
+                        "test-key",
+                    )
+                    .await
+                }
+            });
+            tokio::time::timeout(Duration::from_secs(1), server.read_failed.notified())
+                .await
+                .unwrap();
+            stop.stop();
+            assert!(
+                tokio::time::timeout(Duration::from_secs(1), task)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .unwrap()
+                    .is_none()
+            );
+            tokio::time::timeout(Duration::from_secs(1), server.cancelled.notified())
+                .await
+                .unwrap();
+            let requests = server.requests.lock().unwrap();
+            assert_eq!(
+                requests.iter().filter(|r| r.starts_with("POST ")).count(),
+                1
+            );
+            assert_eq!(requests.iter().filter(|r| *r == "GET /image").count(), 1);
+        }
+    }
+
+    #[tokio::test]
     async fn reports_upstream_failure_without_resubmitting_the_paid_job() {
         let server = MockFal::start(MockMode::UpstreamFailure).await;
         let error = server
@@ -800,13 +1159,7 @@ mod tests {
             1
         );
         let bodies = server.request_bodies.lock().unwrap();
-        let prompt = bodies[0]["prompt"].as_str().unwrap();
-        assert!(prompt.contains(&config.prompt), "{prompt}");
-        assert!(prompt.contains("speech bubble and caption box"), "{prompt}");
-        assert!(prompt.contains("all visible text"), "{prompt}");
-        assert!(prompt.contains("watermarks"), "{prompt}");
-        assert!(prompt.contains("signatures"), "{prompt}");
-        assert!(prompt.contains("Only after preserving"), "{prompt}");
+        assert_eq!(bodies[0]["prompt"], config.prompt);
     }
 
     #[tokio::test]
@@ -906,17 +1259,44 @@ mod tests {
                 MockMode::Oversized => assert!(message.contains("64 MiB")),
                 MockMode::InvalidImage => assert!(message.contains("invalid image")),
                 MockMode::Success
+                | MockMode::FlaggedImage
                 | MockMode::Unauthorized
                 | MockMode::Forbidden
                 | MockMode::UpstreamFailure
                 | MockMode::ResultUnprocessable
-                | MockMode::GenericUnprocessable => unreachable!(),
+                | MockMode::GenericUnprocessable
+                | MockMode::SubmissionFailure { .. }
+                | MockMode::ReadFailure { .. } => unreachable!(),
             }
         }
     }
 
+    pub(in crate::stages) async fn submit_reviewed_image(
+        config: &ImageEditConfig,
+        image: &DynamicImage,
+        stop: &StopToken,
+    ) -> Value {
+        let server = MockFal::start(MockMode::Success).await;
+        server
+            .client(Duration::from_millis(1))
+            .edit_with_key(FalModel::MaiImage2_5Edit, config, image, stop, "test-key")
+            .await
+            .unwrap()
+            .unwrap();
+        server.request_bodies.lock().unwrap()[0].clone()
+    }
+
     #[derive(Clone, Copy)]
     enum MockMode {
+        SubmissionFailure {
+            truncated: bool,
+        },
+        ReadFailure {
+            path: &'static str,
+            failure: ReadFailure,
+            recover: bool,
+        },
+        FlaggedImage,
         Success,
         Unauthorized,
         Forbidden,
@@ -928,6 +1308,16 @@ mod tests {
         InvalidImage,
     }
 
+    #[derive(Clone, Copy, Debug)]
+    enum ReadFailure {
+        Disconnect,
+        Truncated,
+        Unavailable,
+        InvalidJson,
+        Unauthorized,
+        Stall,
+    }
+
     struct MockFal {
         base: Url,
         requests: Arc<Mutex<Vec<String>>>,
@@ -935,6 +1325,7 @@ mod tests {
         authorizations: Arc<Mutex<Vec<String>>>,
         status_polled: Arc<Notify>,
         cancelled: Arc<Notify>,
+        read_failed: Arc<Notify>,
     }
 
     impl MockFal {
@@ -946,12 +1337,14 @@ mod tests {
             let authorizations = Arc::new(Mutex::new(Vec::new()));
             let status_polled = Arc::new(Notify::new());
             let cancelled = Arc::new(Notify::new());
+            let read_failed = Arc::new(Notify::new());
             let task_base = base.clone();
             let task_requests = requests.clone();
             let task_request_bodies = request_bodies.clone();
             let task_authorizations = authorizations.clone();
             let task_status_polled = status_polled.clone();
             let task_cancelled = cancelled.clone();
+            let task_read_failed = read_failed.clone();
             tokio::spawn(async move {
                 let statuses = AtomicUsize::new(0);
                 loop {
@@ -981,6 +1374,57 @@ mod tests {
                             .then(|| value.trim().to_owned())
                     }) {
                         task_authorizations.lock().unwrap().push(authorization);
+                    }
+                    if let MockMode::SubmissionFailure { truncated } = mode
+                        && method == "POST"
+                    {
+                        if truncated {
+                            socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 100\r\nConnection: close\r\n\r\n{").await.unwrap();
+                        }
+                        socket.shutdown().await.unwrap();
+                        continue;
+                    }
+                    if let MockMode::ReadFailure {
+                        path: failed_path,
+                        failure,
+                        recover,
+                    } = mode
+                        && method == "GET"
+                        && path == failed_path
+                    {
+                        let attempts = task_requests
+                            .lock()
+                            .unwrap()
+                            .iter()
+                            .filter(|request| *request == &format!("GET {path}"))
+                            .count();
+                        if !recover || attempts == 1 {
+                            let response = match failure {
+                                ReadFailure::Disconnect => "",
+                                ReadFailure::Truncated | ReadFailure::Stall => {
+                                    "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: 100\r\nConnection: close\r\n\r\nx"
+                                }
+                                ReadFailure::Unavailable => {
+                                    "HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                                }
+                                ReadFailure::InvalidJson => {
+                                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}"
+                                }
+                                ReadFailure::Unauthorized => {
+                                    "HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                                }
+                            };
+                            socket.write_all(response.as_bytes()).await.unwrap();
+                            if matches!(failure, ReadFailure::Stall) {
+                                tokio::spawn(async move {
+                                    let _ = socket.read(&mut [0]).await;
+                                });
+                            } else {
+                                socket.shutdown().await.unwrap();
+                            }
+                            task_read_failed.notify_one();
+                            continue;
+                        }
                     }
                     let (status, content_type, body, content_length) = match (method, path) {
                         ("POST", _) if matches!(mode, MockMode::Unauthorized) => {
@@ -1078,7 +1522,8 @@ mod tests {
                                     "images": [{
                                         "url": task_base.join("image").unwrap(),
                                         "content_type": "image/png"
-                                    }]
+                                    }],
+                                    "has_nsfw_concepts": [matches!(mode, MockMode::FlaggedImage)]
                                 })
                                 .to_string()
                                 .into_bytes();
@@ -1123,14 +1568,20 @@ mod tests {
                 authorizations,
                 status_polled,
                 cancelled,
+                read_failed,
             }
         }
 
         fn client(&self, poll_interval: Duration) -> Fal {
             Fal {
-                client: reqwest::Client::new(),
+                client: reqwest::Client::builder()
+                    .no_proxy()
+                    .read_timeout(Duration::from_millis(200))
+                    .build()
+                    .unwrap(),
                 queue_base: self.base.clone(),
                 poll_interval,
+                retry_delay: Duration::from_millis(1),
             }
         }
     }
