@@ -34,6 +34,14 @@ pub(crate) fn normalize_cleanup_prompt(prompt: &mut String) -> bool {
 const CONTENT_POLICY_DETAIL: &str = "Fal.ai blocked this image or prompt under its content policy. \
     Koharu did not retry the paid job. Review the page and prompt against Fal.ai's policy before \
     trying again";
+pub(super) const SANITIZED_FALLBACK_PROMPT: &str = "Restore the background texture, screentone pattern, and line art underneath the masked lettering regions. Technical image restoration only; preserve all speech bubble borders and surrounding artwork unchanged.";
+
+pub(super) fn is_content_policy_or_unprocessable(error: &anyhow::Error) -> bool {
+    let message = format!("{error:#}");
+    message.contains(CONTENT_POLICY_DETAIL)
+        || message.contains("content_policy_violation")
+        || message.contains("422 Unprocessable Entity")
+}
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "kebab-case")]
@@ -59,7 +67,7 @@ impl Default for ImageEditConfig {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum FalModel {
     MaiImage2_5Edit,
     MaiImage2_5ProEdit,
@@ -70,6 +78,13 @@ impl FalModel {
         match self {
             Self::MaiImage2_5Edit => "microsoft/mai-image-2.5/edit",
             Self::MaiImage2_5ProEdit => "microsoft/mai-image-2.5-pro/edit",
+        }
+    }
+
+    pub(super) const fn alternate(self) -> Self {
+        match self {
+            Self::MaiImage2_5Edit => Self::MaiImage2_5ProEdit,
+            Self::MaiImage2_5ProEdit => Self::MaiImage2_5Edit,
         }
     }
 

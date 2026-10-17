@@ -19,6 +19,16 @@ const MAX_ERROR_BYTES: usize = 16 * 1024;
 const MAX_ERROR_DETAIL_CHARS: usize = 512;
 const FIRST_PINNED_MODEL: &str = "microsoft/mai-image-2.5";
 const SECOND_PINNED_MODEL: &str = "microsoft/mai-image-2.5-pro";
+pub(super) const DEFAULT_FALLBACK_MODEL: &str = FIRST_PINNED_MODEL;
+
+pub(super) fn is_moderation_or_policy_error(error: &anyhow::Error) -> bool {
+    let message = format!("{error:#}").to_ascii_lowercase();
+    message.contains("moderation")
+        || message.contains("content_policy")
+        || message.contains("safety")
+        || message.contains("flagged")
+        || message.contains("422")
+}
 
 /// A model returned by OpenRouter's dedicated image catalog.
 ///

@@ -40,11 +40,14 @@ fn chapter_output_budget(request: &TranslationRequest) -> anyhow::Result<u32> {
 
 pub use backend::{
     OcrRequest, TranslationContext, TranslationRequest, TranslationSegmentMetadata, TranslationUnit,
+    TranslationVariants,
 };
 pub use language::Language;
 pub use model::{GenerationConfig, Model, ModelSelection, Quantization};
 pub(crate) use model::{ModelGeneration, QuantizationDefinition, display_name};
-pub use prompt::parse_translation_response;
+pub use prompt::{
+    parse_translation_response, parse_translation_variants_response, synthesize_compact_variants,
+};
 pub use provider::{Provider, ProviderConfig, ProvidersConfig};
 
 #[derive(Clone)]
@@ -236,6 +239,29 @@ impl Translator {
         }
         tracing::Span::current().record("outcome", "completed");
         Ok((provider_id, translated))
+    }
+
+    pub async fn translate_variants(
+        &self,
+        selection: &ModelSelection,
+        generation: GenerationConfig,
+        request: TranslationRequest,
+    ) -> anyhow::Result<(&'static str, Vec<TranslationVariants>)> {
+        let captured = request.captured_variants.clone();
+        let (provider_id, translated) = self.translate(selection, generation, request).await?;
+        let variants = captured
+            .0
+            .lock()
+            .ok()
+            .and_then(|mut guard| guard.take())
+            .filter(|items| items.len() == translated.len())
+            .unwrap_or_else(|| {
+                translated
+                    .into_iter()
+                    .map(TranslationVariants::from_full)
+                    .collect()
+            });
+        Ok((provider_id, variants))
     }
 
     #[tracing::instrument(

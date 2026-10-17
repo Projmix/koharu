@@ -4,18 +4,11 @@
     "packages/*"
   ],
   "scripts": {
-    "tauri": "cargo tauri",
-    "postinstall": "cargo install --git https://github.com/tauri-apps/tauri --branch feat/cef --locked tauri-cli",
-    "predev": "kill-port 3000",
-    "dev": "cargo tauri dev --features default",
-    "build": "cargo tauri build --no-bundle",
-    "ui:dev": "bun run --filter @koharu/bridge build:dev && bun run --parallel --filter '@koharu/*' dev",
-    "ui:build": "bun run --filter @koharu/bridge build && bun run --filter @koharu/app build",
-    "docs:dev": "cd docs && uvx --from zensical==0.0.43 zensical serve",
-    "docs:build": "cd docs && uvx --from zensical==0.0.43 zensical build",
-    "lint": "bun run --filter '@koharu/*' lint",
-    "test": "bun run --filter @koharu/app test",
-    "sponsors": "cd .github/sponsorkit && sponsorkit --force",
+    "dev": "npm run dev --workspace=@koharu/app",
+    "build": "npm run build --workspace=@koharu/app",
+    "start": "npm run start --workspace=@koharu/app",
+    "lint": "npm run lint --workspaces --if-present",
+    "test": "npm run test --workspace=@koharu/app",
     "format": "oxfmt packages tests package.json .oxfmtrc.json .vscode",
     "check": "oxfmt --check packages tests package.json .oxfmtrc.json .vscode"
   },

@@ -1,21 +1,548 @@
 //! Text layout and portable glyph recording.
 
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use anyhow::Result;
+use fontique::Attributes;
 use koharu_rasterizer::{
     PreparedGlyph, PreparedGlyphRun, PreparedResource, PreparedScene, PreparedSceneCommand,
     ResourceId,
 };
+use parking_lot::Mutex;
+use serde::{Deserialize, Serialize};
 use vello::kurbo::Affine;
 
 use crate::{
     Error, FontStyle, HyphenationPolicy, LayoutRun, RenderBounds, RenderDiagnostic,
-    Result as RenderResult, TextAlign, TextLayout, WritingMode,
-    bubble::LayoutBox,
-    fonts::{Fonts, font_key},
-    script::is_chinese_or_japanese_text,
+    Result as RenderResult, TextAlign, TextLayout, TypesettingConfig, WritingMode,
+    bubble::{
+        LayoutBox, contour, detect_contour_lobes, geometry_frame, polygon_area_px,
+    },
+    fonts::{Font, FontSystem, Fonts, font_key},
+    script::{fontique_scripts, is_chinese_or_japanese_text},
+    segment::contains_cyrillic,
 };
+
+static COPYFIT_FONT_SYSTEM: LazyLock<Mutex<FontSystem>> =
+    LazyLock::new(|| Mutex::new(FontSystem::new()));
+
+/// Configuration for dry-run copyfitting measurement (`measure_text_fit`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct CopyfitFontConfig {
+    pub font_families: Vec<String>,
+    pub preferred_font: Option<String>,
+    pub font_weight: Option<u16>,
+    pub font_style: Option<FontStyle>,
+    pub language: Option<String>,
+    pub minimum_font_size: f32,
+    pub target_font_size: f32,
+    pub line_height: f32,
+    pub text_inset: [f32; 4],
+    pub writing_mode: WritingMode,
+    /// Safe white-margin relaxation in pixels (`0.0..=5.0`) available inside the bubble border.
+    pub safe_margin_relax_px: f32,
+}
+
+impl Default for CopyfitFontConfig {
+    fn default() -> Self {
+        Self {
+            font_families: TypesettingConfig::default().font_families,
+            preferred_font: None,
+            font_weight: None,
+            font_style: None,
+            language: None,
+            minimum_font_size: 9.0,
+            target_font_size: 13.0,
+            line_height: 1.2,
+            text_inset: [4.0; 4],
+            writing_mode: WritingMode::Horizontal,
+            safe_margin_relax_px: 0.0,
+        }
+    }
+}
+
+/// Geometric and typographic diagnostics produced by `measure_text_fit` before rasterization.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CopyfitDiagnostics {
+    pub resulting_font_size: f32,
+    pub target_font_size: f32,
+    pub overflow: bool,
+    pub line_count: usize,
+    pub lines: Vec<String>,
+    pub max_word_char_len: usize,
+    pub has_ugly_single_char_wrap: bool,
+    pub area_utilization: f32,
+    pub relaxed_inset: [f32; 4],
+    pub lobe_count: usize,
+    pub recommended_max_chars: usize,
+    pub recommended_max_word_len: usize,
+}
+
+/// Fast dry-run measurement of how `text` fits inside `bubble_polygon` without GPU rasterization.
+///
+/// Uses contour-aware diamond/barrel horizontal cross-sections, syllabic hyphenation for narrow
+/// bubbles, two-lobe neck detection, and automatic contour padding relaxation when
+/// `resulting_font_size < 12.0` and `safe_margin_relax_px >= 2.0`.
+pub fn measure_text_fit(
+    text: &str,
+    bubble_polygon: &koharu_scene::Geometry,
+    font_config: &CopyfitFontConfig,
+) -> RenderResult<CopyfitDiagnostics> {
+    let trimmed = text.trim();
+    let Some(frame) = geometry_frame(bubble_polygon) else {
+        return Err(Error::invalid("invalid bubble polygon geometry for copyfit"));
+    };
+    let raw_contour = contour(bubble_polygon, frame);
+    let lobes = detect_contour_lobes(&raw_contour);
+    let lobe_count = lobes.len().max(1);
+    let usable_area = polygon_area_px(&raw_contour)
+        .max(frame.bounds.width * frame.bounds.height * 0.72)
+        .max(1.0);
+    let target_font_size = (usable_area.sqrt() * 0.14)
+        .clamp(12.5, 14.0)
+        .max(font_config.target_font_size);
+
+    let max_word_char_len = max_alphabetic_word_len(trimmed);
+    let effective_inset = font_config.text_inset;
+    let max_inset = effective_inset.into_iter().fold(0.0f32, f32::max);
+    let usable_width = (frame.bounds.width - max_inset * 2.0).max(16.0);
+    let usable_height = (frame.bounds.height - max_inset * 2.0).max(16.0);
+    let avg_char_px = (target_font_size * 0.56).max(6.5);
+    let recommended_max_word_len = ((usable_width * 0.88) / avg_char_px)
+        .floor()
+        .clamp(5.0, 18.0) as usize;
+    let max_target_lines = (usable_height / (target_font_size * font_config.line_height))
+        .floor()
+        .max(1.0);
+    let recommended_max_chars = ((usable_width * 0.76 / avg_char_px) * max_target_lines)
+        .floor()
+        .clamp(8.0, 220.0) as usize;
+
+    if trimmed.is_empty() {
+        return Ok(CopyfitDiagnostics {
+            resulting_font_size: target_font_size,
+            target_font_size,
+            overflow: false,
+            line_count: 0,
+            lines: Vec::new(),
+            max_word_char_len: 0,
+            has_ugly_single_char_wrap: false,
+            area_utilization: 0.0,
+            relaxed_inset: effective_inset,
+            lobe_count,
+            recommended_max_chars,
+            recommended_max_word_len,
+        });
+    }
+
+    let resolved_fonts = resolve_copyfit_fonts(trimmed, font_config);
+    let mut best_diag = measure_with_inset(
+        trimmed,
+        frame.bounds,
+        &raw_contour,
+        font_config,
+        effective_inset,
+        target_font_size,
+        usable_area,
+        max_word_char_len,
+        lobe_count,
+        recommended_max_chars,
+        recommended_max_word_len,
+        resolved_fonts.as_deref(),
+    );
+
+    // Contour Padding Relaxation: if font size < 12.0pt or overflowed, and there is a safe
+    // white margin inside the bubble contour (or default 4px inset can be relaxed by 2..5px),
+    // try relaxing the inset without touching the dark frame.
+    let relax_px = if font_config.safe_margin_relax_px >= 2.0 {
+        font_config.safe_margin_relax_px.clamp(2.0, 5.0)
+    } else if max_inset >= 4.0 {
+        2.5
+    } else {
+        0.0
+    };
+    if (best_diag.resulting_font_size < 12.0 || best_diag.overflow) && relax_px >= 2.0 {
+        let relaxed_inset = effective_inset.map(|v| (v - relax_px).max(1.0));
+        let candidate = measure_with_inset(
+            trimmed,
+            frame.bounds,
+            &raw_contour,
+            font_config,
+            relaxed_inset,
+            target_font_size,
+            usable_area,
+            max_word_char_len,
+            lobe_count,
+            recommended_max_chars,
+            recommended_max_word_len,
+            resolved_fonts.as_deref(),
+        );
+        if (!candidate.overflow && best_diag.overflow)
+            || (candidate.overflow == best_diag.overflow
+                && candidate.resulting_font_size > best_diag.resulting_font_size + 0.25)
+        {
+            best_diag = candidate;
+        }
+    }
+
+    Ok(best_diag)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn measure_with_inset(
+    text: &str,
+    frame_bounds: LayoutBox,
+    raw_contour: &[(f32, f32)],
+    font_config: &CopyfitFontConfig,
+    text_inset: [f32; 4],
+    target_font_size: f32,
+    usable_area: f32,
+    max_word_char_len: usize,
+    lobe_count: usize,
+    recommended_max_chars: usize,
+    recommended_max_word_len: usize,
+    fonts: Option<&[Font]>,
+) -> CopyfitDiagnostics {
+    let bounds = inset(frame_bounds, text_inset);
+    if bounds.width <= 1.0 || bounds.height <= 1.0 {
+        return CopyfitDiagnostics {
+            resulting_font_size: font_config.minimum_font_size,
+            target_font_size,
+            overflow: true,
+            line_count: 1,
+            lines: vec![text.to_owned()],
+            max_word_char_len,
+            has_ugly_single_char_wrap: false,
+            area_utilization: 1.0,
+            relaxed_inset: text_inset,
+            lobe_count,
+            recommended_max_chars,
+            recommended_max_word_len,
+        };
+    }
+
+    let [top, _, _, left] = text_inset;
+    let shifted_contour: Vec<(f32, f32)> = raw_contour
+        .iter()
+        .map(|&(x, y)| (x - left, y - top))
+        .collect();
+    let min_air = text_inset.into_iter().fold(0.0f32, f32::max);
+
+    if let Some(fonts) = fonts.filter(|f| !f.is_empty()) {
+        let maximum = if font_config.writing_mode.is_vertical() {
+            bounds.height
+        } else {
+            bounds.width
+        }
+        .max(font_config.minimum_font_size);
+        let minimum = font_config.minimum_font_size.min(maximum);
+        let mut layout = TextLayout::new(&fonts[0])
+            .with_fallback_fonts(&fonts[1..])
+            .with_writing_mode(font_config.writing_mode)
+            .with_alignment(TextAlign::Center)
+            .with_line_height(font_config.line_height)
+            .with_max_width(bounds.width)
+            .with_max_height(bounds.height)
+            .with_comic_balloon(bounds.width, bounds.height, shifted_contour.clone(), min_air)
+            .with_max_font_size(maximum)
+            .with_min_font_size(minimum);
+
+        if let Some(lang) = &font_config.language {
+            layout = layout.with_hyphenation_language_tag(lang);
+        } else if contains_cyrillic(text) {
+            layout = layout.with_hyphenation_language_tag("ru");
+        }
+        if font_config.writing_mode == WritingMode::Horizontal {
+            layout = layout.with_hyphenation_policy(HyphenationPolicy::LastResort);
+        }
+
+        if let Ok(run) = layout.run(text) {
+            let lines: Vec<String> = run
+                .lines
+                .iter()
+                .map(|line| text.get(line.range.clone()).unwrap_or("").trim().to_owned())
+                .filter(|line| !line.is_empty())
+                .collect();
+            let has_ugly = detect_ugly_line_wraps(text, &lines);
+            let text_area = (run.width * run.height).max(0.0);
+            return CopyfitDiagnostics {
+                resulting_font_size: run.font_size,
+                target_font_size,
+                overflow: run.overflowed(),
+                line_count: lines.len(),
+                lines,
+                max_word_char_len,
+                has_ugly_single_char_wrap: has_ugly,
+                area_utilization: (text_area / usable_area).clamp(0.0, 2.0),
+                relaxed_inset: text_inset,
+                lobe_count,
+                recommended_max_chars,
+                recommended_max_word_len,
+            };
+        }
+    }
+
+    measure_analytical_balloon_fit(
+        text,
+        bounds,
+        &shifted_contour,
+        font_config,
+        text_inset,
+        target_font_size,
+        usable_area,
+        max_word_char_len,
+        lobe_count,
+        recommended_max_chars,
+        recommended_max_word_len,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn measure_analytical_balloon_fit(
+    text: &str,
+    bounds: LayoutBox,
+    contour: &[(f32, f32)],
+    font_config: &CopyfitFontConfig,
+    text_inset: [f32; 4],
+    target_font_size: f32,
+    usable_area: f32,
+    max_word_char_len: usize,
+    lobe_count: usize,
+    recommended_max_chars: usize,
+    recommended_max_word_len: usize,
+) -> CopyfitDiagnostics {
+    let words: Vec<&str> = text.split_whitespace().collect();
+    let max_size = bounds.width.min(bounds.height).clamp(9.0, 48.0);
+    let min_size = font_config.minimum_font_size;
+    let mut chosen_size = min_size;
+    let mut chosen_lines: Vec<String> = Vec::new();
+    let mut chosen_overflow = true;
+
+    let span_width_at_y = |y: f32| -> f32 {
+        if contour.len() < 3 {
+            return bounds.width;
+        }
+        let mut xs = Vec::new();
+        for idx in 0..contour.len() {
+            let a = contour[idx];
+            let b = contour[(idx + 1) % contour.len()];
+            if (a.1 <= y && b.1 > y) || (b.1 <= y && a.1 > y) {
+                let t = (y - a.1) / (b.1 - a.1);
+                xs.push(a.0 + (b.0 - a.0) * t);
+            }
+        }
+        xs.sort_by(f32::total_cmp);
+        xs.as_chunks::<2>()
+            .0
+            .iter()
+            .map(|pair| (pair[1] - pair[0]).max(0.0))
+            .fold(0.0f32, f32::max)
+            .max(bounds.width * 0.45)
+    };
+
+    let mut probe_size = max_size;
+    while probe_size >= min_size - 0.01 {
+        let size = probe_size.max(min_size);
+        let char_w = size * 0.56;
+        let line_h = size * font_config.line_height;
+        let max_lines = ((bounds.height - size * 0.8) / line_h).floor().max(1.0) as usize;
+        let mut lines = Vec::new();
+        let mut current = String::new();
+        let mut word_idx = 0usize;
+        let mut overflow = false;
+
+        while word_idx < words.len() {
+            let line_idx = lines.len();
+            let y_frac = (line_idx as f32 + 0.5) / (max_lines.max(2) as f32);
+            let y = (bounds.height * y_frac).clamp(size * 0.5, (bounds.height - size * 0.5).max(size * 0.5));
+            let avail_w = (span_width_at_y(y) - size * 1.1).max(size * 1.5);
+            let max_chars_line = (avail_w / char_w).floor().max(1.0) as usize;
+
+            let word = words[word_idx];
+            let candidate_len = if current.is_empty() {
+                word.chars().count()
+            } else {
+                current.chars().count() + 1 + word.chars().count()
+            };
+            if candidate_len <= max_chars_line {
+                if !current.is_empty() {
+                    current.push(' ');
+                }
+                current.push_str(word);
+                word_idx += 1;
+            } else if current.is_empty() {
+                if bounds.width < 95.0 && word.chars().count() >= 9 && max_chars_line >= 4 {
+                    let split_at = (max_chars_line.saturating_sub(1)).clamp(3, word.chars().count() - 3);
+                    let prefix: String = word.chars().take(split_at).collect();
+                    let suffix: String = word.chars().skip(split_at).collect();
+                    lines.push(format!("{prefix}-"));
+                    current = suffix;
+                    word_idx += 1;
+                } else {
+                    overflow = true;
+                    lines.push(word.to_owned());
+                    word_idx += 1;
+                }
+            } else {
+                lines.push(std::mem::take(&mut current));
+            }
+        }
+        if !current.is_empty() {
+            lines.push(current);
+        }
+        if lines.len() > max_lines {
+            overflow = true;
+        }
+        chosen_size = size;
+        chosen_lines = lines;
+        chosen_overflow = overflow;
+        if !overflow {
+            break;
+        }
+        if (probe_size - min_size).abs() < 0.05 {
+            break;
+        }
+        probe_size = (probe_size - 0.75).max(min_size);
+    }
+
+    let max_line_chars = chosen_lines
+        .iter()
+        .map(|l| l.chars().count())
+        .max()
+        .unwrap_or(1) as f32;
+    let est_w = (max_line_chars * chosen_size * 0.56).min(bounds.width);
+    let est_h = (chosen_lines.len() as f32 * chosen_size * font_config.line_height).min(bounds.height);
+    let has_ugly = detect_ugly_line_wraps(text, &chosen_lines);
+
+    CopyfitDiagnostics {
+        resulting_font_size: chosen_size,
+        target_font_size,
+        overflow: chosen_overflow,
+        line_count: chosen_lines.len(),
+        lines: chosen_lines,
+        max_word_char_len,
+        has_ugly_single_char_wrap: has_ugly,
+        area_utilization: ((est_w * est_h) / usable_area).clamp(0.0, 2.0),
+        relaxed_inset: text_inset,
+        lobe_count,
+        recommended_max_chars,
+        recommended_max_word_len,
+    }
+}
+
+fn resolve_copyfit_fonts(text: &str, config: &CopyfitFontConfig) -> Option<Vec<Font>> {
+    let mut families = Vec::new();
+    if let Some(preferred) = &config.preferred_font
+        && !preferred.trim().is_empty()
+    {
+        families.push(preferred.clone());
+    }
+    for family in &config.font_families {
+        if !families.iter().any(|existing| existing.eq_ignore_ascii_case(family)) {
+            families.push(family.clone());
+        }
+    }
+    let scripts = fontique_scripts(text);
+    let mut system = COPYFIT_FONT_SYSTEM.lock();
+    system
+        .resolve(
+            &families,
+            Attributes::default(),
+            &scripts,
+            config.language.as_deref(),
+        )
+        .ok()
+}
+
+fn max_alphabetic_word_len(text: &str) -> usize {
+    text.split(|ch: char| !ch.is_alphabetic())
+        .map(|word| word.chars().count())
+        .max()
+        .unwrap_or(0)
+}
+
+/// Detects ugly single-character line wraps, hanging 1–2 letter Russian/English prepositions at line
+/// ends, or mid-word breaks without a hyphen.
+#[must_use]
+pub fn detect_ugly_line_wraps(full_text: &str, lines: &[String]) -> bool {
+    if lines.len() < 2 {
+        return false;
+    }
+    for (idx, line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+        let alpha_count = trimmed.chars().filter(|c| c.is_alphabetic()).count();
+        let word_count = trimmed.split_whitespace().count();
+
+        // Single-letter line in a multi-line layout (orphan character/pronoun).
+        if alpha_count == 1 && word_count == 1 && lines.len() >= 2 {
+            return true;
+        }
+
+        // Check hanging short preposition/conjunction at the end of a non-final line.
+        if idx + 1 < lines.len() {
+            let last_token = trimmed
+                .rsplit(|c: char| !c.is_alphabetic())
+                .find(|w| !w.is_empty())
+                .unwrap_or("")
+                .to_lowercase();
+            if word_count >= 2
+                && matches!(
+                    last_token.as_str(),
+                    "в" | "к"
+                        | "с"
+                        | "у"
+                        | "о"
+                        | "и"
+                        | "а"
+                        | "я"
+                        | "не"
+                        | "ни"
+                        | "на"
+                        | "по"
+                        | "за"
+                        | "из"
+                        | "от"
+                        | "до"
+                        | "об"
+                        | "со"
+                        | "ко"
+                        | "во"
+                        | "a"
+                        | "an"
+                        | "to"
+                        | "in"
+                        | "on"
+                        | "at"
+                        | "of"
+                )
+            {
+                return true;
+            }
+        }
+    }
+
+    // Also check if any word in full_text was broken across two lines without a hyphen `-`.
+    for pair in lines.windows(2) {
+        let first = pair[0].trim_end();
+        let second = pair[1].trim_start();
+        if !first.ends_with('-')
+            && let (Some(last_ch), Some(first_ch)) = (first.chars().next_back(), second.chars().next())
+            && last_ch.is_alphabetic()
+            && first_ch.is_alphabetic()
+        {
+            let joined_probe = format!(
+                "{}{}",
+                first.rsplit(|c: char| !c.is_alphabetic()).next().unwrap_or(""),
+                second.split(|c: char| !c.is_alphabetic()).next().unwrap_or("")
+            );
+            if !joined_probe.is_empty() && full_text.contains(&joined_probe) {
+                return true;
+            }
+        }
+    }
+
+    false
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct TextNodeDescriptor {
@@ -158,7 +685,7 @@ impl TextRenderer {
             width: descriptor.width,
             height: descriptor.height,
         };
-        let bounds = if is_bubble_text {
+        let mut bounds = if is_bubble_text {
             inset(frame, descriptor.text_inset)
         } else {
             frame
@@ -185,75 +712,105 @@ impl TextRenderer {
                 entity: descriptor.entity,
                 source,
             })?;
-        let automatic_maximum = || automatic_maximum(descriptor, bounds, is_bubble_text);
-        let maximum = if descriptor.auto_fit {
-            automatic_maximum()
-        } else {
-            descriptor.font_size.unwrap_or_else(automatic_maximum)
-        };
-        let minimum = descriptor.minimum_font_size.min(maximum);
-        let mut layout = TextLayout::new(&fonts[0])
-            .with_fallback_fonts(&fonts[1..])
-            .with_writing_mode(descriptor.writing_mode)
-            .with_alignment(descriptor.alignment)
-            .with_line_height(descriptor.line_height)
-            .with_spacing(descriptor.letter_spacing, descriptor.word_spacing)
-            .with_cjk_punctuation_layout(
-                is_chinese_or_japanese_text(&descriptor.text)
-                    || descriptor
-                        .language
-                        .as_ref()
-                        .is_some_and(|language| is_chinese_or_japanese_language(language.as_str())),
-            );
-        if !descriptor.point_text {
-            layout = layout
-                .with_max_width(bounds.width)
-                .with_max_height(bounds.height);
-        }
-        if let Some(contour) = &descriptor.balloon_contour {
-            let [top, _, _, left] = descriptor.text_inset;
-            let contour = contour.iter().map(|&(x, y)| (x - left, y - top)).collect();
-            if let Some(flow_contour) = &descriptor.flow_contour {
-                layout = layout.with_comic_balloon_constraints(
-                    bounds.width,
-                    bounds.height,
-                    vec![
-                        contour,
-                        flow_contour
-                            .iter()
-                            .map(|&(x, y)| (x - left, y - top))
-                            .collect(),
-                    ],
-                    descriptor.text_inset.into_iter().fold(0.0, f32::max),
-                );
+
+        let build_layout_for_inset = |active_inset: [f32; 4], active_bounds: LayoutBox| {
+            let automatic_maximum = || automatic_maximum(descriptor, active_bounds, is_bubble_text);
+            let maximum = if descriptor.auto_fit {
+                automatic_maximum()
             } else {
-                layout = layout.with_comic_balloon(
-                    bounds.width,
-                    bounds.height,
-                    contour,
-                    descriptor.text_inset.into_iter().fold(0.0, f32::max),
+                descriptor.font_size.unwrap_or_else(automatic_maximum)
+            };
+            let minimum = descriptor.minimum_font_size.min(maximum);
+            let mut layout = TextLayout::new(&fonts[0])
+                .with_fallback_fonts(&fonts[1..])
+                .with_writing_mode(descriptor.writing_mode)
+                .with_alignment(descriptor.alignment)
+                .with_line_height(descriptor.line_height)
+                .with_spacing(descriptor.letter_spacing, descriptor.word_spacing)
+                .with_cjk_punctuation_layout(
+                    is_chinese_or_japanese_text(&descriptor.text)
+                        || descriptor
+                            .language
+                            .as_ref()
+                            .is_some_and(|language| is_chinese_or_japanese_language(language.as_str())),
                 );
+            if !descriptor.point_text {
+                layout = layout
+                    .with_max_width(active_bounds.width)
+                    .with_max_height(active_bounds.height);
             }
-        }
-        if let Some(language) = &descriptor.language {
-            layout = layout.with_hyphenation_language_tag(language.as_str());
-        }
-        if is_bubble_text && descriptor.writing_mode == WritingMode::Horizontal {
-            layout = layout.with_hyphenation_policy(HyphenationPolicy::LastResort);
-        }
-        let layout = if descriptor.auto_fit && !descriptor.point_text {
-            layout
-                .with_max_font_size(maximum)
-                .with_min_font_size(minimum)
-        } else {
-            layout.with_font_size(descriptor.font_size.unwrap_or(maximum))
+            if let Some(contour) = &descriptor.balloon_contour {
+                let [top, _, _, left] = active_inset;
+                let contour = contour.iter().map(|&(x, y)| (x - left, y - top)).collect();
+                if let Some(flow_contour) = &descriptor.flow_contour {
+                    layout = layout.with_comic_balloon_constraints(
+                        active_bounds.width,
+                        active_bounds.height,
+                        vec![
+                            contour,
+                            flow_contour
+                                .iter()
+                                .map(|&(x, y)| (x - left, y - top))
+                                .collect(),
+                        ],
+                        active_inset.into_iter().fold(0.0, f32::max),
+                    );
+                } else {
+                    layout = layout.with_comic_balloon(
+                        active_bounds.width,
+                        active_bounds.height,
+                        contour,
+                        active_inset.into_iter().fold(0.0, f32::max),
+                    );
+                }
+            }
+            if let Some(language) = &descriptor.language {
+                layout = layout.with_hyphenation_language_tag(language.as_str());
+            } else if contains_cyrillic(&descriptor.text) {
+                layout = layout.with_hyphenation_language_tag("ru");
+            }
+            if is_bubble_text && descriptor.writing_mode == WritingMode::Horizontal {
+                layout = layout.with_hyphenation_policy(HyphenationPolicy::LastResort);
+            }
+            if descriptor.auto_fit && !descriptor.point_text {
+                layout
+                    .with_max_font_size(maximum)
+                    .with_min_font_size(minimum)
+            } else {
+                layout.with_font_size(descriptor.font_size.unwrap_or(maximum))
+            }
         };
-        let layout = self
-            .layout(&layout, &descriptor.text)
+
+        let initial_builder = build_layout_for_inset(descriptor.text_inset, bounds);
+        let mut layout = self
+            .layout(&initial_builder, &descriptor.text)
             .map_err(|source| Error::Layout {
                 entity: descriptor.entity,
                 source,
             })?;
+
+        // Safe Contour Padding Relaxation during auto-fit when text is pinched below 12pt.
+        if is_bubble_text
+            && descriptor.auto_fit
+            && !descriptor.point_text
+            && (layout.font_size < 12.0 || layout.overflowed())
+            && descriptor.text_inset.iter().any(|&v| v >= 3.5)
+        {
+            let relaxed_inset = descriptor.text_inset.map(|v| (v - 2.5).max(1.5));
+            let relaxed_bounds = inset(frame, relaxed_inset);
+            if relaxed_bounds.width > 0.0 && relaxed_bounds.height > 0.0 {
+                let relaxed_builder = build_layout_for_inset(relaxed_inset, relaxed_bounds);
+                if let Ok(relaxed_layout) = self.layout(&relaxed_builder, &descriptor.text)
+                    && ((!relaxed_layout.overflowed() && layout.overflowed())
+                        || (relaxed_layout.overflowed() == layout.overflowed()
+                            && relaxed_layout.font_size > layout.font_size + 0.25))
+                {
+                    layout = relaxed_layout;
+                    bounds = relaxed_bounds;
+                }
+            }
+        }
+
         let (mut x, mut y) = if descriptor.point_text {
             (bounds.x, bounds.y)
         } else {

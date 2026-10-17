@@ -147,7 +147,7 @@ pub(super) fn translation_request_body(
         thinking: backend.thinking.map(|kind| ThinkingConfig { kind }),
         response_format: backend
             .response_mode
-            .response_format("manga_translation", prompt::output_schema()),
+            .response_format("manga_translation", prompt::output_schema_for(request)),
     };
     Ok(serde_json::to_value(body).map_err(anyhow::Error::from)?)
 }

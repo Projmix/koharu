@@ -195,17 +195,31 @@ impl LineBreaker {
         };
 
         let core = &segment_text[core_start..core_end];
-        if core.chars().count() < config.minimum_word_length {
+        let char_count = core.chars().count();
+        if char_count < config.minimum_word_length {
             return vec![segment];
         }
 
-        let syllables: Vec<&str> = hyphenate_bounded(
+        let effective_lang = if contains_cyrillic(core) {
+            Lang::Russian
+        } else {
+            config.language
+        };
+
+        let mut syllables: Vec<&str> = hyphenate_bounded(
             core,
-            config.language,
+            effective_lang,
             config.minimum_prefix_length,
             config.minimum_suffix_length,
         )
         .collect();
+        if syllables.len() <= 1 && char_count >= 9 {
+            syllables = fallback_syllabic_splits(
+                core,
+                config.minimum_prefix_length.max(2),
+                config.minimum_suffix_length.max(2),
+            );
+        }
         if syllables.len() <= 1 {
             return vec![segment];
         }
@@ -250,6 +264,71 @@ pub fn hyphenation_lang_from_tag(value: &str) -> Option<Lang> {
         .next()
         .filter(|part| part.len() == 2)?;
     Lang::from_iso(primary.as_bytes().try_into().ok()?)
+}
+
+pub(crate) fn contains_cyrillic(text: &str) -> bool {
+    text.chars()
+        .any(|ch| ('\u{0400}'..='\u{04FF}').contains(&ch))
+}
+
+fn is_vowel(ch: char) -> bool {
+    matches!(
+        ch.to_lowercase().next().unwrap_or(ch),
+        'а' | 'е' | 'ё' | 'и' | 'о' | 'у' | 'ы' | 'э' | 'ю' | 'я'
+            | 'a' | 'e' | 'i' | 'o' | 'u' | 'y'
+    )
+}
+
+fn fallback_syllabic_splits<'a>(
+    word: &'a str,
+    min_prefix: usize,
+    min_suffix: usize,
+) -> Vec<&'a str> {
+    let chars: Vec<(usize, char)> = word.char_indices().collect();
+    let n = chars.len();
+    if n < min_prefix + min_suffix {
+        return vec![word];
+    }
+    let mut parts = Vec::new();
+    let mut last_byte = 0usize;
+    let mut last_char_idx = 0usize;
+    for i in min_prefix..=(n.saturating_sub(min_suffix)) {
+        if i - last_char_idx < 3 {
+            continue;
+        }
+        let prev = chars[i - 1].1;
+        let curr = chars[i].1;
+        let prev_is_modifier = matches!(
+            prev.to_lowercase().next().unwrap_or(prev),
+            'ь' | 'ъ' | 'й'
+        );
+        let curr_is_modifier = matches!(
+            curr.to_lowercase().next().unwrap_or(curr),
+            'ь' | 'ъ' | 'й'
+        );
+        if curr_is_modifier {
+            continue;
+        }
+        let has_vowel_before = chars[last_char_idx..i].iter().any(|&(_, c)| is_vowel(c));
+        let has_vowel_after = chars[i..].iter().any(|&(_, c)| is_vowel(c));
+        if has_vowel_before
+            && has_vowel_after
+            && (prev_is_modifier || (is_vowel(prev) != is_vowel(curr)) || (!is_vowel(prev) && !is_vowel(curr)))
+        {
+            let split_byte = chars[i].0;
+            parts.push(&word[last_byte..split_byte]);
+            last_byte = split_byte;
+            last_char_idx = i;
+        }
+    }
+    if last_byte < word.len() {
+        parts.push(&word[last_byte..]);
+    }
+    if parts.is_empty() {
+        vec![word]
+    } else {
+        parts
+    }
 }
 
 fn apply_protected_ranges(

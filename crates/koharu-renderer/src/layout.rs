@@ -2072,22 +2072,77 @@ fn comic_break_penalty(text: &str, boundary: usize) -> f32 {
         _ => {}
     }
     let next_word = after
-        .split(|character: char| !character.is_ascii_alphabetic())
+        .split(|character: char| !character.is_alphabetic())
         .next()
-        .unwrap_or_default();
+        .unwrap_or_default()
+        .to_lowercase();
     if matches!(
-        next_word.to_ascii_lowercase().as_str(),
-        "and" | "but" | "or" | "so" | "because" | "although" | "while" | "then"
+        next_word.as_str(),
+        "and"
+            | "but"
+            | "or"
+            | "so"
+            | "because"
+            | "although"
+            | "while"
+            | "then"
+            | "и"
+            | "а"
+            | "но"
+            | "или"
+            | "зато"
+            | "однако"
+            | "потому"
+            | "ведь"
+            | "если"
+            | "когда"
+            | "чтобы"
+            | "хотя"
     ) {
         return 40.0;
     }
     let previous_word = before
-        .rsplit(|character: char| !character.is_ascii_alphabetic())
+        .rsplit(|character: char| !character.is_alphabetic())
         .next()
-        .unwrap_or_default();
+        .unwrap_or_default()
+        .to_lowercase();
     if matches!(
-        previous_word.to_ascii_lowercase().as_str(),
-        "a" | "an" | "the" | "to" | "of" | "for" | "in" | "on" | "at" | "with" | "from"
+        previous_word.as_str(),
+        "a"
+            | "an"
+            | "the"
+            | "to"
+            | "of"
+            | "for"
+            | "in"
+            | "on"
+            | "at"
+            | "with"
+            | "from"
+            | "в"
+            | "во"
+            | "к"
+            | "ко"
+            | "с"
+            | "со"
+            | "у"
+            | "о"
+            | "об"
+            | "обо"
+            | "от"
+            | "до"
+            | "из"
+            | "за"
+            | "на"
+            | "по"
+            | "не"
+            | "ни"
+            | "без"
+            | "под"
+            | "над"
+            | "при"
+            | "про"
+            | "для"
     ) {
         300.0
     } else {

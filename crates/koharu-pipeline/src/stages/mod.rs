@@ -1,6 +1,7 @@
 mod detection;
 mod fal;
 mod inpainting;
+pub(crate) mod jev;
 mod ocr;
 mod openrouter_image;
 mod translation;
