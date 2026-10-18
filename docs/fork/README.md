@@ -51,7 +51,10 @@ Known gaps after the rebuild:
 - OCR method `local`, `api` or hybrid `local-api`. The hybrid method uses an
   internal `OcrPass { Local, Final }`: the scheduler runs the local pass on
   every page of the chapter, then the API pass, and only then chapter
-  translation. Text the user edited is never overwritten.
+  translation. The local pass reads every region with the chosen model and a
+  second local reader (Manga OCR, or Hayai when Manga OCR is chosen); only
+  regions where they disagree go to the API. Text the user edited is never
+  overwritten.
 - Qwen-VL-OCR provider (`remote/qwen_ocr.rs`, DashScope) with its own
   endpoint and credential.
 - Image-edit inpainting through Fal, OpenRouter and Replicate, with a

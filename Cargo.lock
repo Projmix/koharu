@@ -4852,6 +4852,7 @@ dependencies = [
  "base64 0.23.1",
  "clap",
  "futures",
+ "icu_normalizer",
  "image",
  "imageproc",
  "koharu-config",

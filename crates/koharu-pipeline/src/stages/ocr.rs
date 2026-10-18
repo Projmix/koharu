@@ -6,6 +6,7 @@ use crate::{ModelCell, OcrConfig, OcrMethod, OcrModel, scope::geometry_extents};
 use anyhow::{Context as _, Result, anyhow, bail};
 use async_trait::async_trait;
 use futures::{StreamExt as _, TryStreamExt as _, stream};
+use icu_normalizer::ComposingNormalizerBorrowed;
 use image::{DynamicImage, GenericImageView, Rgb};
 use koharu_ml::{
     baberu_ocr::BaberuOcr, hayai_ocr::HayaiOcr, manga_ocr::MangaOcr,
@@ -22,6 +23,7 @@ const OCR_EXCLUSION_CONTAINMENT_THRESHOLD: f64 = 0.5;
 const OCR_CROP_PADDING_SCALE: f64 = 1.2;
 const API_OCR_MIN_DIMENSION: u32 = 16;
 const API_OCR_CONCURRENCY: usize = 4;
+const AGREED_CONFIDENCE: f32 = 1.0;
 
 pub(super) struct Processor {
     config: OcrConfig,
@@ -29,6 +31,7 @@ pub(super) struct Processor {
     translator: Translator,
     device: koharu_ml::Device,
     model: ModelCell<Model>,
+    check: ModelCell<Model>,
 }
 
 impl Processor {
@@ -44,6 +47,7 @@ impl Processor {
             translator,
             device,
             model: ModelCell::new(),
+            check: ModelCell::new(),
         }
     }
 }
@@ -52,7 +56,7 @@ impl Processor {
 impl StageProcessor for Processor {
     fn model(&self, input: &StageInput) -> String {
         if self.uses_local(input) {
-            return local_model_name(&self.config.local_model).to_owned();
+            return self.local_name();
         }
         self.api_model_name()
     }
@@ -62,16 +66,25 @@ impl StageProcessor for Processor {
     }
 
     fn unload(&self) -> bool {
-        self.model.unload()
+        let unloaded = self.model.unload();
+        self.check.unload() || unloaded
     }
 
     async fn load(&self, input: &StageInput) -> Result<()> {
         if self.uses_local(input) {
             self.model
                 .ensure(|| Model::load(self.device.clone(), &self.config.local_model))
-                .await
+                .await?;
+            if self.config.method == OcrMethod::LocalApi {
+                let check = self.check_model();
+                self.check
+                    .ensure(|| Model::load(self.device.clone(), &check))
+                    .await?;
+            }
+            Ok(())
         } else {
             self.model.unload();
+            self.check.unload();
             Ok(())
         }
     }
@@ -90,11 +103,16 @@ impl StageProcessor for Processor {
             {
                 continue;
             }
+            let analysis = input.scene.component::<OcrAnalysis>(region)?;
             for relation in input.scene.relations_to_as::<RecognizedFrom>(region) {
                 has_target = true;
                 let content = relation.value().source;
                 let source = input.scene.component::<SourceText>(content)?;
-                if !source_is_complete(source.as_ref(), completed_models.as_deref()) {
+                if !source_is_complete(
+                    source.as_ref(),
+                    analysis.as_ref(),
+                    completed_models.as_deref(),
+                ) {
                     return Ok(false);
                 }
             }
@@ -114,8 +132,21 @@ impl StageProcessor for Processor {
                 .await
                 .as_ref()
                 .ok_or_else(|| anyhow!("OCR model is not loaded"))?
-                .recognize(targets, input.stop.clone())
+                .recognize(targets.clone(), input.stop.clone())
                 .await?;
+            let results = if self.config.method == OcrMethod::LocalApi {
+                let checks = self
+                    .check
+                    .lock()
+                    .await
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("OCR check model is not loaded"))?
+                    .recognize(targets, input.stop.clone())
+                    .await?;
+                cross_check(results, &checks)
+            } else {
+                results
+            };
             if input.stop.stopped() {
                 return finish(input.scene.edit());
             }
@@ -141,9 +172,29 @@ impl Processor {
         }
         let mut models = vec![self.api_model_name()];
         if input.ocr_pass == OcrPass::Local {
-            models.push(local_model_name(&self.config.local_model).to_owned());
+            models.push(self.local_name());
         }
         Some(models)
+    }
+
+    /// The hybrid reads every region with two local models and only sends
+    /// regions they disagree on to the API. The second reader is Manga OCR,
+    /// whose errors overlap least with Hayai's on the evaluation set
+    /// (`docs/fork/models.md`), or Hayai when Manga OCR is the primary model.
+    fn check_model(&self) -> OcrModel {
+        match self.config.local_model {
+            OcrModel::MangaOcr => OcrModel::HayaiOcr,
+            _ => OcrModel::MangaOcr,
+        }
+    }
+
+    fn local_name(&self) -> String {
+        let primary = local_model_name(&self.config.local_model);
+        if self.config.method == OcrMethod::LocalApi {
+            format!("{primary} + {}", local_model_name(&self.check_model()))
+        } else {
+            primary.to_owned()
+        }
     }
 
     fn api_model_name(&self) -> String {
@@ -153,7 +204,7 @@ impl Processor {
             None => provider.to_owned(),
         };
         if self.config.method == OcrMethod::LocalApi {
-            format!("{} → {api}", local_model_name(&self.config.local_model))
+            format!("{} → {api}", self.local_name())
         } else {
             api
         }
@@ -165,21 +216,53 @@ impl Processor {
     }
 }
 
-fn source_is_complete(source: Option<&SourceText>, completed_models: Option<&[String]>) -> bool {
+/// A hybrid local draft that both local readers agreed on (confidence 1) is
+/// final and needs no API pass.
+fn source_is_complete(
+    source: Option<&SourceText>,
+    analysis: Option<&OcrAnalysis>,
+    completed_models: Option<&[String]>,
+) -> bool {
     let Some(source) = source else {
         return false;
     };
     match &source.text.origin {
         Origin::User => true,
         Origin::Generated(previous) => {
+            let agreed = analysis.is_some_and(|analysis| {
+                analysis.confidence == Some(AGREED_CONFIDENCE)
+                    && analysis.origin == source.text.origin
+            });
             !source.text.value.trim().is_empty()
-                && completed_models.is_none_or(|models| {
-                    models
-                        .iter()
-                        .any(|model| previous.model.as_ref() == Some(model))
-                })
+                && (agreed
+                    || completed_models.is_none_or(|models| {
+                        models
+                            .iter()
+                            .any(|model| previous.model.as_ref() == Some(model))
+                    }))
         }
     }
+}
+
+/// Mark each primary reading with whether the second local reader produced
+/// the same text. Comparison ignores width, whitespace and the ellipsis
+/// spelling, which the two models write differently for the same glyphs.
+fn cross_check(mut results: Vec<OcrResult>, checks: &[OcrResult]) -> Vec<OcrResult> {
+    for (result, check) in results.iter_mut().zip(checks) {
+        let agreed = !result.text.trim().is_empty()
+            && agreement_key(&result.text) == agreement_key(&check.text);
+        result.confidence = Some(if agreed { AGREED_CONFIDENCE } else { 0.0 });
+    }
+    results
+}
+
+fn agreement_key(text: &str) -> String {
+    ComposingNormalizerBorrowed::new_nfkc()
+        .normalize(text)
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .map(|character| if character == '・' { '.' } else { character })
+        .collect()
 }
 
 fn local_model_name(model: &OcrModel) -> &'static str {
@@ -299,6 +382,7 @@ async fn run_api(
                 region,
                 geometry,
                 text: normalize_ocr_text(text),
+                confidence: None,
             })
         })
         .buffered(API_OCR_CONCURRENCY);
@@ -408,10 +492,11 @@ async fn targets(
             crop(&source, geometry, &exclusions, &neighbors)
                 .with_context(|| format!("text region {region} is outside its source image"))?,
         );
+        let analysis = input.scene.component::<OcrAnalysis>(*region)?;
         for relation in input.scene.relations_to_as::<RecognizedFrom>(*region) {
             let content = relation.value().source;
             let previous = input.scene.component::<SourceText>(content)?;
-            if source_is_complete(previous.as_ref(), Some(completed_models)) {
+            if source_is_complete(previous.as_ref(), analysis.as_ref(), Some(completed_models)) {
                 continue;
             }
             targets.push(OcrTarget {
@@ -460,7 +545,7 @@ fn apply_results(
                 } else {
                     TextDirection::Horizontal
                 },
-                confidence: None,
+                confidence: result.confidence,
                 line_boundaries: Vec::new(),
             },
         )?;
@@ -481,6 +566,7 @@ struct OcrResult {
     region: EntityId,
     geometry: Geometry,
     text: String,
+    confidence: Option<f32>,
 }
 
 async fn infer_text<M: Send + 'static>(
@@ -503,6 +589,7 @@ async fn infer_text<M: Send + 'static>(
                 region: target.region,
                 geometry: target.geometry,
                 text: normalize_ocr_text(inference(&model, &target.image)?),
+                confidence: None,
             });
         }
         Ok(results)
@@ -756,12 +843,58 @@ mod tests {
     }
 
     #[test]
+    fn hybrid_sends_only_disagreeing_local_readings_to_the_api() {
+        let reading = |text: &str| OcrResult {
+            content: EntityId::new(),
+            region: EntityId::new(),
+            geometry: Geometry::rectangle(0.0, 0.0, 10.0, 10.0),
+            text: text.to_owned(),
+            confidence: None,
+        };
+        // Hayai and Manga OCR spell the same ellipsis and widths differently.
+        let primary = vec![reading("ちょっと…"), reading("ＯＫ！"), reading("つたく")];
+        let checks = [reading("ちょっと..."), reading("OK!"), reading("ったく")];
+        let checked = cross_check(primary, &checks);
+        assert_eq!(
+            checked
+                .iter()
+                .map(|result| result.confidence)
+                .collect::<Vec<_>>(),
+            [Some(1.0), Some(1.0), Some(0.0)]
+        );
+
+        let generation = generation(PRODUCER, "hayai-ocr + manga-ocr").unwrap();
+        let source = SourceText {
+            text: Authored::generated("つたく".to_owned(), generation.clone()),
+            language: None,
+        };
+        let analysis = |confidence| OcrAnalysis {
+            origin: Origin::Generated(generation.clone()),
+            direction: TextDirection::Vertical,
+            confidence: Some(confidence),
+            line_boundaries: Vec::new(),
+        };
+        let api = ["hayai-ocr + manga-ocr → openrouter: model".to_owned()];
+        assert!(source_is_complete(
+            Some(&source),
+            Some(&analysis(1.0)),
+            Some(&api)
+        ));
+        assert!(!source_is_complete(
+            Some(&source),
+            Some(&analysis(0.0)),
+            Some(&api)
+        ));
+    }
+
+    #[test]
     fn hybrid_api_failure_keeps_the_local_draft_unless_every_region_fails() {
         let result = |content| OcrResult {
             content,
             region: EntityId::new(),
             geometry: Geometry::rectangle(0.0, 0.0, 10.0, 10.0),
             text: "テキスト".to_owned(),
+            confidence: None,
         };
         let (first, last) = (EntityId::new(), EntityId::new());
         let kept = keep_drafts_for_failures(vec![
