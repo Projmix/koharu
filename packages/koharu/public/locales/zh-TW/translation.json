@@ -459,7 +459,7 @@
         "localModel": "本機 OCR 模型",
         "method": "OCR 方法",
         "hybrid": "本機 + API",
-        "hybridDescription": "先完成整章所有頁面的本機 OCR，再將每張裁剪影像及其辨識文字傳送給所選 API。結果自動套用。"
+        "hybridDescription": "先用本機模型和第二個本機模型辨識整章所有頁面，只將兩者結果不一致的裁剪影像及其辨識文字傳送給所選 API。結果自動套用。"
       },
       "inpainting": {
         "apiModel": "影像編輯模型",

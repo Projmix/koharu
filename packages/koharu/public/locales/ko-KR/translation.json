@@ -459,7 +459,7 @@
         "localModel": "로컬 OCR 모델",
         "method": "OCR 방식",
         "hybrid": "로컬 + API",
-        "hybridDescription": "챕터의 모든 페이지에서 로컬 OCR을 완료한 뒤 각 이미지와 인식 텍스트를 선택한 API로 보냅니다. 결과는 자동 적용됩니다."
+        "hybridDescription": "챕터의 모든 페이지를 로컬 모델과 두 번째 로컬 모델로 읽은 뒤, 두 결과가 다른 이미지만 인식 텍스트와 함께 선택한 API로 보냅니다. 결과는 자동 적용됩니다."
       },
       "inpainting": {
         "apiModel": "이미지 편집 모델",

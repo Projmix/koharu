@@ -459,7 +459,7 @@
         "localModel": "Local OCR model",
         "method": "OCR method",
         "hybrid": "Local + API",
-        "hybridDescription": "Complete local OCR for every page in the chapter, then send each crop and its draft to the selected API model. Results are applied automatically."
+        "hybridDescription": "Read every page in the chapter with the local model and a second local model, then send only the crops where they disagree, with the draft, to the selected API model. Results are applied automatically."
       },
       "inpainting": {
         "apiModel": "Image editing model",

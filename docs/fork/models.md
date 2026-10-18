@@ -59,6 +59,8 @@ exact line is printed / handwritten.
 | Hayai OCR v2.1 (local) | 2.00% | 4.73% | 89 / 73% | 0.6 s | 0 |
 | PaddleOCR-VL 1.6 GGUF (local, default) | 2.48% | 12.4% | 87 / 53% | 11.7 s | 0 |
 | Hayai v2.1 + Gemini 3.7 Flash (`local-api`) | 2.87% | 2.76% | 94 / 87% | 4.7 s | ~2.0 |
+| Hayai + Manga OCR, Gemini 3.7 Flash on disagreement (`local-api`, `16aaea7`) | 0.29% | 2.37% | 97 / 90% | ~1 s + API on 32% | ~0.74 |
+| Hayai + Gemini 3.7 Flash on every crop, prompt after `693f400` | 0.24% | 1.97% | 97 / 92% | 4.7 s | ~2.05 |
 | Gemini 3.7 Flash | 2.73% | 5.13% | 94 / 83% | 3.6 s | 1.8 |
 | Gemini 3.5 Flash | 2.29% | 5.33% | 92 / 82% | 3.1 s | 4.3 |
 | Claude Haiku 5.5 | 2.29% | 13.4% | 91 / 53% | 1.2 s | 0.04 |

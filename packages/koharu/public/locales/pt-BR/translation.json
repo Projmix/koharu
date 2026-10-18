@@ -459,7 +459,7 @@
         "localModel": "Modelo OCR local",
         "method": "Método de OCR",
         "hybrid": "Local + API",
-        "hybridDescription": "Primeiro, o OCR local processa todas as páginas do capítulo. Depois, cada recorte e seu texto são enviados à API selecionada. Os resultados são aplicados automaticamente."
+        "hybridDescription": "Primeiro, o modelo local e um segundo modelo local leem todas as páginas do capítulo. Depois, só os recortes em que eles divergem são enviados com o texto à API selecionada. Os resultados são aplicados automaticamente."
       },
       "inpainting": {
         "apiModel": "Modelo de edição de imagem",

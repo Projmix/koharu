@@ -459,7 +459,7 @@
         "localModel": "ローカルOCRモデル",
         "method": "OCR方式",
         "hybrid": "ローカル + API",
-        "hybridDescription": "章の全ページでローカルOCRを完了してから、各画像と認識テキストを選択したAPIに送信します。結果は自動適用されます。"
+        "hybridDescription": "章の全ページをローカルモデルと2つ目のローカルモデルで読み取り、結果が食い違った画像だけを認識テキストとともに選択したAPIに送信します。結果は自動適用されます。"
       },
       "inpainting": {
         "apiModel": "画像編集モデル",
