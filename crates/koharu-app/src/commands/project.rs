@@ -15,6 +15,7 @@ use koharu_scene::{
     RecognizedFrom, Region as SceneRegion, RegionSpec, RemovePolicy, Revision, Session, Snapshot,
     SourceText as SceneSourceText, TextGroup as SceneTextGroup, TextLayout as SceneTextLayout,
     TextLayoutKind, TextRegion, TextRole as SceneTextRole, Translation as SceneTranslation,
+    TranslationReview as SceneTranslationReview, TranslationReviewReason,
     Typography as SceneTypography, Visibility as SceneVisibility,
 };
 use serde::{Deserialize, Serialize};
@@ -139,8 +140,16 @@ pub struct TextContent {
     pub id: EntityId,
     pub source: Option<SourceText>,
     pub translation: Option<Translation>,
+    /// Present only while the review still applies to `translation`.
+    pub translation_review: Option<TranslationReview>,
     pub role: Option<String>,
     pub source_region: Option<EntityId>,
+}
+
+#[derive(Clone, Debug, Serialize, Type)]
+pub struct TranslationReview {
+    pub reason: TranslationReviewReason,
+    pub reference: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Type)]
@@ -1308,7 +1317,7 @@ impl Project {
             .component::<SceneTranslation>(content)?
             .and_then(|translation| translation.language);
         let reviewed = snapshot
-            .component::<koharu_scene::TranslationReview>(content)?
+            .component::<SceneTranslationReview>(content)?
             .is_some();
         let patch = snapshot.patch(|edit| {
             edit.promote_entity_to_user(layer)?;
@@ -1316,7 +1325,7 @@ impl Project {
             // Writing the translation by hand is the review's answer, including
             // keeping the reviewed text unchanged.
             if reviewed {
-                edit.remove::<koharu_scene::TranslationReview>(content)?;
+                edit.remove::<SceneTranslationReview>(content)?;
             }
             match text {
                 Some(text) => edit.set(
@@ -2048,6 +2057,13 @@ impl Project {
                 text: translation.text.value,
                 language: translation.language.map(|language| language.to_string()),
             });
+            let translation_review =
+                content
+                    .translation_review()?
+                    .map(|review| TranslationReview {
+                        reason: review.reason,
+                        reference: review.reference,
+                    });
             let role = content.role()?.map(|role| role.role);
             let source_region = content.source_region()?.map(|region| region.id());
             let automatic_region = text_layer.automatic_target()?.map(|region| region.id());
@@ -2064,6 +2080,7 @@ impl Project {
                     id: content.id(),
                     source,
                     translation,
+                    translation_review,
                     role,
                     source_region,
                 }),

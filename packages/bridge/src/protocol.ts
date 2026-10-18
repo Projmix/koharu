@@ -47,11 +47,11 @@ export const commands = {
 	deleteProjectVersion: (id: VersionId) => __TAURI_INVOKE<null>("delete_project_version", { id }),
 	renamePage: (page: EntityId, label: string) => __TAURI_INVOKE<null>("rename_page", { page, label }),
 	deletePages: (pages: EntityId[]) => __TAURI_INVOKE<null>("delete_pages", { pages }),
-	duplicatePages: (pages: EntityId[]) => __TAURI_INVOKE<DuplicatePagesResult>("duplicate_pages", { pages }).then((v) => (({...v,page:({...v.page,regions:v.page.regions.map(i=>({...i,geometry:({...i.geometry,points:i.geometry.points.map(i=>i)})}))})}) as typeof v)),
+	duplicatePages: (pages: EntityId[]) => __TAURI_INVOKE<DuplicatePagesResult>("duplicate_pages", { pages }).then((v) => (({...v,page:({...v.page,layers:v.page.layers.map(i=>i),regions:v.page.regions.map(i=>({...i,geometry:({...i.geometry,points:i.geometry.points.map(i=>i)})}))})}) as typeof v)),
 	pasteTextBlocks: (targetPage: EntityId, payload: TextClipboardPayload, position: {
 	x: number,
 	y: number,
-} | null) => __TAURI_INVOKE<TextTransferResult>("paste_text_blocks", { targetPage, payload: ({...payload,layers:payload.layers.map(i=>({...i,geometry:i.geometry==null?i.geometry:({...i.geometry,points:i.geometry.points.map(i=>i)}),typography:i.typography==null?i.typography:({...i.typography,size:i.typography.size==null?i.typography.size:i.typography.size,stroke_width:i.typography.stroke_width==null?i.typography.stroke_width:i.typography.stroke_width}),source_region:i.source_region==null?i.source_region:({...i.source_region,geometry:({...i.source_region.geometry,points:i.source_region.geometry.points.map(i=>i)})}),automatic_region:i.automatic_region==null?i.automatic_region:({...i.automatic_region,geometry:({...i.automatic_region.geometry,points:i.automatic_region.geometry.points.map(i=>i)})})}))}), position: position==null?position:position }).then((v) => (({...v,page:({...v.page,regions:v.page.regions.map(i=>({...i,geometry:({...i.geometry,points:i.geometry.points.map(i=>i)})}))})}) as typeof v)),
+} | null) => __TAURI_INVOKE<TextTransferResult>("paste_text_blocks", { targetPage, payload: ({...payload,layers:payload.layers.map(i=>({...i,geometry:i.geometry==null?i.geometry:({...i.geometry,points:i.geometry.points.map(i=>i)}),angle_degrees:i.angle_degrees==null?i.angle_degrees:i.angle_degrees,typography:i.typography==null?i.typography:({...i.typography,size:i.typography.size==null?i.typography.size:i.typography.size,stroke_width:i.typography.stroke_width==null?i.typography.stroke_width:i.typography.stroke_width}),source_region:i.source_region==null?i.source_region:({...i.source_region,geometry:({...i.source_region.geometry,points:i.source_region.geometry.points.map(i=>i)})}),automatic_region:i.automatic_region==null?i.automatic_region:({...i.automatic_region,geometry:({...i.automatic_region.geometry,points:i.automatic_region.geometry.points.map(i=>i)})})}))}), position: position==null?position:position }).then((v) => (({...v,page:({...v.page,layers:v.page.layers.map(i=>i),regions:v.page.regions.map(i=>({...i,geometry:({...i.geometry,points:i.geometry.points.map(i=>i)})}))})}) as typeof v)),
 	movePage: (page: EntityId, index: number) => __TAURI_INVOKE<null>("move_page", { page, index }),
 	setSourceText: (layer: EntityId, text: string) => __TAURI_INVOKE<null>("set_source_text", { layer, text }),
 	setTextRole: (layer: EntityId, role: string) => __TAURI_INVOKE<null>("set_text_role", { layer, role }),
@@ -639,6 +639,8 @@ export type TextContent = {
 	id: EntityId,
 	source: SourceText | null,
 	translation: Translation | null,
+	/**  Present only while the review still applies to `translation`. */
+	translation_review: TranslationReview | null,
 	role: string | null,
 	source_region: EntityId | null,
 };
@@ -679,6 +681,15 @@ export type TranslationProfile = {
 	instructions: string | null,
 	unit_policy?: TranslationUnitPolicy,
 };
+
+export type TranslationReview = {
+	reason: TranslationReviewReason,
+	reference: string | null,
+};
+
+export type TranslationReviewReason = 
+/**  The source swears or insults, and the translation reads milder. */
+"softened-profanity";
 
 export type TranslationUnitPolicy = "page_only" | "adaptive_v1";
 

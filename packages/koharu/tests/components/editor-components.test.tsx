@@ -138,6 +138,7 @@ const textLayer: Layer = {
     id: 'content',
     source: { text: 'こんにちは', language: 'ja' },
     translation: { text: 'Hello', language: null },
+    translation_review: null,
     role: null,
     source_region: null,
   },

@@ -127,6 +127,7 @@ function textLayer(
       id: `${id}-content`,
       source: { text: id, language: 'ja' },
       translation: null,
+      translation_review: null,
       role: 'dialogue',
       source_region: sourceRegion,
     },

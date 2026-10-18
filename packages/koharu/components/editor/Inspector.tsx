@@ -20,6 +20,7 @@ import {
   Plus,
   RotateCcw,
   Trash2,
+  TriangleAlert,
   Type,
 } from 'lucide-react'
 import { type MouseEvent, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
@@ -47,9 +48,11 @@ import {
   type FontStyle,
   type Layer,
   type TextAlignment,
+  type TranslationReviewReason,
   type Typography,
   type WritingMode,
 } from '@koharu/bridge/protocol'
+import { Badge } from '@koharu/ui/components/badge'
 import { Button } from '@koharu/ui/components/button'
 import {
   DropdownMenu,
@@ -1310,10 +1313,64 @@ function LayerEditor({ layer, onDelete }: { layer: Layer; onDelete?: () => void 
               }
             />
           </InspectorField>
+          {layer.content.translation_review && (
+            <div
+              data-testid={`translation-review-${layer.id}`}
+              className='grid min-w-0 gap-1 rounded-md border border-amber-500/30 bg-amber-500/[0.06] px-1.5 py-1'
+            >
+              <div className='flex min-w-0 items-start gap-1'>
+                <Badge
+                  variant='outline'
+                  className='h-auto min-w-0 shrink justify-start border-amber-500/40 px-1.5 py-0.5 text-left text-[9px] leading-3 whitespace-normal text-amber-700 dark:text-amber-400'
+                >
+                  <TriangleAlert />
+                  {t(translationReviewLabels[layer.content.translation_review.reason])}
+                </Badge>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <Button
+                        type='button'
+                        variant='ghost'
+                        size='xs'
+                        aria-label={t('inspector.translationReviewKeepHint')}
+                        className='ml-auto h-5 shrink-0 rounded-md px-1.5 text-[9px] font-normal text-muted-foreground hover:text-foreground'
+                        onClick={() =>
+                          call(
+                            commands.setTranslation,
+                            layer.id,
+                            layer.content.translation?.text ?? null,
+                          )
+                            .then(() => refresh(projectKey, pageKey))
+                            .catch(() => undefined)
+                        }
+                      />
+                    }
+                  >
+                    {t('inspector.translationReviewKeep')}
+                  </TooltipTrigger>
+                  <TooltipContent side='left'>
+                    {t('inspector.translationReviewKeepHint')}
+                  </TooltipContent>
+                </Tooltip>
+              </div>
+              {layer.content.translation_review.reference && (
+                <InspectorField label={t('inspector.translationReviewReference')}>
+                  <p className='max-h-16 min-w-0 overflow-y-auto text-[11px] leading-4 break-words whitespace-pre-wrap select-text'>
+                    {layer.content.translation_review.reference}
+                  </p>
+                </InspectorField>
+              )}
+            </div>
+          )}
         </>
       )}
     </div>
   )
+}
+
+const translationReviewLabels: Record<TranslationReviewReason, string> = {
+  'softened-profanity': 'inspector.translationReview',
 }
 
 function InspectorField({ label, children }: { label: string; children: React.ReactNode }) {
