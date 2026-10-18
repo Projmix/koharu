@@ -35,7 +35,7 @@ use specta::Type;
 use super::{StageInput, StageProcessor, finish, generation};
 use crate::{DetectionModel, ModelCell};
 
-const OUTPUT_MODEL_ID: &str = "mayocream/koharu-layout-rfdetr-seg-2xl-1152#postprocess-3";
+const OUTPUT_MODEL_ID: &str = "mayocream/koharu-layout-rfdetr-seg-2xl-1152#postprocess-4";
 #[cfg(test)]
 const LEGACY_OUTPUT_MODEL_ID: &str = "mayocream/koharu-layout-rfdetr-seg-2xl-1152";
 const MODEL_NAME: &str = "koharu-layout-rfdetr-seg-2xl";
@@ -54,6 +54,9 @@ const DIALOGUE_MASK_CONTAINMENT_THRESHOLD: f32 = 0.9;
 const TEXT_DUPLICATE_IOU_THRESHOLD: f32 = 0.95;
 const TEXT_DUPLICATE_AREA_RATIO_THRESHOLD: f32 = 0.9;
 const NESTED_TEXT_CONTAINMENT_THRESHOLD: f32 = 0.8;
+const SPURIOUS_ONOMATOPOEIA_MAX_SCORE: f32 = 0.5;
+const SPURIOUS_ONOMATOPOEIA_CONTAINMENT: f32 = 0.5;
+const SPURIOUS_ONOMATOPOEIA_PAGE_FRACTION: f32 = 0.2;
 const FREE_TEXT_ROLE: &str = "dev.koharu.text.free-text";
 const DIALOGUE_ROLE: &str = "dev.koharu.text.dialogue";
 const ONOMATOPOEIA_ROLE: &str = "dev.koharu.text.onomatopoeia";
@@ -375,7 +378,7 @@ async fn write_page(
     }
     clamp_to_image(&mut detections, size);
     non_maximum_suppression(&mut detections, 0.5);
-    remove_onomatopoeia_spanning_text(&mut detections);
+    remove_spurious_onomatopoeia(&mut detections, size);
     remove_nested_text_detections(&mut detections);
     sort_by_layout(&mut detections, source_language);
 
@@ -454,7 +457,13 @@ fn write_region<'a>(
     } else if text_role.is_some() {
         inferred.map_or_else(
             || rectangle_geometry(detection.bbox),
-            |typography| rotated_rectangle_geometry(detection.bbox, typography.angle_degrees),
+            |typography| {
+                if typography.angle_degrees == 0.0 {
+                    rectangle_geometry(detection.bbox)
+                } else {
+                    rotated_rectangle_geometry(typography.oriented_extent, typography.angle_degrees)
+                }
+            },
         )
     } else {
         rectangle_geometry(detection.bbox)
@@ -596,6 +605,9 @@ struct InferredTypography {
     stroke_color: Option<[u8; 3]>,
     stroke_width: Option<f32>,
     angle_degrees: f32,
+    /// `[min_u, min_v, max_u, max_v]` of the mask in the frame rotated by
+    /// `angle_degrees`, where u = x cos + y sin and v = y cos - x sin.
+    oriented_extent: [f64; 4],
     writing_mode: WritingMode,
 }
 
@@ -680,6 +692,7 @@ fn infer_typography(
         median_color(&background)
     };
     let (angle_degrees, vertical) = mask_angle(&points, detection.bbox);
+    let oriented_extent = oriented_extent(&points, angle_degrees);
     let (color, stroke_color, stroke_width) =
         infer_text_paint(&pixels, background, local_width, local_height);
     Some(InferredTypography {
@@ -687,6 +700,7 @@ fn infer_typography(
         stroke_color,
         stroke_width,
         angle_degrees,
+        oriented_extent,
         writing_mode: if vertical {
             WritingMode::Vertical
         } else {
@@ -1408,26 +1422,48 @@ fn rectangle_geometry([left, top, right, bottom]: [f32; 4]) -> Geometry {
     )
 }
 
+/// The tightest rectangle at `angle_degrees` around the mask pixels. Rotating
+/// the axis-aligned box instead would grow it past the text by up to its full
+/// diagonal, past the page edge, and over neighboring dialogue.
+fn oriented_extent(points: &[MaskPoint], angle_degrees: f32) -> [f64; 4] {
+    let (sin, cos) = f64::from(angle_degrees).to_radians().sin_cos();
+    points.iter().fold(
+        [
+            f64::INFINITY,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::NEG_INFINITY,
+        ],
+        |[min_u, min_v, max_u, max_v], point| {
+            let u = point.x * cos + point.y * sin;
+            let v = point.y * cos - point.x * sin;
+            // Points are pixel centers; extend by half a pixel to cover them.
+            [
+                min_u.min(u - 0.5),
+                min_v.min(v - 0.5),
+                max_u.max(u + 0.5),
+                max_v.max(v + 0.5),
+            ]
+        },
+    )
+}
+
 fn rotated_rectangle_geometry(
-    [left, top, right, bottom]: [f32; 4],
+    [min_u, min_v, max_u, max_v]: [f64; 4],
     angle_degrees: f32,
 ) -> Geometry {
-    let width = f64::from((right - left).max(1.0));
-    let height = f64::from((bottom - top).max(1.0));
-    let center_x = f64::from(left + right) * 0.5;
-    let center_y = f64::from(top + bottom) * 0.5;
     let (sin, cos) = f64::from(angle_degrees).to_radians().sin_cos();
     Geometry {
         origin: Origin::User,
         points: [
-            (-width * 0.5, -height * 0.5),
-            (width * 0.5, -height * 0.5),
-            (width * 0.5, height * 0.5),
-            (-width * 0.5, height * 0.5),
+            (min_u, min_v),
+            (max_u, min_v),
+            (max_u, max_v),
+            (min_u, max_v),
         ]
-        .map(|(x, y)| Point {
-            x: center_x + x * cos - y * sin,
-            y: center_y + x * sin + y * cos,
+        .map(|(u, v)| Point {
+            x: u * cos - v * sin,
+            y: u * sin + v * cos,
         })
         .into(),
     }
@@ -1803,32 +1839,40 @@ fn clamp_to_image(detections: &mut Vec<KoharuLayoutDetection>, size: ImageSize) 
     detections.retain(|detection| area(detection.bbox) > 0.0);
 }
 
-/// An onomatopoeia box that encloses two or more separate text boxes is a
-/// false positive spanning several lines of dialogue (seen on real pages at
-/// low confidence, up to two thirds of a page). Box containment is used, not
-/// masks: such a box's mask covers its own strokes, not the dialogue it spans.
-/// A real effect that overlaps a single line is kept.
-fn remove_onomatopoeia_spanning_text(detections: &mut Vec<KoharuLayoutDetection>) {
-    let spanning = detections
+/// On real pages the detector returns low-confidence onomatopoeia boxes that
+/// span several lines of dialogue or a large part of the page. Such a box is
+/// dropped when it is below `SPURIOUS_ONOMATOPOEIA_MAX_SCORE` and either
+/// encloses at least half of two other text or onomatopoeia boxes, or covers
+/// more than `SPURIOUS_ONOMATOPOEIA_PAGE_FRACTION` of the page. Box
+/// containment is used, not masks: such a box's mask covers its own strokes,
+/// not the dialogue it spans. A confident effect is always kept.
+fn remove_spurious_onomatopoeia(detections: &mut Vec<KoharuLayoutDetection>, size: ImageSize) {
+    let page_area = size.width as f32 * size.height as f32;
+    let spurious = detections
         .iter()
-        .map(|candidate| {
+        .enumerate()
+        .map(|(index, candidate)| {
             candidate.label == "onomatopoeia"
-                && detections
-                    .iter()
-                    .filter(|text| {
-                        let text_area = area(text.bbox);
-                        text.label == "text"
-                            && text_area > 0.0
-                            && intersection_area(candidate.bbox, text.bbox) / text_area
-                                >= NESTED_TEXT_CONTAINMENT_THRESHOLD
-                    })
-                    .count()
-                    >= 2
+                && candidate.score < SPURIOUS_ONOMATOPOEIA_MAX_SCORE
+                && (area(candidate.bbox) > page_area * SPURIOUS_ONOMATOPOEIA_PAGE_FRACTION
+                    || detections
+                        .iter()
+                        .enumerate()
+                        .filter(|&(other_index, other)| {
+                            let other_area = area(other.bbox);
+                            other_index != index
+                                && is_text_detection(other)
+                                && other_area > 0.0
+                                && intersection_area(candidate.bbox, other.bbox) / other_area
+                                    >= SPURIOUS_ONOMATOPOEIA_CONTAINMENT
+                        })
+                        .count()
+                        >= 2)
         })
         .collect::<Vec<_>>();
     let mut index = 0usize;
     detections.retain(|_| {
-        let keep = !spanning[index];
+        let keep = !spurious[index];
         index += 1;
         keep
     });
@@ -2400,7 +2444,7 @@ mod tests {
         StageInput, StageProcessor, best_container, clamp_to_image, closed_mask_for, color_palette,
         generation, infer_typography, layout_order, link_dialogue_regions, mask_containment,
         mask_for, mask_geometry, non_maximum_suppression, normalize_text_color,
-        remove_nested_text_detections, remove_onomatopoeia_spanning_text, write_region,
+        remove_nested_text_detections, remove_spurious_onomatopoeia, write_region,
     };
 
     #[test]
@@ -3162,26 +3206,32 @@ mod tests {
     }
 
     #[test]
-    fn onomatopoeia_spanning_several_dialogue_boxes_is_removed() {
-        // Boxes from a real page: a low-confidence effect over three lines of
-        // dialogue, and a real effect that overlaps one line.
+    fn spurious_onomatopoeia_boxes_are_removed() {
+        // Raw boxes from a real 1280x1280 page: a 0.25 effect over a line of
+        // dialogue and two small effects, a 0.38 effect over 42% of the page,
+        // and a 0.81 effect that overlaps one line and must stay.
+        let page = ImageSize {
+            width: 1280,
+            height: 1280,
+        };
         let mut detections = vec![
-            detection("onomatopoeia", 0.25, [597.0, 352.0, 878.0, 636.0]),
+            detection("onomatopoeia", 0.25, [626.0, 380.0, 849.0, 608.0]),
             detection("text", 0.9, [828.0, 366.0, 859.0, 426.0]),
-            detection("text", 0.9, [706.0, 416.0, 727.0, 460.0]),
-            detection("text", 0.9, [870.0, 490.0, 886.0, 541.0]),
-            detection("onomatopoeia", 0.81, [133.0, 335.0, 412.0, 567.0]),
-            detection("text", 0.9, [324.0, 309.0, 359.0, 392.0]),
+            detection("onomatopoeia", 0.6, [706.0, 416.0, 727.0, 460.0]),
+            detection("onomatopoeia", 0.6, [830.0, 490.0, 846.0, 541.0]),
+            detection("onomatopoeia", 0.38, [18.0, 12.0, 1267.0, 566.0]),
+            detection("onomatopoeia", 0.81, [433.0, 335.0, 712.0, 567.0]),
+            detection("text", 0.9, [624.0, 309.0, 659.0, 392.0]),
         ];
 
-        remove_onomatopoeia_spanning_text(&mut detections);
+        remove_spurious_onomatopoeia(&mut detections, page);
 
         let scores = detections
             .iter()
             .filter(|detection| detection.label == "onomatopoeia")
             .map(|detection| detection.score)
             .collect::<Vec<_>>();
-        assert_eq!(scores, [0.81]);
+        assert_eq!(scores, [0.6, 0.6, 0.81]);
         assert_eq!(detections.len(), 5);
     }
 
@@ -3786,6 +3836,18 @@ mod tests {
 
         assert_eq!(inferred.writing_mode, WritingMode::Horizontal);
         assert!((inferred.angle_degrees - 8.0).abs() < 1.0);
+
+        // The region hugs the rotated lines instead of rotating the full box,
+        // which would push its corners off the image.
+        let geometry =
+            super::rotated_rectangle_geometry(inferred.oriented_extent, inferred.angle_degrees);
+        for point in &geometry.points {
+            assert!((0.0..=f64::from(width)).contains(&point.x), "{point:?}");
+            assert!((0.0..=f64::from(height)).contains(&point.y), "{point:?}");
+        }
+        let [min_u, min_v, max_u, max_v] = inferred.oriented_extent;
+        assert!((max_u - min_u - 31.0).abs() < 3.0);
+        assert!((max_v - min_v - 53.0).abs() < 3.0);
     }
 
     #[test]
