@@ -1,16 +1,17 @@
 'use client'
 
-import { Bot, SlidersHorizontal } from 'lucide-react'
+import { Bot, SlidersHorizontal, Users } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { AgentPanel } from '@/components/editor/AgentPanel'
+import { CharacterPanel } from '@/components/editor/CharacterPanel'
 import { Inspector } from '@/components/editor/Inspector'
 import { Button } from '@koharu/ui/components/button'
 
 export function RightSidebar() {
   const { t } = useTranslation()
-  const [panel, setPanel] = useState<'agent' | 'properties'>('properties')
+  const [panel, setPanel] = useState<'agent' | 'properties' | 'characters'>('properties')
 
   return (
     <aside className='flex h-full min-h-0 flex-col bg-[var(--surface-panel)]'>
@@ -22,6 +23,14 @@ export function RightSidebar() {
           onClick={() => setPanel('properties')}
         >
           <SlidersHorizontal className='size-3' /> {t('agent.properties')}
+        </Button>
+        <Button
+          variant={panel === 'characters' ? 'secondary' : 'ghost'}
+          size='sm'
+          className='h-7 flex-1 text-[10px]'
+          onClick={() => setPanel('characters')}
+        >
+          <Users className='size-3' /> {t('characters.tab')}
         </Button>
         <Button
           variant={panel === 'agent' ? 'secondary' : 'ghost'}
@@ -37,6 +46,9 @@ export function RightSidebar() {
       </div>
       <div className={panel === 'properties' ? 'min-h-0 flex-1' : 'hidden'}>
         <Inspector />
+      </div>
+      <div className={panel === 'characters' ? 'min-h-0 flex-1' : 'hidden'}>
+        <CharacterPanel />
       </div>
     </aside>
   )

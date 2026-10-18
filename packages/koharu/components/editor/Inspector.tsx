@@ -38,7 +38,15 @@ import {
   layerChildren,
   ocrNumbering,
 } from '@/lib/document'
-import { pageKey, projectKey, queryClient, refresh, useFonts, usePage } from '@/lib/queries'
+import {
+  pageKey,
+  projectKey,
+  queryClient,
+  refresh,
+  useCharacters,
+  useFonts,
+  usePage,
+} from '@/lib/queries'
 import { useKoharuStore } from '@/lib/store'
 import { previewCanvasOpacity } from '@koharu/bridge/canvas'
 import {
@@ -47,6 +55,7 @@ import {
   type FontFamily,
   type FontStyle,
   type Layer,
+  type SpeechKind,
   type TextAlignment,
   type TranslationReviewReason,
   type Typography,
@@ -1363,8 +1372,94 @@ function LayerEditor({ layer, onDelete }: { layer: Layer; onDelete?: () => void 
               )}
             </div>
           )}
+          <SpeechMarkupFields layer={layer} name={name} />
         </>
       )}
+    </div>
+  )
+}
+
+const speechKinds: SpeechKind[] = [
+  'speech',
+  'thought',
+  'narration',
+  'sound-effect',
+  'sign',
+  'aside',
+]
+
+/** Kind and speaker of a text. Each choice commits user-authored scene markup. */
+function SpeechMarkupFields({
+  layer,
+  name,
+}: {
+  layer: Extract<Layer, { type: 'text' }>
+  name: string
+}) {
+  const { t } = useTranslation()
+  const characters = useCharacters().data ?? []
+  const markup = layer.content.markup
+  const commit = (kind: SpeechKind, speaker: string | null) =>
+    call(commands.setSpeechMarkup, layer.id, kind, speaker)
+      .then(() => refresh(projectKey, pageKey))
+      .catch(() => undefined)
+  const kindLabels = Object.fromEntries(
+    speechKinds.map((kind) => [kind, t(`inspector.speechKinds.${kind}`)]),
+  )
+  const speakerLabels = {
+    none: t('inspector.noSpeaker'),
+    ...Object.fromEntries(characters.map((character) => [character.id, character.name])),
+  }
+
+  return (
+    <div className='grid min-w-0 grid-cols-2 gap-1.5'>
+      <InspectorField label={t('inspector.speechKind')}>
+        <Select
+          value={markup?.kind ?? null}
+          items={kindLabels}
+          onValueChange={(kind) => kind && commit(kind as SpeechKind, markup?.speaker ?? null)}
+        >
+          <SelectTrigger
+            data-testid={`speech-kind-${layer.id}`}
+            aria-label={t('inspector.speechKindLabel', { name })}
+            className='h-6 w-full min-w-0 text-[11px]'
+          >
+            <SelectValue placeholder={t('inspector.unmarked')} />
+          </SelectTrigger>
+          <SelectContent>
+            {speechKinds.map((kind) => (
+              <SelectItem key={kind} value={kind}>
+                {kindLabels[kind]}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </InspectorField>
+      <InspectorField label={t('inspector.speaker')}>
+        <Select
+          value={markup?.speaker ?? 'none'}
+          items={speakerLabels}
+          onValueChange={(speaker) =>
+            speaker && commit(markup?.kind ?? 'speech', speaker === 'none' ? null : speaker)
+          }
+        >
+          <SelectTrigger
+            data-testid={`speaker-${layer.id}`}
+            aria-label={t('inspector.speakerLabel', { name })}
+            className='h-6 w-full min-w-0 text-[11px] [&>span]:truncate'
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value='none'>{speakerLabels.none}</SelectItem>
+            {characters.map((character) => (
+              <SelectItem key={character.id} value={character.id}>
+                {character.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </InspectorField>
     </div>
   )
 }

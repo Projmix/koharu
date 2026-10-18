@@ -219,7 +219,21 @@
     "unplaced": "未配置",
     "vertical": "縦書き",
     "weight": "太さ",
-    "width": "幅"
+    "width": "幅",
+    "speechKind": "種類",
+    "speechKindLabel": "{{name}}の種類",
+    "speechKinds": {
+      "speech": "セリフ",
+      "thought": "心の声",
+      "narration": "ナレーション",
+      "sound-effect": "効果音",
+      "sign": "看板・文字",
+      "aside": "ぼやき"
+    },
+    "speaker": "話者",
+    "speakerLabel": "{{name}}の話者",
+    "noSpeaker": "なし",
+    "unmarked": "未設定"
   },
   "languages": {
     "en-US": "English",
@@ -348,7 +362,14 @@
     "rename": "名前を変更",
     "renameDescription": "このページの新しい名前を入力します。",
     "renameTitle": "ページ名を変更",
-    "selected": "{{count}}件選択中"
+    "selected": "{{count}}件選択中",
+    "markupMissing": {
+      "refused": "シーン解析: モデルがこのページを拒否しました",
+      "content-filter": "シーン解析: プロバイダーのコンテンツフィルターでブロックされました",
+      "empty": "シーン解析: モデルが何も返しませんでした",
+      "invalid": "シーン解析: 応答が無効なため破棄しました",
+      "failed": "シーン解析: リクエストに失敗しました"
+    }
   },
   "outputPicker": {
     "instructions": "翻訳指示",
@@ -360,18 +381,21 @@
     "detection": "検出",
     "inpainting": "インペイント",
     "ocr": "OCR",
+    "markup": "シーン解析",
     "translation": "翻訳"
   },
   "phaseShort": {
     "detection": "検出",
     "inpainting": "修復",
     "ocr": "OCR",
+    "markup": "解析",
     "translation": "翻訳"
   },
   "phaseDescription": {
     "detection": "ページ上のテキストを見つけます。",
     "inpainting": "文字を消した部分の絵を復元します。",
     "ocr": "各領域内の原文を読み取ります。",
+    "markup": "翻訳のために各テキストの種類・話者・続きを付けます。",
     "translation": "原文を対象言語に翻訳します。"
   },
   "providerDescriptions": {
@@ -463,6 +487,11 @@
         "crossCheck": "2つ目のローカルモデルで照合",
         "crossCheckDescription": "各画像を2つ目のローカルモデルでも読み取り、結果が食い違った画像だけをAPIに送信します。オフにするとすべて送信します。費用は約3倍で、手書き文字はやや正確になります。"
       },
+      "markup": {
+        "model": "解析モデル",
+        "instructions": "追加の指示",
+        "instructionsDescription": "解析リクエストに追加されます（例: 登場人物のヒント）。"
+      },
       "inpainting": {
         "apiModel": "画像編集モデル",
         "localModel": "ローカルクリーニングモデル",
@@ -497,6 +526,10 @@
         "ocr": {
           "description": "検出領域内の原文を読み取ります。",
           "title": "OCR"
+        },
+        "markup": {
+          "title": "シーン解析",
+          "description": "視覚モデルが各テキストの種類、話者、続いている行を付けます。テキスト自体は変更しません。"
         }
       },
       "title": "パイプライン"
@@ -669,5 +702,23 @@
     "failed": "プレビューを処理できませんでした：{{error}}",
     "cleanupLayers": "元画像＋表示中の描画レイヤー。PNG 1枚で送信します。テキストレイヤー、マスク、選択ハンドルは含まれません。",
     "restorationLayers": "元画像＋表示中のクリーニング・描画レイヤーをレイヤー順に合成した選択範囲。PNG 1枚で送信します。テキストレイヤー、マスク、選択ハンドルは含まれません。"
+  },
+  "characters": {
+    "tab": "登場人物",
+    "title": "登場人物",
+    "description": "シーン解析と翻訳で使う名前と性別です。一度編集するとリストはユーザーのものになり、シーン解析では変更されません。",
+    "empty": "登場人物はまだいません。シーン解析で追加されるか、ここで追加できます。",
+    "name": "名前",
+    "gender": "性別",
+    "genders": {
+      "male": "男性",
+      "female": "女性",
+      "unknown": "不明"
+    },
+    "notes": "メモ",
+    "notesPlaceholder": "メモ（例: 話し方）",
+    "remove": "{{name}}を削除",
+    "newName": "新しい登場人物の名前",
+    "add": "追加"
   }
 }

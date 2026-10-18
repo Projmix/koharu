@@ -219,7 +219,21 @@
     "unplaced": "Unplaced",
     "vertical": "Vertical",
     "weight": "Weight",
-    "width": "Width"
+    "width": "Width",
+    "speechKind": "Kind",
+    "speechKindLabel": "{{name}} kind",
+    "speechKinds": {
+      "speech": "Speech",
+      "thought": "Thought",
+      "narration": "Narration",
+      "sound-effect": "Sound effect",
+      "sign": "Sign",
+      "aside": "Aside"
+    },
+    "speaker": "Speaker",
+    "speakerLabel": "{{name}} speaker",
+    "noSpeaker": "None",
+    "unmarked": "Not marked"
   },
   "languages": {
     "en-US": "English",
@@ -348,7 +362,14 @@
     "rename": "Rename",
     "renameDescription": "Choose a new name for this page.",
     "renameTitle": "Rename page",
-    "selected": "{{count}} selected"
+    "selected": "{{count}} selected",
+    "markupMissing": {
+      "refused": "Scene markup: the model refused this page",
+      "content-filter": "Scene markup: blocked by the provider's content filter",
+      "empty": "Scene markup: the model returned nothing",
+      "invalid": "Scene markup: the answer was invalid and discarded",
+      "failed": "Scene markup: the request failed"
+    }
   },
   "outputPicker": {
     "instructions": "Translation instructions",
@@ -360,18 +381,21 @@
     "detection": "Detection",
     "inpainting": "Inpainting",
     "ocr": "OCR",
+    "markup": "Scene markup",
     "translation": "Translation"
   },
   "phaseShort": {
     "detection": "Detect",
     "inpainting": "Clean",
     "ocr": "OCR",
+    "markup": "Markup",
     "translation": "Translate"
   },
   "phaseDescription": {
     "detection": "Locate text on the page.",
     "inpainting": "Rebuild the artwork behind removed text.",
     "ocr": "Read the text inside each region.",
+    "markup": "Label each text's kind, speaker and continuation for translation.",
     "translation": "Convert source text to the target language."
   },
   "providerDescriptions": {
@@ -463,6 +487,11 @@
         "crossCheck": "Cross-check with a second local model",
         "crossCheckDescription": "Read every crop with a second local model too and send only crops where the two disagree to the API. Turn off to send every crop: about three times the cost, slightly more accurate on handwriting."
       },
+      "markup": {
+        "model": "Markup model",
+        "instructions": "Additional instructions",
+        "instructionsDescription": "Appended to the markup request, for example hints about the characters."
+      },
       "inpainting": {
         "apiModel": "Image editing model",
         "localModel": "Local cleanup model",
@@ -497,6 +526,10 @@
         "ocr": {
           "description": "Read the source text inside detected regions.",
           "title": "OCR"
+        },
+        "markup": {
+          "title": "Scene markup",
+          "description": "A vision model labels each text's kind, speaker and the line it continues. It never changes the text."
         }
       },
       "title": "Pipeline"
@@ -669,5 +702,23 @@
     "failed": "Could not resolve preview: {{error}}",
     "cleanupLayers": "Original + visible Paint layers. One PNG; text layers, masks and handles are excluded.",
     "restorationLayers": "Selected area of the original + visible Cleanup and Paint layers, in layer order. One PNG; text layers, masks and handles are excluded."
+  },
+  "characters": {
+    "tab": "Cast",
+    "title": "Characters",
+    "description": "Names and genders used by scene markup and translation. Once you edit the list it is yours, and markup no longer changes it.",
+    "empty": "No characters yet. Scene markup fills this list, or add them here.",
+    "name": "Name",
+    "gender": "Gender",
+    "genders": {
+      "male": "Male",
+      "female": "Female",
+      "unknown": "Unknown"
+    },
+    "notes": "Notes",
+    "notesPlaceholder": "Notes, e.g. how they talk",
+    "remove": "Remove {{name}}",
+    "newName": "New character name",
+    "add": "Add"
   }
 }

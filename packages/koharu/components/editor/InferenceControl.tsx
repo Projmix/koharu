@@ -14,6 +14,7 @@ import {
   PanelsTopLeft,
   Play,
   ScanSearch,
+  MessageSquareText,
   ScanText,
   Settings,
   Sparkles,
@@ -66,6 +67,7 @@ import {
   type OcrConfig,
   type PipelineConfig,
   type ProviderPreference,
+  type SceneMarkupConfig,
   type Stage,
   type TypesettingConfig,
 } from '@koharu/bridge/protocol'
@@ -252,6 +254,11 @@ function RuntimeSelector({
     savePipeline({ ...pipeline, ocr }, 'ocr')
   }
 
+  const saveMarkup = (markup: SceneMarkupConfig) => {
+    if (!pipeline) return
+    savePipeline({ ...pipeline, markup }, 'markup')
+  }
+
   const saveInpainting = (inpainting: InpaintingConfig) => {
     if (!pipeline) return
     savePipeline({ ...pipeline, inpainting }, 'inpainting')
@@ -378,6 +385,7 @@ function RuntimeSelector({
         onChooseModel={chooseModel}
         onChooseStageModel={chooseStageModel}
         onSaveOcr={saveOcr}
+        onSaveMarkup={saveMarkup}
         onSaveInpainting={saveInpainting}
         onSelectInpaintingApi={chooseInpaintingApi}
         onSaveTypesetting={saveTypesetting}
@@ -530,6 +538,13 @@ function RuntimeSelector({
               onSelect={toggleStage}
             />
             <SelectorOption
+              value='markup'
+              label={t('phase.markup')}
+              detail={t('phaseDescription.markup')}
+              selected={stages.includes('markup')}
+              onSelect={toggleStage}
+            />
+            <SelectorOption
               value='translation'
               label={t('phase.translation')}
               detail={t('phaseDescription.translation')}
@@ -588,6 +603,7 @@ function ExpandedRuntimeSelector({
   onChooseModel,
   onChooseStageModel,
   onSaveOcr,
+  onSaveMarkup,
   onSaveInpainting,
   onSelectInpaintingApi,
   onSaveTypesetting,
@@ -618,6 +634,7 @@ function ExpandedRuntimeSelector({
   onChooseModel: (model: ModelSelection) => void
   onChooseStageModel: (stage: ModelStage, model: ModelName) => void
   onSaveOcr: (ocr: OcrConfig) => void
+  onSaveMarkup: (markup: SceneMarkupConfig) => void
   onSaveInpainting: (inpainting: InpaintingConfig) => void
   onSelectInpaintingApi: (provider: InpaintingConfig['api']['provider'], model: string) => void
   onSaveTypesetting: (typesetting: TypesettingConfig) => void
@@ -627,6 +644,10 @@ function ExpandedRuntimeSelector({
   const detection = pipeline ? stageModel(pipeline, 'detection') : null
   const inpaintingConfig = pipeline?.inpainting ?? null
   const ocr = pipeline?.ocr ?? null
+  const markup = pipeline?.markup ?? null
+  const markupLabel = markup
+    ? apiModelLabel(markup.model, translationModels, providers, t('inference.providerDefault'))
+    : t('inference.notSet')
   const firstFont = typesetting?.font_families?.[0] ?? ''
   const typingLabel = firstFont
     ? `${t('inference.automatic')} · ${firstFont}`
@@ -675,7 +696,7 @@ function ExpandedRuntimeSelector({
       </Button>
 
       <div className='max-w-full min-w-0 flex-1 overflow-hidden'>
-        <div className='grid w-full min-w-0 grid-cols-6 items-center gap-1 pr-1'>
+        <div className='grid w-full min-w-0 grid-cols-7 items-center gap-1 pr-1'>
           <ExpandedStageChip
             label={t('inference.scope')}
             shortLabel={t('inference.scope')}
@@ -722,6 +743,28 @@ function ExpandedRuntimeSelector({
                 providers={providers}
                 disabled={running || saving}
                 onChange={onSaveOcr}
+              />
+            )}
+          </ExpandedStageChip>
+
+          <ExpandedStageChip
+            stage='markup'
+            label={t('phase.markup')}
+            shortLabel={t('phaseShort.markup')}
+            value={markupLabel}
+            active={stages.includes('markup')}
+            disabled={running}
+            onToggle={() => toggleStage('markup')}
+            onOpenChange={(open) => open && onRefreshModels()}
+            icon={<MessageSquareText className='size-3.5 shrink-0 text-primary' />}
+          >
+            {markup && (
+              <MarkupStagePicker
+                value={markup}
+                modelChoices={translationModels}
+                providers={providers}
+                disabled={running || saving}
+                onChange={onSaveMarkup}
               />
             )}
           </ExpandedStageChip>
@@ -965,6 +1008,71 @@ function PipelineStagePicker({
           ))}
         </SelectContent>
       </Select>
+    </div>
+  )
+}
+
+/** The scene markup model: a vision model from a provider that supports markup. */
+function MarkupStagePicker({
+  value,
+  modelChoices,
+  providers,
+  disabled,
+  onChange,
+}: {
+  value: SceneMarkupConfig
+  modelChoices: Model[]
+  providers: ProviderPreference[]
+  disabled: boolean
+  onChange: (value: SceneMarkupConfig) => void
+}) {
+  const { t } = useTranslation()
+  const [modelOpen, setModelOpen] = useState(false)
+  const models = modelChoices.filter(
+    (model) =>
+      model.vision &&
+      providers.some((entry) => entry.config.provider === model.provider && entry.supports_markup),
+  )
+  const selected = models.find((candidate) => modelKey(candidate) === modelKey(value.model)) ?? null
+  const current = selected ?? {
+    ...value.model,
+    model: value.model.model ?? null,
+    name: value.model.model ?? providerName(providers, value.model.provider),
+    quantizations: [],
+    vision: value.model.vision ?? true,
+    reasoning: value.model.reasoning ?? false,
+    reasoning_required: value.model.reasoning_required ?? false,
+  }
+  const choices = selected ? models : [current, ...models]
+
+  return (
+    <div className='grid gap-2 p-1'>
+      <span className='px-1 text-[11px] font-medium'>{t('phase.markup')}</span>
+      <Popover open={modelOpen} onOpenChange={setModelOpen}>
+        <PopoverTrigger
+          type='button'
+          aria-label={t('settings.pipeline.markup.model')}
+          disabled={disabled}
+          className='flex h-8 min-w-0 items-center justify-between gap-2 rounded-lg border border-input px-2.5 text-[11px] outline-none hover:bg-foreground/[0.03] focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50'
+        >
+          <span className='min-w-0 truncate'>{current.name}</span>
+          <ChevronDown className='size-3.5 shrink-0 text-muted-foreground' />
+        </PopoverTrigger>
+        <PopoverContent align='start' sideOffset={4} className='w-64 gap-0 p-1'>
+          <ModelPicker
+            value={value.model}
+            models={choices}
+            providers={providers}
+            disabled={disabled}
+            onBack={() => setModelOpen(false)}
+            onSelect={(model) => {
+              onChange({ ...value, model })
+              setModelOpen(false)
+            }}
+          />
+        </PopoverContent>
+      </Popover>
+      <p className='px-1 text-[11px] text-muted-foreground'>{t('phaseDescription.markup')}</p>
     </div>
   )
 }

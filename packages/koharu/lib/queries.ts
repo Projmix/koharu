@@ -18,6 +18,7 @@ export const pagesKey = ['pages'] as const
 export const pageKey = ['page'] as const
 export const preparedPageKey = (page: string) => ['prepared-page', page] as const
 export const fontsKey = ['fonts'] as const
+export const charactersKey = ['characters'] as const
 
 const projectQuery = queryOptions({
   queryKey: projectKey,
@@ -60,6 +61,16 @@ export function usePages(enabled = true) {
 
 export function usePage(enabled = true) {
   return useQuery({ ...pageQuery, enabled })
+}
+
+/** The project character list, refetched whenever the project revision moves. */
+export function useCharacters(enabled = true) {
+  const revision = useProject(enabled).data?.revision
+  return useQuery({
+    queryKey: [...charactersKey, revision],
+    queryFn: () => call(commands.getCharacters),
+    enabled: enabled && revision !== undefined,
+  })
 }
 
 export function useFonts(enabled = true) {

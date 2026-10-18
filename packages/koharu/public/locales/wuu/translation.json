@@ -219,7 +219,21 @@
     "unplaced": "还呒没放置",
     "vertical": "竖排",
     "weight": "字重",
-    "width": "宽度"
+    "width": "宽度",
+    "speechKind": "类型",
+    "speechKindLabel": "{{name}} 的类型",
+    "speechKinds": {
+      "speech": "对白",
+      "thought": "心声",
+      "narration": "旁白",
+      "sound-effect": "音效",
+      "sign": "标牌文字",
+      "aside": "旁注"
+    },
+    "speaker": "说话人",
+    "speakerLabel": "{{name}} 的说话人",
+    "noSpeaker": "无",
+    "unmarked": "未标注"
   },
   "languages": {
     "en-US": "English",
@@ -348,7 +362,14 @@
     "rename": "改名",
     "renameDescription": "帮箇页取个新名字。",
     "renameTitle": "页面改名",
-    "selected": "拣中个页面：{{count}} 页"
+    "selected": "拣中个页面：{{count}} 页",
+    "markupMissing": {
+      "refused": "场景标注：模型拒绝了此页",
+      "content-filter": "场景标注：被服务商的内容过滤器拦截",
+      "empty": "场景标注：模型没有返回内容",
+      "invalid": "场景标注：回复无效，已丢弃",
+      "failed": "场景标注：请求失败"
+    }
   },
   "outputPicker": {
     "instructions": "翻译说明",
@@ -360,18 +381,21 @@
     "detection": "检测",
     "inpainting": "修补",
     "ocr": "OCR",
+    "markup": "场景标注",
     "translation": "翻译"
   },
   "phaseShort": {
     "detection": "检测",
     "inpainting": "修复",
     "ocr": "OCR",
+    "markup": "标注",
     "translation": "翻译"
   },
   "phaseDescription": {
     "detection": "寻出页面浪个文本。",
     "inpainting": "拿文字删脱仔，再重建原来文字底下个图稿。",
     "ocr": "读出每个区域里向个文本。",
+    "markup": "为翻译标注每段文字的类型、说话人和接续关系。",
     "translation": "拿原文翻译成目标语言。"
   },
   "providerDescriptions": {
@@ -463,6 +487,11 @@
         "crossCheck": "用第二个本地模型交叉核对",
         "crossCheckDescription": "每张裁剪图像也用第二个本地模型识别，只把两者结果不一致的发送给 API。关闭后全部发送：费用约为三倍，手写文字略更准确。"
       },
+      "markup": {
+        "model": "标注模型",
+        "instructions": "附加说明",
+        "instructionsDescription": "附加到标注请求中，例如角色提示。"
+      },
       "inpainting": {
         "apiModel": "图像编辑模型",
         "localModel": "本地清理模型",
@@ -497,6 +526,10 @@
         "ocr": {
           "description": "读出检测区域里向个原文。",
           "title": "OCR"
+        },
+        "markup": {
+          "title": "场景标注",
+          "description": "视觉模型为每段文字标注类型、说话人和它接续的台词，不会修改文字。"
         }
       },
       "title": "处理流程"
@@ -669,5 +702,23 @@
     "failed": "无法处理预览：{{error}}",
     "cleanupLayers": "原图 + 可见的绘画图层。发送单张 PNG，不包含文字图层、蒙版和选择控件。",
     "restorationLayers": "原图 + 按图层顺序合成的可见清理与绘画图层，仅发送选区。发送单张 PNG，不包含文字图层、蒙版和选择控件。"
+  },
+  "characters": {
+    "tab": "角色",
+    "title": "角色",
+    "description": "场景标注和翻译使用的姓名与性别。编辑后列表归你所有，场景标注不会再修改它。",
+    "empty": "还没有角色。场景标注会填写此列表，也可以在这里添加。",
+    "name": "姓名",
+    "gender": "性别",
+    "genders": {
+      "male": "男",
+      "female": "女",
+      "unknown": "未知"
+    },
+    "notes": "备注",
+    "notesPlaceholder": "备注，例如说话方式",
+    "remove": "移除 {{name}}",
+    "newName": "新角色姓名",
+    "add": "添加"
   }
 }

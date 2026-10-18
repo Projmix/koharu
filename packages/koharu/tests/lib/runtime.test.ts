@@ -54,18 +54,17 @@ const preferences: Preferences = {
       target_language: 'en-US',
       page: translationProfile(),
       chapter: translationProfile(),
-      markup: {
-        enabled: false,
-        model: {
-          provider: 'openrouter',
-          model: 'google/gemini-3.7-flash',
-          quantization: null,
-          vision: true,
-          reasoning: false,
-        },
-        generation: { temperature: 0, max_tokens: 8192, vision: true, reasoning: false },
-        instructions: null,
+    },
+    markup: {
+      model: {
+        provider: 'openrouter',
+        model: 'google/gemini-3.7-flash',
+        quantization: null,
+        vision: true,
+        reasoning: false,
       },
+      generation: { temperature: 0, max_tokens: 8192, vision: true, reasoning: false },
+      instructions: null,
     },
     inpainting: {
       method: 'local',

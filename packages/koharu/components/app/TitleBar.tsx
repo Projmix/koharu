@@ -246,17 +246,19 @@ export function TitleBar() {
                 {t('menu.processLayers')}
               </MenubarItem>
               <MenubarSeparator />
-              {(['detection', 'ocr', 'translation', 'inpainting'] as Stage[]).map((stage) => (
-                <MenubarItem
-                  key={stage}
-                  disabled={!project || pages.length === 0}
-                  onClick={() => run({ scope: 'project' }, { operation: 'through', stage })}
-                >
-                  {t('menu.runPhase', {
-                    phase: t(`phase.${stage}`),
-                  })}
-                </MenubarItem>
-              ))}
+              {(['detection', 'ocr', 'markup', 'translation', 'inpainting'] as Stage[]).map(
+                (stage) => (
+                  <MenubarItem
+                    key={stage}
+                    disabled={!project || pages.length === 0}
+                    onClick={() => run({ scope: 'project' }, { operation: 'through', stage })}
+                  >
+                    {t('menu.runPhase', {
+                      phase: t(`phase.${stage}`),
+                    })}
+                  </MenubarItem>
+                ),
+              )}
             </MenubarContent>
           </MenubarMenu>
 

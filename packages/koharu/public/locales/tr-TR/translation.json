@@ -219,7 +219,21 @@
     "unplaced": "Yerleştirilmedi",
     "vertical": "Dikey",
     "weight": "Kalınlık",
-    "width": "Genişlik"
+    "width": "Genişlik",
+    "speechKind": "Tür",
+    "speechKindLabel": "{{name}} türü",
+    "speechKinds": {
+      "speech": "Konuşma",
+      "thought": "Düşünce",
+      "narration": "Anlatım",
+      "sound-effect": "Ses efekti",
+      "sign": "Tabela",
+      "aside": "Ara söz"
+    },
+    "speaker": "Konuşan",
+    "speakerLabel": "{{name}} konuşanı",
+    "noSpeaker": "Yok",
+    "unmarked": "İşaretlenmedi"
   },
   "languages": {
     "en-US": "English",
@@ -348,7 +362,14 @@
     "rename": "Yeniden adlandır",
     "renameDescription": "Bu sayfa için yeni bir ad seçin.",
     "renameTitle": "Sayfayı yeniden adlandır",
-    "selected": "{{count}} seçili"
+    "selected": "{{count}} seçili",
+    "markupMissing": {
+      "refused": "Sahne işaretlemesi: model bu sayfayı reddetti",
+      "content-filter": "Sahne işaretlemesi: sağlayıcının içerik filtresi engelledi",
+      "empty": "Sahne işaretlemesi: model hiçbir şey döndürmedi",
+      "invalid": "Sahne işaretlemesi: yanıt geçersizdi ve atıldı",
+      "failed": "Sahne işaretlemesi: istek başarısız oldu"
+    }
   },
   "outputPicker": {
     "instructions": "Çeviri talimatları",
@@ -360,18 +381,21 @@
     "detection": "Algılama",
     "inpainting": "Doldurma",
     "ocr": "OCR",
+    "markup": "Sahne işaretleme",
     "translation": "Çeviri"
   },
   "phaseShort": {
     "detection": "Algı",
     "inpainting": "Temizle",
     "ocr": "OCR",
+    "markup": "İşaretleme",
     "translation": "Çeviri"
   },
   "phaseDescription": {
     "detection": "Sayfadaki metni bulur.",
     "inpainting": "Metin kaldırıldıktan sonra çizimi yeniden oluşturur.",
     "ocr": "Her bölgenin içindeki metni okur.",
+    "markup": "Çeviri için her metnin türünü, konuşanını ve devamını işaretler.",
     "translation": "Kaynak metni hedef dile çevirir."
   },
   "providerDescriptions": {
@@ -463,6 +487,11 @@
         "crossCheck": "İkinci yerel modelle karşılaştır",
         "crossCheckDescription": "Her görüntü ikinci bir yerel modelle de okunur ve yalnızca ikisinin farklı okuduğu görüntüler API'ye gönderilir. Kapatırsanız tümü gönderilir: yaklaşık üç kat maliyetli, el yazısında biraz daha doğru."
       },
+      "markup": {
+        "model": "İşaretleme modeli",
+        "instructions": "Ek talimatlar",
+        "instructionsDescription": "İşaretleme isteğine eklenir, ör. karakterlerle ilgili ipuçları."
+      },
       "inpainting": {
         "apiModel": "Görüntü düzenleme modeli",
         "localModel": "Yerel temizleme modeli",
@@ -497,6 +526,10 @@
         "ocr": {
           "description": "Algılanan bölgelerdeki kaynak metni okur.",
           "title": "OCR"
+        },
+        "markup": {
+          "title": "Sahne işaretleme",
+          "description": "Görsel bir model her metnin türünü, konuşanını ve devam ettiği satırı işaretler. Metni asla değiştirmez."
         }
       },
       "title": "İşlem hattı"
@@ -669,5 +702,23 @@
     "failed": "Önizleme işlenemedi: {{error}}",
     "cleanupLayers": "Orijinal + görünür boyama katmanları. Tek PNG; metin katmanları, maskeler ve seçim tutamaçları dahil değildir.",
     "restorationLayers": "Orijinal + görünür temizleme ve boyama katmanlarının katman sırasıyla birleştirilmiş seçili alanı. Tek PNG; metin katmanları, maskeler ve seçim tutamaçları dahil değildir."
+  },
+  "characters": {
+    "tab": "Kadro",
+    "title": "Karakterler",
+    "description": "Sahne işaretlemesi ve çevirinin kullandığı adlar ve cinsiyetler. Listeyi düzenlediğinizde size ait olur ve işaretleme artık değiştirmez.",
+    "empty": "Henüz karakter yok. Sahne işaretlemesi bu listeyi doldurur ya da buradan ekleyin.",
+    "name": "Ad",
+    "gender": "Cinsiyet",
+    "genders": {
+      "male": "Erkek",
+      "female": "Kadın",
+      "unknown": "Bilinmiyor"
+    },
+    "notes": "Notlar",
+    "notesPlaceholder": "Notlar, ör. nasıl konuştuğu",
+    "remove": "{{name}} karakterini kaldır",
+    "newName": "Yeni karakter adı",
+    "add": "Ekle"
   }
 }

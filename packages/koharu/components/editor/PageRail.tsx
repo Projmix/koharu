@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query'
 import { observeElementRect, useVirtualizer } from '@tanstack/react-virtual'
 import {
   CircleAlert,
+  MessageSquareDashed,
   Copy,
   FilePlus2,
   FolderOpen,
@@ -593,6 +594,24 @@ function PageItem({
               </TooltipTrigger>
               <TooltipContent side='right' className='max-w-80 text-[10px]'>
                 {page.warning.message}
+              </TooltipContent>
+            </Tooltip>
+          )}
+          {page.markup_missing && (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <span
+                    data-testid={`markup-missing-${page.id}`}
+                    className='mt-0.5 shrink-0 text-muted-foreground'
+                    aria-label={t(`navigator.markupMissing.${page.markup_missing}`)}
+                  />
+                }
+              >
+                <MessageSquareDashed className='size-3' />
+              </TooltipTrigger>
+              <TooltipContent side='right' className='max-w-80 text-[10px]'>
+                {t(`navigator.markupMissing.${page.markup_missing}`)}
               </TooltipContent>
             </Tooltip>
           )}

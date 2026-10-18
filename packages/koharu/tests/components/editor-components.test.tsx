@@ -139,6 +139,7 @@ const textLayer: Layer = {
     source: { text: 'こんにちは', language: 'ja' },
     translation: { text: 'Hello', language: null },
     translation_review: null,
+    markup: null,
     role: null,
     source_region: null,
   },
@@ -222,18 +223,17 @@ const preferences: Preferences = {
       target_language: 'en-US',
       page: translationProfile(),
       chapter: translationProfile(),
-      markup: {
-        enabled: false,
-        model: {
-          provider: 'openrouter',
-          model: 'google/gemini-3.7-flash',
-          quantization: null,
-          vision: true,
-          reasoning: false,
-        },
-        generation: { temperature: 0, max_tokens: 8192, vision: true, reasoning: false },
-        instructions: null,
+    },
+    markup: {
+      model: {
+        provider: 'openrouter',
+        model: 'google/gemini-3.7-flash',
+        quantization: null,
+        vision: true,
+        reasoning: false,
       },
+      generation: { temperature: 0, max_tokens: 8192, vision: true, reasoning: false },
+      instructions: null,
     },
     inpainting: {
       method: 'local',
@@ -262,6 +262,7 @@ const preferences: Preferences = {
       {
         name: 'openrouter',
         supports_ocr: true,
+        supports_markup: true,
         supports_translation: true,
         config: { provider: 'openrouter', settings: {} },
         credential: emptyCredential(),
@@ -269,6 +270,7 @@ const preferences: Preferences = {
       {
         name: 'deepseek',
         supports_ocr: false,
+        supports_markup: false,
         supports_translation: true,
         config: { provider: 'deepseek', settings: {} },
         credential: emptyCredential(),
@@ -276,6 +278,7 @@ const preferences: Preferences = {
       {
         name: 'Qwen OCR (Alibaba Cloud)',
         supports_ocr: true,
+        supports_markup: false,
         supports_translation: false,
         config: {
           provider: 'qwen-ocr',
@@ -286,6 +289,7 @@ const preferences: Preferences = {
       {
         name: 'Local',
         supports_ocr: false,
+        supports_markup: false,
         supports_translation: true,
         config: { provider: 'local', settings: {} },
         credential: null,
@@ -293,6 +297,7 @@ const preferences: Preferences = {
       {
         name: 'OpenAI-compatible',
         supports_ocr: true,
+        supports_markup: true,
         supports_translation: true,
         config: {
           provider: 'openai-compatible',
@@ -303,6 +308,7 @@ const preferences: Preferences = {
       {
         name: 'LM Studio',
         supports_ocr: false,
+        supports_markup: false,
         supports_translation: true,
         config: {
           provider: 'lm-studio',
@@ -313,6 +319,7 @@ const preferences: Preferences = {
       {
         name: 'DeepL',
         supports_ocr: false,
+        supports_markup: false,
         supports_translation: true,
         config: { provider: 'deepl', settings: { base_url: null } },
         credential: emptyCredential(),
@@ -3345,6 +3352,7 @@ describe('greenfield editor', () => {
         {
           name: 'DeepL',
           supports_ocr: false,
+          supports_markup: false,
           supports_translation: true,
           config: { provider: 'deepl' as const, settings: { base_url: null } },
           credential: { configured: true, value: null, clear: false },
@@ -3516,6 +3524,7 @@ describe('greenfield editor', () => {
           {
             name: 'OpenRouter',
             supports_ocr: true,
+            supports_markup: true,
             supports_translation: true,
             config: { provider: 'openrouter', settings: {} },
             credential: emptyCredential(),

@@ -9,7 +9,7 @@ use super::{
     ChannelExt as _, Error,
     canvas::{CanvasChannel, Point},
     processing::Processing,
-    project::{CurrentProject, Page, Project, TextClipboardPayload, Typography},
+    project::{CharacterInput, CurrentProject, Page, Project, TextClipboardPayload, Typography},
 };
 async fn synchronize_canvas(
     desktop: &Desktop,
@@ -229,6 +229,48 @@ pub(crate) async fn set_translation(
         let mut project = project.project.lock().await;
         let project = project.as_mut().context("no project is open")?;
         let commit = project.set_translation(layer, text).await?;
+        project.record_commit(&commit);
+        (commit, project.active_page())
+    };
+    let canvas = synchronize_canvas(&desktop, &commit, page).await?;
+    canvas_channel.channel.publish(canvas);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn set_speech_markup(
+    layer: EntityId,
+    kind: koharu_scene::SpeechKind,
+    speaker: Option<koharu_scene::CharacterId>,
+    desktop: State<'_, Desktop>,
+    project: State<'_, CurrentProject>,
+    canvas_channel: State<'_, CanvasChannel>,
+) -> Result<(), Error> {
+    let (commit, page) = {
+        let mut project = project.project.lock().await;
+        let project = project.as_mut().context("no project is open")?;
+        let commit = project.set_speech_markup(layer, kind, speaker).await?;
+        project.record_commit(&commit);
+        (commit, project.active_page())
+    };
+    let canvas = synchronize_canvas(&desktop, &commit, page).await?;
+    canvas_channel.channel.publish(canvas);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn set_characters(
+    characters: Vec<CharacterInput>,
+    desktop: State<'_, Desktop>,
+    project: State<'_, CurrentProject>,
+    canvas_channel: State<'_, CanvasChannel>,
+) -> Result<(), Error> {
+    let (commit, page) = {
+        let mut project = project.project.lock().await;
+        let project = project.as_mut().context("no project is open")?;
+        let commit = project.set_characters(characters).await?;
         project.record_commit(&commit);
         (commit, project.active_page())
     };

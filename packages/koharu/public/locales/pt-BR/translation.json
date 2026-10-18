@@ -219,7 +219,21 @@
     "unplaced": "Não posicionado",
     "vertical": "Vertical",
     "weight": "Peso",
-    "width": "Largura"
+    "width": "Largura",
+    "speechKind": "Tipo",
+    "speechKindLabel": "Tipo de {{name}}",
+    "speechKinds": {
+      "speech": "Fala",
+      "thought": "Pensamento",
+      "narration": "Narração",
+      "sound-effect": "Efeito sonoro",
+      "sign": "Placa",
+      "aside": "Aparte"
+    },
+    "speaker": "Falante",
+    "speakerLabel": "Falante de {{name}}",
+    "noSpeaker": "Nenhum",
+    "unmarked": "Sem marcação"
   },
   "languages": {
     "en-US": "English",
@@ -348,7 +362,14 @@
     "rename": "Renomear",
     "renameDescription": "Escolha um novo nome para esta página.",
     "renameTitle": "Renomear página",
-    "selected": "{{count}} selecionadas"
+    "selected": "{{count}} selecionadas",
+    "markupMissing": {
+      "refused": "Marcação de cena: o modelo recusou esta página",
+      "content-filter": "Marcação de cena: bloqueado pelo filtro de conteúdo do provedor",
+      "empty": "Marcação de cena: o modelo não retornou nada",
+      "invalid": "Marcação de cena: a resposta era inválida e foi descartada",
+      "failed": "Marcação de cena: a solicitação falhou"
+    }
   },
   "outputPicker": {
     "instructions": "Instruções de tradução",
@@ -360,18 +381,21 @@
     "detection": "Detecção",
     "inpainting": "Preenchimento",
     "ocr": "OCR",
+    "markup": "Marcação de cena",
     "translation": "Tradução"
   },
   "phaseShort": {
     "detection": "Detectar",
     "inpainting": "Limpar",
     "ocr": "OCR",
+    "markup": "Marcação",
     "translation": "Traduzir"
   },
   "phaseDescription": {
     "detection": "Localiza o texto na página.",
     "inpainting": "Reconstrói a arte após remover o texto.",
     "ocr": "Lê o texto dentro de cada região.",
+    "markup": "Marca o tipo, o falante e a continuação de cada texto para a tradução.",
     "translation": "Converte o texto original para o idioma de destino."
   },
   "providerDescriptions": {
@@ -463,6 +487,11 @@
         "crossCheck": "Conferir com um segundo modelo local",
         "crossCheckDescription": "Cada recorte também é lido por um segundo modelo local, e só os recortes em que eles divergem vão para a API. Desative para enviar todos: custa cerca de três vezes mais e é um pouco mais preciso em texto manuscrito."
       },
+      "markup": {
+        "model": "Modelo de marcação",
+        "instructions": "Instruções adicionais",
+        "instructionsDescription": "Adicionadas à solicitação de marcação, por exemplo dicas sobre os personagens."
+      },
       "inpainting": {
         "apiModel": "Modelo de edição de imagem",
         "localModel": "Modelo local de limpeza",
@@ -497,6 +526,10 @@
         "ocr": {
           "description": "Lê o texto de origem nas regiões detectadas.",
           "title": "OCR"
+        },
+        "markup": {
+          "title": "Marcação de cena",
+          "description": "Um modelo com visão marca o tipo de cada texto, quem fala e qual fala ele continua. Nunca altera o texto."
         }
       },
       "title": "Pipeline"
@@ -669,5 +702,23 @@
     "failed": "Não foi possível resolver a prévia: {{error}}",
     "cleanupLayers": "Original + camadas de pintura visíveis. Um PNG; camadas de texto, máscaras e alças de seleção são excluídas.",
     "restorationLayers": "Área selecionada do original + camadas visíveis de limpeza e pintura, na ordem das camadas. Um PNG; camadas de texto, máscaras e alças de seleção são excluídas."
+  },
+  "characters": {
+    "tab": "Elenco",
+    "title": "Personagens",
+    "description": "Nomes e gêneros usados pela marcação de cena e pela tradução. Quando você edita a lista, ela passa a ser sua e a marcação não a altera mais.",
+    "empty": "Ainda não há personagens. A marcação de cena preenche esta lista, ou adicione-os aqui.",
+    "name": "Nome",
+    "gender": "Gênero",
+    "genders": {
+      "male": "Masculino",
+      "female": "Feminino",
+      "unknown": "Desconhecido"
+    },
+    "notes": "Notas",
+    "notesPlaceholder": "Notas, por exemplo como fala",
+    "remove": "Remover {{name}}",
+    "newName": "Nome do novo personagem",
+    "add": "Adicionar"
   }
 }

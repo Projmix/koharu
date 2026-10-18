@@ -128,6 +128,7 @@ function textLayer(
       source: { text: id, language: 'ja' },
       translation: null,
       translation_review: null,
+      markup: null,
       role: 'dialogue',
       source_region: sourceRegion,
     },

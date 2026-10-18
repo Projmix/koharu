@@ -219,7 +219,21 @@
     "unplaced": "未放置",
     "vertical": "直排",
     "weight": "字重",
-    "width": "寬度"
+    "width": "寬度",
+    "speechKind": "類型",
+    "speechKindLabel": "{{name}} 的類型",
+    "speechKinds": {
+      "speech": "對白",
+      "thought": "心聲",
+      "narration": "旁白",
+      "sound-effect": "音效",
+      "sign": "標牌文字",
+      "aside": "旁註"
+    },
+    "speaker": "說話者",
+    "speakerLabel": "{{name}} 的說話者",
+    "noSpeaker": "無",
+    "unmarked": "未標註"
   },
   "languages": {
     "en-US": "English",
@@ -348,7 +362,14 @@
     "rename": "重新命名",
     "renameDescription": "為此頁面選擇新名稱。",
     "renameTitle": "重新命名頁面",
-    "selected": "已選擇 {{count}}"
+    "selected": "已選擇 {{count}}",
+    "markupMissing": {
+      "refused": "場景標註：模型拒絕了此頁",
+      "content-filter": "場景標註：遭供應商的內容過濾器攔截",
+      "empty": "場景標註：模型沒有回傳內容",
+      "invalid": "場景標註：回覆無效，已捨棄",
+      "failed": "場景標註：請求失敗"
+    }
   },
   "outputPicker": {
     "instructions": "翻譯指示",
@@ -360,18 +381,21 @@
     "detection": "偵測",
     "inpainting": "修補",
     "ocr": "OCR",
+    "markup": "場景標註",
     "translation": "翻譯"
   },
   "phaseShort": {
     "detection": "偵測",
     "inpainting": "修復",
     "ocr": "OCR",
+    "markup": "標註",
     "translation": "翻譯"
   },
   "phaseDescription": {
     "detection": "找出頁面上的文字。",
     "inpainting": "重建移除文字後的畫面。",
     "ocr": "讀取每個區域中的文字。",
+    "markup": "為翻譯標註每段文字的類型、說話者與接續關係。",
     "translation": "將原文翻譯為目標語言。"
   },
   "providerDescriptions": {
@@ -463,6 +487,11 @@
         "crossCheck": "用第二個本機模型交叉核對",
         "crossCheckDescription": "每張裁剪影像也用第二個本機模型辨識，只將兩者結果不一致的傳送給 API。關閉後全部傳送：費用約為三倍，手寫文字略為準確。"
       },
+      "markup": {
+        "model": "標註模型",
+        "instructions": "附加說明",
+        "instructionsDescription": "附加到標註請求中，例如角色提示。"
+      },
       "inpainting": {
         "apiModel": "影像編輯模型",
         "localModel": "本機清理模型",
@@ -497,6 +526,10 @@
         "ocr": {
           "description": "讀取偵測區域內的原文。",
           "title": "OCR"
+        },
+        "markup": {
+          "title": "場景標註",
+          "description": "視覺模型為每段文字標註類型、說話者與其接續的台詞，不會修改文字。"
         }
       },
       "title": "流程"
@@ -669,5 +702,23 @@
     "failed": "無法處理預覽：{{error}}",
     "cleanupLayers": "原圖 + 可見的繪圖圖層。傳送單張 PNG，不包含文字圖層、遮色片和選取控制點。",
     "restorationLayers": "原圖 + 按圖層順序合成的可見清理與繪圖圖層，僅傳送選取區域。傳送單張 PNG，不包含文字圖層、遮色片和選取控制點。"
+  },
+  "characters": {
+    "tab": "角色",
+    "title": "角色",
+    "description": "場景標註與翻譯使用的姓名和性別。編輯後清單歸你所有，場景標註不會再修改它。",
+    "empty": "還沒有角色。場景標註會填寫此清單，也可以在這裡新增。",
+    "name": "姓名",
+    "gender": "性別",
+    "genders": {
+      "male": "男",
+      "female": "女",
+      "unknown": "未知"
+    },
+    "notes": "備註",
+    "notesPlaceholder": "備註，例如說話方式",
+    "remove": "移除 {{name}}",
+    "newName": "新角色姓名",
+    "add": "新增"
   }
 }

@@ -48,7 +48,13 @@ export type InspectorSection = 'copy' | 'type' | 'layers'
 export type ShortcutAction = CanvasTool | 'fit'
 export type Shortcuts = Record<ShortcutAction, string>
 export type PipelineScope = 'page' | 'selected-pages' | 'project'
-export const pipelineStages: readonly Stage[] = ['detection', 'ocr', 'translation', 'inpainting']
+export const pipelineStages: readonly Stage[] = [
+  'detection',
+  'ocr',
+  'markup',
+  'translation',
+  'inpainting',
+]
 
 interface KoharuStore {
   initialized: boolean
