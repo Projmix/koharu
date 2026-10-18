@@ -76,7 +76,9 @@ deterministic offline fallback. The service's API contract was never
 verified, and the client read keys from environment variables, which
 `AGENTS.md` forbids for the desktop app. When reimplementing, keep the typed
 primitives, take the key only from `koharu_secrets`, and verify the API
-against its documentation.
+against its documentation. The API facts checked on 2026-10-18 (text-only
+input, the real endpoint, pricing) and the off-by-default toggle are in
+[improvement-plan.md](improvement-plan.md#jev).
 
 ### Planned OCR flow: local, then LLM, then JEV decides
 
