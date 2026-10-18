@@ -526,7 +526,12 @@ impl Project {
                 current.geometry.as_ref(),
                 payload.geometry.as_ref(),
             )
-            && current.angle_degrees == payload.angle_degrees
+            && match (current.angle_degrees, payload.angle_degrees) {
+                (Some(current), Some(payload)) => {
+                    Self::clipboard_float_matches(f64::from(current), f64::from(payload))
+                }
+                (current, payload) => current.is_none() && payload.is_none(),
+            }
             && current.visibility.visible == payload.visibility.visible
             && Self::clipboard_float_matches(
                 f64::from(current.visibility.opacity),
@@ -2510,6 +2515,7 @@ mod tests {
         let Layer::Text {
             id,
             geometry,
+            angle_degrees,
             visibility,
             content,
             typography,
@@ -2546,6 +2552,7 @@ mod tests {
                 translation: content.translation,
                 role: content.role,
                 geometry,
+                angle_degrees,
                 visibility,
                 typography,
                 layout,
