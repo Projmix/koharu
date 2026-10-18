@@ -423,6 +423,12 @@ export type ModelSelection = {
 export type OcrConfig = {
 	method: OcrMethod,
 	local_model: OcrModel,
+	/**
+	 *  In the hybrid method, read every region with a second local model as
+	 *  well and send only regions where the two disagree to the API. When off,
+	 *  every region goes to the API.
+	 */
+	cross_check?: boolean,
 	api: ApiOcrConfig,
 };
 
