@@ -46,18 +46,35 @@ the result. Last updated 2026-10-18.
 Local, per region crop.
 
 Measured 2026-10-18 on 240 crops of JMangaBench_Read @ `b3e5765` (180
-printed, 60 handwritten, seeded sample; pages newer than Manga109), CPU only
-(i5-1235U), debug build, CER after the benchmark's RIN normalization:
+printed, 60 handwritten, seeded sample; pages newer than Manga109). Local
+models ran on CPU only (i5-1235U), debug build. API models ran through
+Koharu's own OpenRouter OCR path at 4 requests in flight, before `ffab8a4`
+changed the OCR prompt. CER is after the benchmark's RIN normalization;
+exact line is printed / handwritten.
 
-| Model | CER printed | CER handwritten | Exact line | Time per crop |
-| --- | --- | --- | --- | --- |
-| Manga OCR | 1.6% | 14.4% | 78% | 0.4 s |
-| Hayai OCR v2.1 | 2.0% | 4.7% | 85% | 0.6 s |
-| PaddleOCR-VL 1.6 GGUF | 2.5% | 12.4% | 78% | 12 s |
-| PaddleOCR-VL-For-Manga (143 printed crops so far) | 0.7% | pending | 94% | 19 s |
+| Model | CER printed | CER handwritten | Exact line | Time per crop | $ per 1000 crops |
+| --- | --- | --- | --- | --- | --- |
+| PaddleOCR-VL-For-Manga (local) | 0.68% | 9.47% | 94 / 58% | 17.7 s | 0 |
+| Manga OCR (local) | 1.61% | 14.4% | 87 / 50% | 0.4 s | 0 |
+| Hayai OCR v2.1 (local) | 2.00% | 4.73% | 89 / 73% | 0.6 s | 0 |
+| PaddleOCR-VL 1.6 GGUF (local, default) | 2.48% | 12.4% | 87 / 53% | 11.7 s | 0 |
+| Hayai v2.1 + Gemini 3.7 Flash (`local-api`) | 2.87% | 2.76% | 94 / 87% | 4.7 s | ~2.0 |
+| Gemini 3.7 Flash | 2.73% | 5.13% | 94 / 83% | 3.6 s | 1.8 |
+| Gemini 3.5 Flash | 2.29% | 5.33% | 92 / 82% | 3.1 s | 4.3 |
+| Claude Haiku 5.5 | 2.29% | 13.4% | 91 / 53% | 1.2 s | 0.04 |
+| Claude Sonnet 5.5 | 3.31% | 6.51% | 88 / 68% | 1.9 s | 0.8 |
+| GPT-6.1 Sol | 3.89% | 8.48% | 81 / 70% | 6–8 s | 2.0 |
+| Qwen3.7-plus | 3.70% | 12.0% | | | 0.10 |
+| Qwen3-VL-235B | 4.24% | 9.47% | | | 0.06 |
+| Gemini 3.5 Flash-Lite | 5.50% | 7.10% | | 0.9 s | 0.40 |
+| Gemini 3.1 Flash-Lite | 6.91% | 6.11% | | | 0.33 |
 
-On the same 143 printed crops the others score 1.8% (Manga OCR), 2.1%
-(Hayai) and 2.7% (Paddle 1.6).
+The hybrid fixed 25 crops of Hayai's draft and broke 8. The Claude rows and
+GPT-6 Luna ran before `e9930e2`. Since then, OpenRouter OCR, like OpenRouter
+translation, requires native json_schema output, and OpenRouter has no
+endpoint for those models that accepts it (404 on every crop). The Gemini
+3.5/3.7 Flash rows ran after it; before it, they failed on every crop
+because the JSON came back fenced in Markdown.
 
 | Model | Status | Source | Notes |
 | --- | --- | --- | --- |
@@ -66,7 +83,7 @@ On the same 143 printed crops the others score 1.8% (Manga OCR), 2.1%
 | Baberu OCR | in use | `genshiai-daichi/baberu-ocr` @ `d9cc131` | Japanese. |
 | Manga OCR | in use | `mayocream/manga-ocr` @ `4380edb` | Japanese baseline; known to invent text on empty crops. |
 | PP-OCRv6 rec | shipped, unused | PaddlePaddle | Line recognizer; not manga-specific. |
-| PaddleOCR-VL-For-Manga | candidate (high, measured) | `jzhang533/PaddleOCR-VL-For-Manga` ([demo](https://huggingface.co/spaces/jzhang533/paddleocr-vl-for-manga-demo)) | Best CER in [JMangaBench_Read](https://github.com/muscgab/JMangaBench_Read) (2.13% vs Hayai v2.1 2.67%, Manga OCR 5.01%), but about 2.5x slower per crop. Fine-tuned from PaddleOCR-VL (the original 0.9B, not 1.6) and run with the plain `OCR:` prompt in its demo. The pipeline uses a GGUF of 1.6, so trying it needs either the unquantized `paddle_ocr_vl` path with these weights or a GGUF conversion, then a comparison on identical crops. Measured above: its weights load unchanged through the unquantized PaddleOCR-VL 1.6 path (same tensor names, shapes and tokenizer; only the image pixel limits differ). A quantized GGUF is untested. |
+| PaddleOCR-VL-For-Manga | candidate (high, measured: best printed CER) | `jzhang533/PaddleOCR-VL-For-Manga` ([demo](https://huggingface.co/spaces/jzhang533/paddleocr-vl-for-manga-demo)) | Best CER in [JMangaBench_Read](https://github.com/muscgab/JMangaBench_Read) (2.13% vs Hayai v2.1 2.67%, Manga OCR 5.01%), but about 2.5x slower per crop. Fine-tuned from PaddleOCR-VL (the original 0.9B, not 1.6) and run with the plain `OCR:` prompt in its demo. The pipeline uses a GGUF of 1.6, so trying it needs either the unquantized `paddle_ocr_vl` path with these weights or a GGUF conversion, then a comparison on identical crops. Measured above: its weights load unchanged through the unquantized PaddleOCR-VL 1.6 path (same tensor names, shapes and tokenizer; only the image pixel limits differ). A quantized GGUF is untested. |
 | PaddleOCR-VL-1.6 Manga fine-tune | candidate (medium) | [`gigass03/PaddleOCR-VL-1.6-Manga-Finetuned`](https://mixpeek.com/model/gigass03/PaddleOCR-VL-1.6-Manga-Finetuned) | Apache-2.0, Manga109-s and synthetic data, same base as the default. No published metrics. |
 | Hayai OCR v2.5 Nova | candidate (low) | JMangaBench_Read | CER 2.63–3.08% depending on input size versus 2.67% for the v2.1 already in use; no clear gain. |
 | manga-ocr-nar-small / -distil | candidate (blocked by license) | [`muscgab/manga-ocr-nar`](https://github.com/muscgab/manga-ocr-nar) | Non-autoregressive, 54M/30M params, CER 1.73% / 2.32% on JMangaBench_Read v1.3, very fast on CPU (ONNX int8). Same author as the benchmark. Weights CC BY-NC-SA 4.0: usable only while the fork stays non-commercial. |
@@ -82,6 +99,8 @@ API, through `ocr.method = api` or `local-api`.
 | Gemini Flash-Lite (2.5 tried earlier; 3.1 / 3.5 now) | candidate (high) | `docs/research/2026-09-12-japanese-ocr.md` | The prior project's best corrector was Gemini 2.5 Flash Lite with crops and a local draft; no CER table survived. Measure 3.1 / 3.5 Flash-Lite through OpenRouter. |
 | Qwen3.8-27B, Qwen3.5-397B, Qwen3-VL 235B / 32B | candidate (medium) | `docs/research/api-ocr-models-2026-08.md` | General OCR evidence only. |
 | Mistral OCR 3 / 4.1 | candidate (medium) | `docs/research/2026-09-12-japanese-ocr.md` | Whole-page API, $2–4 per 1000 pages; 4.1 returns boxes and confidence. Most useful for the missed-text check (plan item 9), not per crop. |
+| GLM-5.3 Flash, GPT-6 Luna, GPT-5.4 mini, Ling-3.0 Flash VL (OpenRouter) | rejected 2026-10-18 | 240-crop run above | CER 10.7–16.2% printed and 14–44% handwritten, worse than every local model. GLM returned no content on 24/240 crops. |
+| Qwen3.8 Flash (OpenRouter) | rejected 2026-10-18 | 240-crop run above | 67% CER. It ignores the `{"text"}` shape on 137/240 crops, and at 4 requests in flight it hit rate limits on 184/240. |
 | DeepSeek-OCR 2 | rejected 2026-08-24 | `docs/research/api-ocr-models-2026-08.md` | No hosted OpenAI-compatible endpoint; self-hosting needs CUDA/vLLM. Revisit if a hosted API appears. |
 
 ## Cleaning
