@@ -21,8 +21,8 @@ mod stages;
 pub use config::{
     ApiInpaintingConfig, ApiOcrConfig, DetectionModel, InpaintingConfig, InpaintingMethod,
     InpaintingModelChoice, InpaintingProvider, LocalInpaintingModel, OcrConfig, OcrMethod,
-    OcrModel, PipelineConfig, ProcessorConfig, RestorationConfig, TranslationConfig,
-    TranslationProfile, TranslationUnitPolicy,
+    OcrModel, PipelineConfig, ProcessorConfig, RestorationConfig, SceneMarkupConfig,
+    TranslationConfig, TranslationProfile, TranslationUnitPolicy,
 };
 pub use error::{ErrorKind, PipelineError};
 pub use pipeline::Pipeline;

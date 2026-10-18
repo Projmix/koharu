@@ -67,6 +67,10 @@ impl Edit {
     }
 
     /// Observes the complete typed asset collection owned by an entity.
+    pub fn observe_project<T: Component>(&mut self) -> Result<()> {
+        self.observe_component(ComponentOwner::Project, key::<T>()?)
+    }
+
     pub fn observe_assets(&mut self, entity: EntityId) -> Result<()> {
         self.observe_component(ComponentOwner::Entity(entity), key::<Assets>()?)
     }

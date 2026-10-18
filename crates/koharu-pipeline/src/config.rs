@@ -231,6 +231,42 @@ pub struct TranslationConfig {
     pub target_language: Language,
     pub page: TranslationProfile,
     pub chapter: TranslationProfile,
+    pub markup: SceneMarkupConfig,
+}
+
+/// The per-page scene markup pass that labels each text's kind, speaker and
+/// continuation for chapter translation.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Type)]
+#[serde(default)]
+pub struct SceneMarkupConfig {
+    pub enabled: bool,
+    pub model: TranslationModelSelection,
+    pub generation: GenerationConfig,
+    pub instructions: Option<String>,
+}
+
+impl Default for SceneMarkupConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            model: TranslationModelSelection {
+                provider: koharu_translator::Provider::OpenRouter,
+                model: Some("google/gemini-3.7-flash".to_owned()),
+                quantization: None,
+                vision: true,
+                reasoning: false,
+                reasoning_required: false,
+            },
+            generation: GenerationConfig {
+                temperature: Some(0.0),
+                max_tokens: Some(8192),
+                vision: Some(true),
+                reasoning: Some(false),
+                ..GenerationConfig::default()
+            },
+            instructions: None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -262,6 +298,7 @@ struct TranslationConfigFile {
     target_language: Language,
     page: Option<TranslationProfileFile>,
     chapter: Option<TranslationProfileFile>,
+    markup: SceneMarkupConfig,
 }
 
 impl Default for TranslationConfigFile {
@@ -271,6 +308,7 @@ impl Default for TranslationConfigFile {
             target_language: default_target_language(),
             page: None,
             chapter: None,
+            markup: SceneMarkupConfig::default(),
         }
     }
 }
@@ -300,6 +338,7 @@ impl<'de> Deserialize<'de> for TranslationConfig {
                 .chapter
                 .unwrap_or_default()
                 .into_profile(TranslationUnitPolicy::AdaptiveV1),
+            markup: file.markup,
         })
     }
 }
@@ -334,6 +373,7 @@ impl Default for TranslationConfig {
                 unit_policy: TranslationUnitPolicy::AdaptiveV1,
                 ..TranslationProfile::default()
             },
+            markup: SceneMarkupConfig::default(),
         }
     }
 }
@@ -436,6 +476,25 @@ impl PipelineConfig {
             {
                 bail!("API OCR requires a selected model")
             }
+        }
+        let markup = &self.translation.markup;
+        if markup.enabled {
+            if !markup.model.provider.supports_markup() {
+                bail!("{} does not support scene markup", markup.model.provider)
+            }
+            if !markup.model.vision {
+                bail!("scene markup requires a vision model")
+            }
+            if markup.model.model.as_deref().is_none_or(str::is_empty) {
+                bail!("scene markup requires a selected model")
+            }
+        }
+        if markup
+            .instructions
+            .as_deref()
+            .is_some_and(|text| text.contains('\0'))
+        {
+            bail!("scene markup instructions contain NUL")
         }
         for profile in [&self.translation.page, &self.translation.chapter] {
             if !profile.model.provider.supports_translation() {

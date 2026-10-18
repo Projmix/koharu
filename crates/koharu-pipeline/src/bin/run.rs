@@ -137,6 +137,7 @@ impl Arguments {
                     instructions: self.translation_instructions.clone(),
                     unit_policy: koharu_pipeline::TranslationUnitPolicy::AdaptiveV1,
                 },
+                markup: koharu_pipeline::SceneMarkupConfig::default(),
             },
             inpainting: InpaintingConfig {
                 local_model: match self.inpainting {

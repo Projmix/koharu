@@ -55,6 +55,22 @@ Known gaps after the rebuild:
   second local reader (Manga OCR, or Hayai when Manga OCR is chosen); only
   regions where they disagree go to the API. Text the user edited is never
   overwritten.
+- Scene markup (`translation.markup`, off by default; default model
+  `google/gemini-3.7-flash` through OpenRouter at temperature 0). When on,
+  a project-scope translation run adds an internal `Pass::Markup` of the
+  Translation stage: after OCR on every page and before chapter translation,
+  each page in project order is sent to a vision model with numbered boxes
+  drawn on it. The model only labels each text's kind (speech, thought,
+  narration, sound-effect, sign, aside), speaker and the earlier text it
+  continues; it never transcribes or translates. Results go to the scene as
+  `SpeechMarkup`, the `Continues` relation, the project `CharacterList` and a
+  per-page `PageMarkup` with the texts it saw, so a rerun skips unchanged
+  pages. A refusal, filtered, invalid or failed answer records
+  `PageMarkup` as missing and the chapter still translates. User-authored
+  markup and a user-edited character list are never overwritten. Chapter
+  translation sends `speech_kind`, `speaker` {name, gender}, `continues` per
+  segment and a top-level `characters` list, so the translator can use the
+  speaker's gender for Russian verb and adjective agreement.
 - Qwen-VL-OCR provider (`remote/qwen_ocr.rs`, DashScope) with its own
   endpoint and credential.
 - Image-edit inpainting through Fal, OpenRouter and Replicate, with a

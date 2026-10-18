@@ -65,6 +65,9 @@ impl<'a> Execution<'a> {
         if runner.hybrid_ocr() {
             scheduler.enable_hybrid_ocr();
         }
+        if runner.scene_markup() {
+            scheduler.enable_scene_markup();
+        }
         if let Some(mask) = request.inpainting_mask.as_ref()
             && (!pages.contains(&mask.page) || !stages.contains(&Stage::Inpainting))
         {
@@ -168,7 +171,7 @@ impl<'a> Execution<'a> {
         }
         .with_stop(self.stop.clone())
         .with_image_edit_reviewer(self.image_edit_reviewer.clone())
-        .with_ocr_pass(self.scheduler.ocr_pass(target));
+        .with_pass(self.scheduler.pass(target, stage));
         Some(StageJob::new(
             stage,
             input,

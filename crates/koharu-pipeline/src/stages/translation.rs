@@ -3,15 +3,18 @@ use std::sync::Arc;
 use anyhow::Result;
 use async_trait::async_trait;
 use koharu_scene::{
-    Authored, BubbleRegion, EntityId, Generation, Geometry, LanguageTag, Origin, PanelRegion,
-    Region, RegionSpec, SourceText, Translation, TranslationReview,
+    Authored, BubbleRegion, CharacterList, EntityId, Generation, Geometry, LanguageTag, Origin,
+    PanelRegion, Region, RegionSpec, SourceText, SpeechKind, SpeechMarkup, TextContentRef,
+    Translation, TranslationReview,
 };
 use koharu_translator::{
-    Language, Provider, TranslationContext, TranslationRequest, TranslationSegmentMetadata,
-    TranslationUnit, Translator,
+    Language, Provider, SegmentSpeaker, TranslationCharacter, TranslationContext,
+    TranslationRequest, TranslationSegmentMetadata, TranslationUnit, Translator,
 };
 
-use crate::{StageTarget, TranslationConfig, TranslationProfile, TranslationUnitPolicy};
+use crate::{
+    StageTarget, TranslationConfig, TranslationProfile, TranslationUnitPolicy, stage::Pass,
+};
 
 use super::{
     StageInput, StageProcessor,
@@ -22,6 +25,7 @@ use super::{
 const PRODUCER: &str = "dev.koharu.pipeline.translation";
 
 mod manual;
+mod markup;
 mod review;
 
 pub(super) struct Processor {
@@ -50,7 +54,7 @@ struct Target {
 }
 
 enum TranslationEntry {
-    Target(Target),
+    Target(Box<Target>),
     Context(TranslationContext),
 }
 
@@ -114,6 +118,7 @@ impl ChapterTranslation {
         )?
         .with_context(context)
         .with_page_numbers(targets.iter().map(|target| target.page))?
+        .with_characters(cast(&input.scene)?)
         .with_units(
             match profile.unit_policy {
                 TranslationUnitPolicy::PageOnly => "page_only",
@@ -196,8 +201,10 @@ async fn write_translations(
         .map(|(_, source, text)| (*source, text.as_str()))
         .collect::<Vec<_>>();
     let findings = review::review(translator, source_language, target_language, &pairs).await;
+    edit.observe_project::<CharacterList>()?;
     for ((entity, _, text), finding) in translations.into_iter().zip(findings) {
         edit.observe::<SourceText>(entity)?;
+        edit.observe::<SpeechMarkup>(entity)?;
         edit.observe::<Translation>(entity)?;
         edit.observe::<TranslationReview>(entity)?;
         match finding {
@@ -229,11 +236,14 @@ async fn write_translations(
 #[async_trait]
 impl StageProcessor for Processor {
     fn model(&self, input: &StageInput) -> String {
+        if input.pass == Pass::Markup {
+            return markup::model_name(&self.config.markup);
+        }
         Translator::model(&self.profile(input).model).to_owned()
     }
 
     fn recovers_from_memory_pressure(&self, input: &StageInput) -> bool {
-        self.profile(input).model.provider == Provider::Local
+        input.pass != Pass::Markup && self.profile(input).model.provider == Provider::Local
     }
 
     fn unload(&self) -> bool {
@@ -241,6 +251,9 @@ impl StageProcessor for Processor {
     }
 
     fn skip(&self, input: &StageInput) -> Result<bool> {
+        if input.pass == Pass::Markup {
+            return markup::skip(input, self.config.source_language);
+        }
         let (targets, context) = collect_inputs(input, self.config.source_language)?;
         anyhow::ensure!(
             !targets.is_empty() || !context.is_empty(),
@@ -263,10 +276,22 @@ impl StageProcessor for Processor {
     }
 
     async fn load(&self, input: &StageInput) -> Result<()> {
+        if input.pass == Pass::Markup {
+            return Ok(());
+        }
         self.translator.load_model(&self.profile(input).model).await
     }
 
     async fn process(&self, input: StageInput) -> Result<koharu_scene::Patch> {
+        if input.pass == Pass::Markup {
+            return markup::process(
+                &input,
+                &self.config.markup,
+                &self.translator,
+                self.config.source_language,
+            )
+            .await;
+        }
         let profile = self.profile(&input).clone();
         if input.target() == StageTarget::Chapter {
             let chapter = ChapterTranslation::from_input(
@@ -303,7 +328,8 @@ impl StageProcessor for Processor {
                 .map(|target| stable_segment_id(&target.metadata))
                 .collect::<Vec<_>>(),
         )?
-        .with_context(context);
+        .with_context(context)
+        .with_characters(cast(&input.scene)?);
         if let Some(instructions) = profile.instructions.as_deref() {
             request = request.with_instructions(instructions);
         }
@@ -344,6 +370,7 @@ fn collect_inputs(
     source_language: Language,
 ) -> Result<(Vec<Target>, Vec<TranslationContext>)> {
     let chapter = input.target() == StageTarget::Chapter;
+    let characters = input.scene.project_component::<CharacterList>()?;
     let mut targets = Vec::new();
     let mut context = Vec::new();
     for (page_index, page) in input.pages().iter().copied().enumerate() {
@@ -382,9 +409,23 @@ fn collect_inputs(
             let bubble_id = layer
                 .balloon_target()?
                 .map(|bubble| bubble.id().to_string());
-            let is_sound_effect = role
-                .as_deref()
-                .is_some_and(|role| role.ends_with(".onomatopoeia") || role == "onomatopoeia");
+            let speech_markup = content.speech_markup()?;
+            let speech_kind = speech_markup.as_ref().map(|markup| markup.kind);
+            let speaker = speech_markup
+                .and_then(|markup| markup.speaker)
+                .and_then(|id| characters.as_ref()?.character(&id))
+                .map(|character| SegmentSpeaker {
+                    name: character.name.clone(),
+                    gender: markup::translator_gender(character.gender),
+                });
+            let continues = content
+                .continues()?
+                .map(|earlier| segment_id_of(&input.scene, earlier))
+                .transpose()?;
+            let is_sound_effect = speech_kind == Some(SpeechKind::SoundEffect)
+                || role
+                    .as_deref()
+                    .is_some_and(|role| role.ends_with(".onomatopoeia") || role == "onomatopoeia");
             if let Some(translation) = input.scene.component::<Translation>(content.id())?
                 && matches!(translation.text.origin, Origin::User)
             {
@@ -398,7 +439,7 @@ fn collect_inputs(
                 continue;
             }
             entries.push(OrderedEntry {
-                entry: TranslationEntry::Target(Target {
+                entry: TranslationEntry::Target(Box::new(Target {
                     entity: content.id(),
                     source: source.text.value,
                     page: page_index + 1,
@@ -412,8 +453,11 @@ fn collect_inputs(
                         unit_id: None,
                         unit_type: None,
                         is_sound_effect,
+                        speech_kind: speech_kind.map(markup::translator_kind),
+                        speaker,
+                        continues,
                     },
-                }),
+                })),
                 bounds,
             });
         }
@@ -428,13 +472,42 @@ fn collect_inputs(
                 TranslationEntry::Target(mut target) => {
                     target.metadata.order_index = Some(page_order_index);
                     page_order_index += 1;
-                    targets.push(target);
+                    targets.push(*target);
                 }
                 TranslationEntry::Context(reference) => context.push(reference),
             }
         }
     }
     Ok((targets, context))
+}
+
+/// The project cast as the translation prompt sees it.
+fn cast(scene: &koharu_scene::Snapshot) -> Result<Vec<TranslationCharacter>> {
+    Ok(scene
+        .project_component::<CharacterList>()?
+        .map(|list| list.characters)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|character| TranslationCharacter {
+            name: character.name,
+            gender: markup::translator_gender(character.gender),
+            notes: character.notes,
+        })
+        .collect())
+}
+
+/// The stable segment ID of any text content, whether or not it is a
+/// target of this request. It matches `collect_inputs`: the source region
+/// identifies the segment, or the content itself when it has none.
+fn segment_id_of(scene: &koharu_scene::Snapshot, content: TextContentRef<'_>) -> Result<String> {
+    let mut page = content.id();
+    while let Some(parent) = scene.parent(page)? {
+        page = parent;
+    }
+    let region = content
+        .source_region()?
+        .map_or(content.id(), |region| region.id());
+    Ok(format!("page:{page}::region:{region}"))
 }
 
 fn stable_segment_id(metadata: &TranslationSegmentMetadata) -> String {
@@ -575,11 +648,21 @@ fn short_role(role: Option<&str>) -> Option<&str> {
 
 fn page_layout_containers(input: &StageInput, page: EntityId) -> Result<Vec<LayoutItem>> {
     let mut items = Vec::new();
-    for entity in input.scene.descendants(page)? {
-        if input.target() != StageTarget::Chapter && !input.contains_entity(entity.id())? {
-            continue;
+    for (entity, item) in layout_containers(&input.scene, page)? {
+        if input.target() == StageTarget::Chapter || input.contains_entity(entity)? {
+            items.push(item);
         }
-        let Some(region) = input.scene.component::<Region>(entity.id())? else {
+    }
+    Ok(items)
+}
+
+fn layout_containers(
+    scene: &koharu_scene::Snapshot,
+    page: EntityId,
+) -> Result<Vec<(EntityId, LayoutItem)>> {
+    let mut items = Vec::new();
+    for entity in scene.descendants(page)? {
+        let Some(region) = scene.component::<Region>(entity.id())? else {
             continue;
         };
         let kind = if region.kind == PanelRegion::kind() {
@@ -589,39 +672,63 @@ fn page_layout_containers(input: &StageInput, page: EntityId) -> Result<Vec<Layo
         } else {
             continue;
         };
-        let Some(geometry) = input.scene.component::<Geometry>(entity.id())? else {
+        let Some(geometry) = scene.component::<Geometry>(entity.id())? else {
             continue;
         };
         let Some((left, top, right, bottom)) = crate::scope::geometry_extents(&geometry) else {
             continue;
         };
-        items.push(LayoutItem {
-            kind,
-            bounds: [left, top, right, bottom],
-        });
+        items.push((
+            entity.id(),
+            LayoutItem {
+                kind,
+                bounds: [left, top, right, bottom],
+            },
+        ));
     }
     Ok(items)
 }
 
 fn order_entries(
     entries: &mut Vec<OrderedEntry>,
-    mut layout: Vec<LayoutItem>,
+    layout: Vec<LayoutItem>,
     source_language: Language,
 ) {
+    let bounds = entries.iter().map(|entry| entry.bounds).collect::<Vec<_>>();
+    let order = reading_permutation(&bounds, layout, source_language);
+    let mut values = std::mem::take(entries)
+        .into_iter()
+        .map(Some)
+        .collect::<Vec<_>>();
+    *entries = order
+        .into_iter()
+        .map(|index| values[index].take().expect("entry order is unique"))
+        .collect();
+}
+
+/// The reading order of items with optional bounds: bounded items take the
+/// layout reading order among the bounded positions, and unbounded items stay
+/// where they are.
+fn reading_permutation(
+    bounds: &[Option<(f64, f64, f64, f64)>],
+    mut layout: Vec<LayoutItem>,
+    source_language: Language,
+) -> Vec<usize> {
+    let identity = (0..bounds.len()).collect::<Vec<_>>();
     if !matches!(
         source_language,
         Language::Japanese | Language::ChineseSimplified | Language::ChineseTraditional
     ) {
-        return;
+        return identity;
     }
 
-    let bounded = entries
+    let bounded = bounds
         .iter()
         .enumerate()
-        .filter_map(|(index, entry)| entry.bounds.map(|bounds| (index, bounds)))
+        .filter_map(|(index, bounds)| bounds.map(|bounds| (index, bounds)))
         .collect::<Vec<_>>();
     if bounded.len() < 2 {
-        return;
+        return identity;
     }
 
     let first_text = layout.len();
@@ -636,23 +743,15 @@ fn order_entries(
         .collect::<Vec<_>>();
 
     let mut next = ordered_bounded.into_iter();
-    let order = (0..entries.len())
+    (0..bounds.len())
         .map(|index| {
-            if entries[index].bounds.is_some() {
+            if bounds[index].is_some() {
                 next.next().expect("bounded order contains each entry once")
             } else {
                 index
             }
         })
-        .collect::<Vec<_>>();
-    let mut values = std::mem::take(entries)
-        .into_iter()
-        .map(Some)
-        .collect::<Vec<_>>();
-    *entries = order
-        .into_iter()
-        .map(|index| values[index].take().expect("entry order is unique"))
-        .collect();
+        .collect()
 }
 
 #[cfg(test)]
@@ -1060,6 +1159,83 @@ mod tests {
                 expected
             );
         }
+    }
+
+    #[tokio::test]
+    async fn chapter_payload_carries_scene_markup_and_the_cast() {
+        let mut session = koharu_scene::Session::memory().await.unwrap();
+        let mut edit = session.snapshot().edit();
+        let page = edit
+            .add_page(PageDraft::new("page", 120.0, 180.0), At::End)
+            .unwrap();
+        let (first, first_region, _) = add_text(&mut edit, page, "僕は", (90.0, 10.0, 20.0, 30.0));
+        let (second, _, _) = add_text(&mut edit, page, "行った", (50.0, 10.0, 20.0, 30.0));
+        let (sound, _, _) = add_text(&mut edit, page, "ドン", (10.0, 10.0, 20.0, 30.0));
+        edit.set_project(&CharacterList {
+            origin: Origin::User,
+            characters: vec![koharu_scene::Character {
+                id: koharu_scene::CharacterId::new("narrator").unwrap(),
+                name: "Narrator".to_owned(),
+                gender: koharu_scene::Gender::Male,
+                notes: "tells the story".to_owned(),
+            }],
+        })
+        .unwrap();
+        for (content, kind, speaker) in [
+            (first, SpeechKind::Narration, Some("narrator")),
+            (second, SpeechKind::Narration, Some("narrator")),
+            (sound, SpeechKind::SoundEffect, None),
+        ] {
+            edit.set(
+                content,
+                &SpeechMarkup {
+                    origin: Origin::User,
+                    kind,
+                    speaker: speaker.map(|id| koharu_scene::CharacterId::new(id).unwrap()),
+                },
+            )
+            .unwrap();
+        }
+        edit.relate::<koharu_scene::Continues>(second, first)
+            .unwrap();
+        session.commit(edit.finish().unwrap()).await.unwrap();
+
+        let chapter =
+            ChapterTranslation::from_snapshot(session.snapshot(), &TranslationConfig::default())
+                .unwrap();
+        let export = chapter.manual_export().unwrap();
+        let segments = export.document["pages"][0]["units"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|unit| unit["segments"].as_array().unwrap().clone())
+            .collect::<Vec<_>>();
+        let segment = |source: &str| {
+            segments
+                .iter()
+                .find(|segment| segment["source_text"] == source)
+                .unwrap()
+                .clone()
+        };
+        let speaker = serde_json::json!({ "name": "Narrator", "gender": "male" });
+        assert_eq!(segment("僕は")["speech_kind"], "narration");
+        assert_eq!(segment("僕は")["speaker"], speaker);
+        assert!(segment("僕は").get("continues").is_none());
+        assert_eq!(
+            segment("行った")["continues"],
+            format!("page:{page}::region:{first_region}")
+        );
+        assert_eq!(segment("行った")["continues"], segment("僕は")["id"]);
+        assert_eq!(segment("ドン")["speech_kind"], "sound-effect");
+        assert_eq!(segment("ドン")["is_sound_effect"], true);
+        assert!(segment("ドン").get("speaker").is_none());
+        assert_eq!(
+            export.document["characters"],
+            serde_json::json!([
+                { "name": "Narrator", "gender": "male", "notes": "tells the story" }
+            ])
+        );
+        assert!(export.prompt.contains("Scene markup"));
     }
 
     #[tokio::test]
@@ -1529,12 +1705,12 @@ mod tests {
 
     fn target(source: &str, bounds: (f64, f64, f64, f64)) -> OrderedEntry {
         OrderedEntry {
-            entry: TranslationEntry::Target(Target {
+            entry: TranslationEntry::Target(Box::new(Target {
                 entity: EntityId::new(),
                 source: source.to_owned(),
                 page: 1,
                 metadata: TranslationSegmentMetadata::default(),
-            }),
+            })),
             bounds: Some(bounds),
         }
     }

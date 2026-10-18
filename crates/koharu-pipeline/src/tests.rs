@@ -199,6 +199,119 @@ async fn selected_stages_resume_by_skipping_completed_work() {
     )));
 }
 
+#[tokio::test]
+async fn failed_scene_markup_records_a_missing_page_and_chapter_translation_still_runs() {
+    let mut translation = TranslationConfig::default();
+    translation.markup.enabled = true;
+    let pipeline = pipeline(translation);
+    let mut session = koharu_scene::Session::memory().await.unwrap();
+    let generated = koharu_scene::Generation::new(
+        koharu_scene::ProducerId::new("dev.koharu.pipeline.translation").unwrap(),
+    );
+    let mut page = None;
+    let patch = session
+        .snapshot()
+        .patch(|edit| {
+            let id = edit.add_page(
+                koharu_scene::PageDraft::new("page", 100.0, 100.0),
+                koharu_scene::At::End,
+            )?;
+            let region = edit.add_analysis_region::<koharu_scene::TextRegion>(
+                id,
+                koharu_scene::At::End,
+                &koharu_scene::Geometry::rectangle(10.0, 10.0, 20.0, 20.0),
+                None,
+            )?;
+            let content = edit.add_text_content(id, koharu_scene::At::End)?;
+            edit.add_text_layer(
+                id,
+                koharu_scene::At::End,
+                content,
+                &koharu_scene::TextLayout {
+                    origin: koharu_scene::Origin::User,
+                    kind: koharu_scene::TextLayoutKind::Paragraph,
+                    angle_degrees: None,
+                },
+            )?;
+            edit.set(
+                content,
+                &koharu_scene::SourceText {
+                    text: koharu_scene::Authored::user("source".to_owned()),
+                    language: None,
+                },
+            )?;
+            // Already translated, so the chapter pass completes offline.
+            edit.set(
+                content,
+                &koharu_scene::Translation {
+                    text: koharu_scene::Authored::generated(
+                        "translation".to_owned(),
+                        generated.clone(),
+                    ),
+                    language: None,
+                },
+            )?;
+            edit.relate::<koharu_scene::RecognizedFrom>(content, region)?;
+            page = Some(id);
+            Ok(())
+        })
+        .unwrap();
+    session.commit(patch).await.unwrap();
+    let page = page.unwrap();
+    let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let captured = events.clone();
+    let request = Request {
+        operation: Operation::Only {
+            stage: Stage::Translation,
+        },
+        scope: Scope::Project,
+        progress: Some(std::sync::Arc::new(move |event| {
+            captured.lock().unwrap().push(event);
+        })),
+        ..Request::default()
+    };
+    let mut committer = SessionCommitter { session };
+
+    // The page has no source image, so the markup request cannot be built.
+    let report = pipeline
+        .execute(committer.session.snapshot(), request, &mut committer)
+        .await
+        .unwrap();
+
+    assert_eq!(report.status, RunStatus::Completed);
+    assert_eq!((report.completed, report.total), (2, 2));
+    let markup = committer
+        .session
+        .snapshot()
+        .page(page)
+        .unwrap()
+        .markup()
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        markup.status,
+        koharu_scene::PageMarkupStatus::Missing(koharu_scene::PageMarkupMissing::Failed)
+    );
+    assert!(events.lock().unwrap().iter().any(|event| matches!(
+        event,
+        Progress::Skipped {
+            target: StageTarget::Chapter,
+            stage: Stage::Translation,
+        }
+    )));
+}
+
+struct SessionCommitter {
+    session: koharu_scene::Session,
+}
+
+#[async_trait::async_trait]
+impl Committer for SessionCommitter {
+    async fn commit(&mut self, output: StageOutput) -> anyhow::Result<koharu_scene::Snapshot> {
+        Ok(self.session.commit(output.patch).await?.snapshot)
+    }
+}
+
 struct RejectCommitter;
 
 fn pipeline(translation: TranslationConfig) -> Pipeline {

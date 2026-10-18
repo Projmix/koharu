@@ -100,7 +100,7 @@ pub(crate) struct StageInput {
     inpainting_mask: Option<InpaintingMask>,
     image_edit_reviewer: Option<Arc<dyn crate::ImageEditReviewer>>,
     stop: StopToken,
-    ocr_pass: crate::stage::OcrPass,
+    pass: crate::stage::Pass,
 }
 
 impl StageInput {
@@ -122,7 +122,7 @@ impl StageInput {
             inpainting_mask,
             image_edit_reviewer: None,
             stop: StopToken::default(),
-            ocr_pass: crate::stage::OcrPass::Final,
+            pass: crate::stage::Pass::Final,
         }
     }
 
@@ -137,7 +137,7 @@ impl StageInput {
             inpainting_mask: None,
             image_edit_reviewer: None,
             stop: StopToken::default(),
-            ocr_pass: crate::stage::OcrPass::Final,
+            pass: crate::stage::Pass::Final,
         }
     }
 
@@ -154,8 +154,8 @@ impl StageInput {
         self
     }
 
-    pub(crate) fn with_ocr_pass(mut self, pass: crate::stage::OcrPass) -> Self {
-        self.ocr_pass = pass;
+    pub(crate) fn with_pass(mut self, pass: crate::stage::Pass) -> Self {
+        self.pass = pass;
         self
     }
 
