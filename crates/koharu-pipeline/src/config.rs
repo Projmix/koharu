@@ -12,6 +12,7 @@ use crate::stages::{
 pub struct PipelineConfig {
     pub detection: DetectionModel,
     pub ocr: OcrConfig,
+    pub markup: SceneMarkupConfig,
     pub translation: TranslationConfig,
     pub inpainting: InpaintingConfig,
     /// Settings for every model are kept independently of the active model.
@@ -24,6 +25,7 @@ pub struct PipelineConfig {
 struct PipelineFile {
     detection: ModelSelection,
     ocr: OcrConfig,
+    markup: SceneMarkupConfig,
     translation: TranslationConfig,
     inpainting: InpaintingFile,
     #[serde(default)]
@@ -37,6 +39,7 @@ impl Default for PipelineFile {
                 model: "koharu-layout-rfdetr-seg-2xl".to_owned(),
             },
             ocr: OcrConfig::default(),
+            markup: SceneMarkupConfig::default(),
             translation: TranslationConfig::default(),
             inpainting: InpaintingFile::default(),
             processor: ProcessorConfig::default(),
@@ -120,6 +123,7 @@ impl Serialize for PipelineConfig {
                 model: detection.to_owned(),
             },
             ocr: self.ocr.clone(),
+            markup: self.markup.clone(),
             translation: self.translation.clone(),
             inpainting: InpaintingFile {
                 method: self.inpainting.method,
@@ -194,6 +198,7 @@ impl<'de> Deserialize<'de> for PipelineConfig {
         Ok(Self {
             detection,
             ocr: file.ocr,
+            markup: file.markup,
             translation: file.translation,
             inpainting: InpaintingConfig {
                 method: file.inpainting.method,
@@ -215,6 +220,7 @@ impl Default for PipelineConfig {
                 KoharuLayoutRFDetrSeg2XLConfig::default(),
             ),
             ocr: OcrConfig::default(),
+            markup: SceneMarkupConfig::default(),
             translation: TranslationConfig::default(),
             inpainting: InpaintingConfig::default(),
             processor: ProcessorConfig::default(),
@@ -231,14 +237,12 @@ pub struct TranslationConfig {
     pub target_language: Language,
     pub page: TranslationProfile,
     pub chapter: TranslationProfile,
-    pub markup: SceneMarkupConfig,
 }
 
-/// The per-page scene markup pass that labels each text's kind, speaker and
-/// continuation for chapter translation.
+/// The scene markup stage, which labels each text's kind, speaker and
+/// continuation for translation to read.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Type)]
 pub struct SceneMarkupConfig {
-    pub enabled: bool,
     pub model: TranslationModelSelection,
     pub generation: GenerationConfig,
     pub instructions: Option<String>,
@@ -247,7 +251,6 @@ pub struct SceneMarkupConfig {
 impl Default for SceneMarkupConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
             model: TranslationModelSelection {
                 provider: koharu_translator::Provider::OpenRouter,
                 model: Some("google/gemini-3.7-flash".to_owned()),
@@ -297,7 +300,6 @@ struct TranslationConfigFile {
     target_language: Language,
     page: Option<TranslationProfileFile>,
     chapter: Option<TranslationProfileFile>,
-    markup: SceneMarkupConfig,
 }
 
 impl Default for TranslationConfigFile {
@@ -307,7 +309,6 @@ impl Default for TranslationConfigFile {
             target_language: default_target_language(),
             page: None,
             chapter: None,
-            markup: SceneMarkupConfig::default(),
         }
     }
 }
@@ -337,7 +338,6 @@ impl<'de> Deserialize<'de> for TranslationConfig {
                 .chapter
                 .unwrap_or_default()
                 .into_profile(TranslationUnitPolicy::AdaptiveV1),
-            markup: file.markup,
         })
     }
 }
@@ -383,7 +383,6 @@ impl Default for TranslationConfig {
                 unit_policy: TranslationUnitPolicy::AdaptiveV1,
                 ..TranslationProfile::default()
             },
-            markup: SceneMarkupConfig::default(),
         }
     }
 }
@@ -487,17 +486,15 @@ impl PipelineConfig {
                 bail!("API OCR requires a selected model")
             }
         }
-        let markup = &self.translation.markup;
-        if markup.enabled {
-            if !markup.model.provider.supports_markup() {
-                bail!("{} does not support scene markup", markup.model.provider)
-            }
-            if !markup.model.vision {
-                bail!("scene markup requires a vision model")
-            }
-            if markup.model.model.as_deref().is_none_or(str::is_empty) {
-                bail!("scene markup requires a selected model")
-            }
+        let markup = &self.markup;
+        if !markup.model.provider.supports_markup() {
+            bail!("{} does not support scene markup", markup.model.provider)
+        }
+        if !markup.model.vision {
+            bail!("scene markup requires a vision model")
+        }
+        if markup.model.model.as_deref().is_none_or(str::is_empty) {
+            bail!("scene markup requires a selected model")
         }
         if markup
             .instructions
@@ -1163,6 +1160,44 @@ mod tests {
     }
 
     #[test]
+    fn scene_markup_is_a_stage_config_that_defaults_when_missing() {
+        let config = toml::from_str::<PipelineConfig>(
+            r#"
+                [translation]
+                source_language = "ja-JP"
+            "#,
+        )
+        .unwrap();
+        let markup = &config.markup;
+        assert_eq!(
+            markup.model.provider,
+            koharu_translator::Provider::OpenRouter
+        );
+        assert_eq!(
+            markup.model.model.as_deref(),
+            Some("google/gemini-3.7-flash")
+        );
+        assert!(markup.model.vision && !markup.model.reasoning);
+        assert_eq!(markup.generation.temperature, Some(0.0));
+        assert_eq!(markup.generation.max_tokens, Some(8192));
+        assert_eq!(markup.generation.reasoning, Some(false));
+        assert_eq!(markup.instructions, None);
+        config.validate().unwrap();
+
+        let mut saved = config.clone();
+        saved.markup.instructions = Some("Name the narrator.".to_owned());
+        let value = serde_json::to_value(&saved).unwrap();
+        assert_eq!(value["markup"]["instructions"], "Name the narrator.");
+        assert!(value["translation"].get("markup").is_none());
+        assert_eq!(
+            serde_json::from_value::<PipelineConfig>(value)
+                .unwrap()
+                .markup,
+            saved.markup
+        );
+    }
+
+    #[test]
     fn ocr_keeps_local_and_api_settings_independently() {
         let config = toml::from_str::<PipelineConfig>(
             r#"
@@ -1352,6 +1387,7 @@ mod tests {
                 ..Default::default()
             }),
             ocr: OcrConfig::default(),
+            markup: SceneMarkupConfig::default(),
             translation: TranslationConfig::default(),
             inpainting: InpaintingConfig {
                 local_model: LocalInpaintingModel::Flux2Klein(Flux2KleinConfig {

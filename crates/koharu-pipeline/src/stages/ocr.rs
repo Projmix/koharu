@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 
 use super::{StageInput, StageProcessor, finish, generation};
-use crate::stage::Pass;
+use crate::stage::OcrPass;
 use crate::{ModelCell, OcrConfig, OcrMethod, OcrModel, scope::geometry_extents};
 use anyhow::{Context as _, Result, anyhow, bail};
 use async_trait::async_trait;
@@ -171,7 +171,7 @@ impl Processor {
             return None;
         }
         let mut models = vec![self.api_model_name()];
-        if input.pass == Pass::Local {
+        if input.ocr_pass == OcrPass::Local {
             models.push(self.local_name());
         }
         Some(models)
@@ -216,7 +216,7 @@ impl Processor {
 
     fn uses_local(&self, input: &StageInput) -> bool {
         self.config.method == OcrMethod::Local
-            || self.config.method == OcrMethod::LocalApi && input.pass == Pass::Local
+            || self.config.method == OcrMethod::LocalApi && input.ocr_pass == OcrPass::Local
     }
 }
 
@@ -834,14 +834,14 @@ mod tests {
         assert!(hybrid.skip(&input(&session, page)).unwrap());
         assert!(
             hybrid
-                .skip(&input(&session, page).with_pass(Pass::Local))
+                .skip(&input(&session, page).with_ocr_pass(OcrPass::Local))
                 .unwrap()
         );
         hybrid.config.local_model = OcrModel::MangaOcr;
         assert!(!hybrid.skip(&input(&session, page)).unwrap());
         assert!(
             !hybrid
-                .skip(&input(&session, page).with_pass(Pass::Local))
+                .skip(&input(&session, page).with_ocr_pass(OcrPass::Local))
                 .unwrap()
         );
     }
@@ -936,7 +936,7 @@ mod tests {
         session.commit(edit.finish().unwrap()).await.unwrap();
         let mut hybrid = processor();
         hybrid.config.method = OcrMethod::LocalApi;
-        let local_input = input(&session, page).with_pass(Pass::Local);
+        let local_input = input(&session, page).with_ocr_pass(OcrPass::Local);
         assert!(hybrid.uses_local(&local_input));
         assert!(!hybrid.uses_local(&input(&session, page)));
         let owner = generation(PRODUCER, &hybrid.model(&local_input)).unwrap();
@@ -952,7 +952,7 @@ mod tests {
         session.commit(edit.finish().unwrap()).await.unwrap();
         assert!(
             hybrid
-                .skip(&input(&session, page).with_pass(Pass::Local))
+                .skip(&input(&session, page).with_ocr_pass(OcrPass::Local))
                 .unwrap()
         );
         assert!(!hybrid.skip(&input(&session, page)).unwrap());
@@ -1003,7 +1003,7 @@ mod tests {
         let verified = contents[0];
         let pending = contents[1];
         let new = contents[2];
-        let local_model = hybrid.model(&input(&session, page).with_pass(Pass::Local));
+        let local_model = hybrid.model(&input(&session, page).with_ocr_pass(OcrPass::Local));
         let final_model = hybrid.api_model_name();
         for (content, model, text) in [
             (verified, final_model.as_str(), "API corrected text"),
@@ -1031,7 +1031,7 @@ mod tests {
             .component::<SourceText>(pending)
             .unwrap()
             .unwrap();
-        let local_input = input(&session, page).with_pass(Pass::Local);
+        let local_input = input(&session, page).with_ocr_pass(OcrPass::Local);
         assert!(!hybrid.skip(&local_input).unwrap());
         let (_, ordinary_targets) = targets(&local_input, &[]).await.unwrap();
         assert_eq!(
@@ -1079,7 +1079,7 @@ mod tests {
         );
         assert!(
             hybrid
-                .skip(&input(&session, page).with_pass(Pass::Local))
+                .skip(&input(&session, page).with_ocr_pass(OcrPass::Local))
                 .unwrap()
         );
 

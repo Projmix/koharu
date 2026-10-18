@@ -201,9 +201,7 @@ async fn selected_stages_resume_by_skipping_completed_work() {
 
 #[tokio::test]
 async fn failed_scene_markup_records_a_missing_page_and_chapter_translation_still_runs() {
-    let mut translation = TranslationConfig::default();
-    translation.markup.enabled = true;
-    let pipeline = pipeline(translation);
+    let pipeline = pipeline(TranslationConfig::default());
     let mut session = koharu_scene::Session::memory().await.unwrap();
     let generated = koharu_scene::Generation::new(
         koharu_scene::ProducerId::new("dev.koharu.pipeline.translation").unwrap(),
@@ -240,7 +238,7 @@ async fn failed_scene_markup_records_a_missing_page_and_chapter_translation_stil
                     language: None,
                 },
             )?;
-            // Already translated, so the chapter pass completes offline.
+            // Already translated, so chapter translation completes offline.
             edit.set(
                 content,
                 &koharu_scene::Translation {
@@ -261,8 +259,8 @@ async fn failed_scene_markup_records_a_missing_page_and_chapter_translation_stil
     let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let captured = events.clone();
     let request = Request {
-        operation: Operation::Only {
-            stage: Stage::Translation,
+        operation: Operation::Stages {
+            stages: vec![Stage::Markup, Stage::Translation],
         },
         scope: Scope::Project,
         progress: Some(std::sync::Arc::new(move |event| {
@@ -292,7 +290,16 @@ async fn failed_scene_markup_records_a_missing_page_and_chapter_translation_stil
         markup.status,
         koharu_scene::PageMarkupStatus::Missing(koharu_scene::PageMarkupMissing::Failed)
     );
-    assert!(events.lock().unwrap().iter().any(|event| matches!(
+    let events = events.lock().unwrap();
+    assert!(events.iter().any(|event| matches!(
+        event,
+        Progress::Finished {
+            target: StageTarget::Page(target),
+            stage: Stage::Markup,
+            ..
+        } if *target == page
+    )));
+    assert!(events.iter().any(|event| matches!(
         event,
         Progress::Skipped {
             target: StageTarget::Chapter,
@@ -342,7 +349,12 @@ fn operations_expand_to_the_supported_workflows() {
         }
         .stages()
         .unwrap(),
-        vec![Stage::Detection, Stage::Ocr, Stage::Translation],
+        vec![
+            Stage::Detection,
+            Stage::Ocr,
+            Stage::Markup,
+            Stage::Translation
+        ],
     );
     assert_eq!(
         Operation::Through {

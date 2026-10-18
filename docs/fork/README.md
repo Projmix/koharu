@@ -55,18 +55,21 @@ Known gaps after the rebuild:
   second local reader (Manga OCR, or Hayai when Manga OCR is chosen); only
   regions where they disagree go to the API. Text the user edited is never
   overwritten.
-- Scene markup (`translation.markup`, off by default; default model
-  `google/gemini-3.7-flash` through OpenRouter at temperature 0). When on,
-  a project-scope translation run adds an internal `Pass::Markup` of the
-  Translation stage: after OCR on every page and before chapter translation,
-  each page in project order is sent to a vision model with numbered boxes
-  drawn on it. The model only labels each text's kind (speech, thought,
+- Scene markup is its own pipeline stage, `markup`, between OCR and
+  Translation (config `pipeline.markup`; default model
+  `google/gemini-3.7-flash` through OpenRouter at temperature 0). It runs
+  when the user runs it, alone or with other stages: each page in project
+  order, after that page's OCR, is sent to a vision model with numbered
+  boxes drawn on it. When a run includes both, page translation waits for
+  that page's markup and chapter translation waits for markup on every
+  page; Translation never runs markup itself and uses whatever markup
+  exists. The model only labels each text's kind (speech, thought,
   narration, sound-effect, sign, aside), speaker and the earlier text it
   continues; it never transcribes or translates. Results go to the scene as
   `SpeechMarkup`, the `Continues` relation, the project `CharacterList` and a
   per-page `PageMarkup` with the texts it saw, so a rerun skips unchanged
   pages. A refusal, filtered, invalid or failed answer records
-  `PageMarkup` as missing and the chapter still translates. User-authored
+  `PageMarkup` as missing and the run continues. User-authored
   markup and a user-edited character list are never overwritten. Chapter
   translation sends `speech_kind`, `speaker` {name, gender}, `continues` per
   segment and a top-level `characters` list, so the translator can use the

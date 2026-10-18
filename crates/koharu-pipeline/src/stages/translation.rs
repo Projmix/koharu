@@ -12,20 +12,17 @@ use koharu_translator::{
     TranslationRequest, TranslationSegmentMetadata, TranslationUnit, Translator,
 };
 
-use crate::{
-    StageTarget, TranslationConfig, TranslationProfile, TranslationUnitPolicy, stage::Pass,
-};
+use crate::{StageTarget, TranslationConfig, TranslationProfile, TranslationUnitPolicy};
 
 use super::{
     StageInput, StageProcessor,
     detection::{LayoutItem, LayoutKind, reading_order},
-    finish, generation,
+    finish, generation, markup,
 };
 
 const PRODUCER: &str = "dev.koharu.pipeline.translation";
 
 mod manual;
-mod markup;
 mod review;
 
 pub(super) struct Processor {
@@ -236,14 +233,11 @@ async fn write_translations(
 #[async_trait]
 impl StageProcessor for Processor {
     fn model(&self, input: &StageInput) -> String {
-        if input.pass == Pass::Markup {
-            return markup::model_name(&self.config.markup);
-        }
         Translator::model(&self.profile(input).model).to_owned()
     }
 
     fn recovers_from_memory_pressure(&self, input: &StageInput) -> bool {
-        input.pass != Pass::Markup && self.profile(input).model.provider == Provider::Local
+        self.profile(input).model.provider == Provider::Local
     }
 
     fn unload(&self) -> bool {
@@ -251,9 +245,6 @@ impl StageProcessor for Processor {
     }
 
     fn skip(&self, input: &StageInput) -> Result<bool> {
-        if input.pass == Pass::Markup {
-            return markup::skip(input, self.config.source_language);
-        }
         let (targets, context) = collect_inputs(input, self.config.source_language)?;
         anyhow::ensure!(
             !targets.is_empty() || !context.is_empty(),
@@ -276,22 +267,10 @@ impl StageProcessor for Processor {
     }
 
     async fn load(&self, input: &StageInput) -> Result<()> {
-        if input.pass == Pass::Markup {
-            return Ok(());
-        }
         self.translator.load_model(&self.profile(input).model).await
     }
 
     async fn process(&self, input: StageInput) -> Result<koharu_scene::Patch> {
-        if input.pass == Pass::Markup {
-            return markup::process(
-                &input,
-                &self.config.markup,
-                &self.translator,
-                self.config.source_language,
-            )
-            .await;
-        }
         let profile = self.profile(&input).clone();
         if input.target() == StageTarget::Chapter {
             let chapter = ChapterTranslation::from_input(
@@ -656,7 +635,7 @@ fn page_layout_containers(input: &StageInput, page: EntityId) -> Result<Vec<Layo
     Ok(items)
 }
 
-fn layout_containers(
+pub(super) fn layout_containers(
     scene: &koharu_scene::Snapshot,
     page: EntityId,
 ) -> Result<Vec<(EntityId, LayoutItem)>> {
@@ -709,7 +688,7 @@ fn order_entries(
 /// The reading order of items with optional bounds: bounded items take the
 /// layout reading order among the bounded positions, and unbounded items stay
 /// where they are.
-fn reading_permutation(
+pub(super) fn reading_permutation(
     bounds: &[Option<(f64, f64, f64, f64)>],
     mut layout: Vec<LayoutItem>,
     source_language: Language,

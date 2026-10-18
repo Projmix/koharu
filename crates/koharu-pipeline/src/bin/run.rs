@@ -108,6 +108,7 @@ impl Arguments {
                 },
                 ..OcrConfig::default()
             },
+            markup: koharu_pipeline::SceneMarkupConfig::default(),
             translation: TranslationConfig {
                 source_language: Language::Japanese,
                 target_language: self.target_language,
@@ -137,7 +138,6 @@ impl Arguments {
                     instructions: self.translation_instructions.clone(),
                     unit_policy: koharu_pipeline::TranslationUnitPolicy::AdaptiveV1,
                 },
-                markup: koharu_pipeline::SceneMarkupConfig::default(),
             },
             inpainting: InpaintingConfig {
                 local_model: match self.inpainting {

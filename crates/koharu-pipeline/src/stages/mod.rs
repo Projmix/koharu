@@ -1,6 +1,7 @@
 mod detection;
 mod fal;
 mod inpainting;
+mod markup;
 mod ocr;
 mod openrouter_image;
 mod replicate;
@@ -100,7 +101,7 @@ pub(crate) struct StageInput {
     inpainting_mask: Option<InpaintingMask>,
     image_edit_reviewer: Option<Arc<dyn crate::ImageEditReviewer>>,
     stop: StopToken,
-    pass: crate::stage::Pass,
+    ocr_pass: crate::stage::OcrPass,
 }
 
 impl StageInput {
@@ -122,7 +123,7 @@ impl StageInput {
             inpainting_mask,
             image_edit_reviewer: None,
             stop: StopToken::default(),
-            pass: crate::stage::Pass::Final,
+            ocr_pass: crate::stage::OcrPass::Final,
         }
     }
 
@@ -137,7 +138,7 @@ impl StageInput {
             inpainting_mask: None,
             image_edit_reviewer: None,
             stop: StopToken::default(),
-            pass: crate::stage::Pass::Final,
+            ocr_pass: crate::stage::OcrPass::Final,
         }
     }
 
@@ -154,8 +155,8 @@ impl StageInput {
         self
     }
 
-    pub(crate) fn with_pass(mut self, pass: crate::stage::Pass) -> Self {
-        self.pass = pass;
+    pub(crate) fn with_ocr_pass(mut self, pass: crate::stage::OcrPass) -> Self {
+        self.ocr_pass = pass;
         self
     }
 
@@ -205,6 +206,7 @@ trait StageProcessor: Send + Sync {
 pub(crate) struct Stages {
     detection: detection::Processor,
     ocr: ocr::Processor,
+    markup: markup::Processor,
     translation: translation::Processor,
     inpainting: inpainting::Processor,
     manual_inpainting: Option<inpainting::Processor>,
@@ -235,6 +237,11 @@ impl Stages {
                 translator.clone(),
                 device.clone(),
             ),
+            markup: markup::Processor::new(
+                config.markup.clone(),
+                config.translation.source_language,
+                translator.clone(),
+            ),
             translation: translation::Processor::new(config.translation.clone(), translator),
             inpainting: inpainting::Processor::new(automatic_inpainting, device.clone())?,
             manual_inpainting,
@@ -249,6 +256,7 @@ impl Stages {
         match stage {
             Stage::Detection => &self.detection,
             Stage::Ocr => &self.ocr,
+            Stage::Markup => &self.markup,
             Stage::Translation => &self.translation,
             Stage::Inpainting if input.inpainting_intent() == Some(InpaintingIntent::Remove) => {
                 self.manual_inpainting.as_ref().unwrap_or(&self.inpainting)
@@ -285,6 +293,7 @@ impl Stages {
         match stage {
             Stage::Detection => self.detection.unload(),
             Stage::Ocr => self.ocr.unload(),
+            Stage::Markup => self.markup.unload(),
             Stage::Translation => self.translation.unload(),
             Stage::Inpainting => {
                 let automatic = self.inpainting.unload();
@@ -456,6 +465,7 @@ mod tests {
             [
                 "koharu-layout-rfdetr-seg-2xl",
                 "paddleocr-vl-1.6",
+                "openrouter: google/gemini-3.7-flash",
                 "local",
                 "lama",
             ]
@@ -545,7 +555,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             Stage::ALL.map(|stage| local.recovers_from_memory_pressure(stage, &input)),
-            [true, true, true, true]
+            [true, true, false, true, true]
         );
 
         let mut remote_config = PipelineConfig::default();
@@ -556,7 +566,7 @@ mod tests {
         let remote = Stages::new(&remote_config, translator, &koharu_ml::Device::cpu()).unwrap();
         assert_eq!(
             Stage::ALL.map(|stage| remote.recovers_from_memory_pressure(stage, &input)),
-            [true, false, false, false]
+            [true, false, false, false, false]
         );
         let chapter = StageInput::chapter(session.snapshot(), Arc::from([page]));
         assert!(!remote.recovers_from_memory_pressure(Stage::Translation, &chapter));

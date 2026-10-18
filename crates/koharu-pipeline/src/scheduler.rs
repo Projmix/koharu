@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use koharu_scene::EntityId;
 
-use crate::stage::Pass;
+use crate::stage::OcrPass;
 use crate::{Stage, StageTarget};
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -14,7 +14,7 @@ enum WorkState {
 
 struct StageWork {
     stage: Stage,
-    pass: Pass,
+    ocr_pass: OcrPass,
     state: WorkState,
 }
 
@@ -37,12 +37,10 @@ impl PageWork {
     }
 
     fn ready(&self, index: usize) -> bool {
-        let Some(prerequisite) = prerequisite(self.stages[index].stage) else {
-            return true;
-        };
+        let prerequisites = prerequisites(self.stages[index].stage);
         self.stages
             .iter()
-            .filter(|work| work.stage == prerequisite)
+            .filter(|work| prerequisites.contains(&work.stage))
             .all(|work| work.state == WorkState::Finished)
     }
 }
@@ -80,7 +78,7 @@ impl Scheduler {
                     .iter()
                     .map(|stage| StageWork {
                         stage: *stage,
-                        pass: Pass::Final,
+                        ocr_pass: OcrPass::Final,
                         state: WorkState::Pending,
                     })
                     .collect(),
@@ -89,7 +87,7 @@ impl Scheduler {
         let chapter =
             (project_scope && stages.contains(&Stage::Translation)).then_some(StageWork {
                 stage: Stage::Translation,
-                pass: Pass::Final,
+                ocr_pass: OcrPass::Final,
                 state: WorkState::Pending,
             });
         let total = pages
@@ -130,7 +128,7 @@ impl Scheduler {
                     index,
                     StageWork {
                         stage: Stage::Ocr,
-                        pass: Pass::Local,
+                        ocr_pass: OcrPass::Local,
                         state: WorkState::Pending,
                     },
                 );
@@ -139,32 +137,7 @@ impl Scheduler {
         }
     }
 
-    /// Runs scene markup on every page after OCR, in project order, before
-    /// chapter translation. Markup only feeds chapter translation, so it
-    /// needs a project-scope run that includes translation.
-    pub(crate) fn enable_scene_markup(&mut self) {
-        if self.chapter.is_none() {
-            return;
-        }
-        for page in &mut self.pages {
-            let index = page
-                .stages
-                .iter()
-                .position(|work| work.stage > Stage::Translation)
-                .unwrap_or(page.stages.len());
-            page.stages.insert(
-                index,
-                StageWork {
-                    stage: Stage::Translation,
-                    pass: Pass::Markup,
-                    state: WorkState::Pending,
-                },
-            );
-            self.total += 1;
-        }
-    }
-
-    pub(crate) fn pass(&self, target: StageTarget, stage: Stage) -> Pass {
+    pub(crate) fn ocr_pass(&self, target: StageTarget) -> OcrPass {
         target
             .page()
             .and_then(|page| self.page_index.get(&page))
@@ -172,9 +145,9 @@ impl Scheduler {
                 self.pages[*index]
                     .stages
                     .iter()
-                    .find(|work| work.stage == stage && work.state == WorkState::Running)
+                    .find(|work| work.stage == Stage::Ocr && work.state == WorkState::Running)
             })
-            .map_or(Pass::Final, |work| work.pass)
+            .map_or(OcrPass::Final, |work| work.ocr_pass)
     }
 
     pub(crate) const fn project_scope(&self) -> bool {
@@ -282,7 +255,7 @@ impl Scheduler {
         self.pages.iter().all(|page| {
             page.stages
                 .iter()
-                .filter(|work| work.stage <= Stage::Translation)
+                .filter(|work| work.stage < Stage::Translation)
                 .all(|work| work.state == WorkState::Finished)
         })
     }
@@ -300,7 +273,7 @@ impl Scheduler {
         self.pages.iter().all(|page| {
             page.stages
                 .iter()
-                .filter(|work| (work.stage, work.pass) < (stage, current.pass))
+                .filter(|work| (work.stage, work.ocr_pass) < (stage, current.ocr_pass))
                 .all(|work| work.state == WorkState::Finished)
         })
     }
@@ -337,11 +310,15 @@ impl Scheduler {
     }
 }
 
-const fn prerequisite(stage: Stage) -> Option<Stage> {
+/// The earlier stages of a page that a stage waits for when they are in the
+/// same run. Translation uses whatever markup exists, so it waits for markup
+/// only when the run includes it.
+const fn prerequisites(stage: Stage) -> &'static [Stage] {
     match stage {
-        Stage::Detection => None,
-        Stage::Ocr | Stage::Inpainting => Some(Stage::Detection),
-        Stage::Translation => Some(Stage::Ocr),
+        Stage::Detection => &[],
+        Stage::Ocr | Stage::Inpainting => &[Stage::Detection],
+        Stage::Markup => &[Stage::Ocr],
+        Stage::Translation => &[Stage::Ocr, Stage::Markup],
     }
 }
 
@@ -360,11 +337,11 @@ mod tests {
         scheduler.enable_hybrid_ocr();
         let busy = BTreeSet::new();
         assert_eq!(scheduler.total(), 7);
-        for pass in [Pass::Local, Pass::Final] {
+        for pass in [OcrPass::Local, OcrPass::Final] {
             for page in &pages {
                 let work = scheduler.start_next(&busy).unwrap();
                 assert_eq!(work, (StageTarget::Page(*page), Stage::Ocr));
-                assert_eq!(scheduler.pass(work.0, work.1), pass);
+                assert_eq!(scheduler.ocr_pass(work.0), pass);
                 assert!(
                     scheduler
                         .start_next(&BTreeSet::from([Stage::Ocr]))
@@ -380,60 +357,6 @@ mod tests {
     }
 
     #[test]
-    fn scene_markup_runs_per_page_after_ocr_and_before_chapter_translation() {
-        let pages = pages(2);
-        let stages = [
-            Stage::Detection,
-            Stage::Ocr,
-            Stage::Translation,
-            Stage::Inpainting,
-        ];
-        let mut scheduler = Scheduler::new(&pages, &stages, true, false);
-        scheduler.enable_scene_markup();
-        let busy = BTreeSet::new();
-        assert_eq!(scheduler.total(), 9);
-        for stage in [Stage::Detection, Stage::Ocr] {
-            for page in &pages {
-                let work = scheduler.start_next(&busy).unwrap();
-                assert_eq!(work, (StageTarget::Page(*page), stage));
-                scheduler.complete_stage(work.0, work.1);
-            }
-        }
-        for page in &pages {
-            let work = scheduler.start_next(&busy).unwrap();
-            assert_eq!(work, (StageTarget::Page(*page), Stage::Translation));
-            assert_eq!(scheduler.pass(work.0, work.1), Pass::Markup);
-            assert!(
-                scheduler
-                    .start_next(&BTreeSet::from([Stage::Translation]))
-                    .is_none()
-            );
-            scheduler.complete_stage(work.0, work.1);
-        }
-        let chapter = scheduler.start_next(&busy).unwrap();
-        assert_eq!(chapter, (StageTarget::Chapter, Stage::Translation));
-        assert_eq!(scheduler.pass(chapter.0, chapter.1), Pass::Final);
-        assert!(
-            scheduler
-                .start_next(&BTreeSet::from([Stage::Translation]))
-                .is_none()
-        );
-        scheduler.complete_stage(chapter.0, chapter.1);
-        assert_eq!(
-            scheduler.start_next(&busy),
-            Some((StageTarget::Page(pages[0]), Stage::Inpainting))
-        );
-    }
-
-    #[test]
-    fn scene_markup_needs_chapter_translation() {
-        let pages = pages(1);
-        let mut scheduler = Scheduler::new(&pages, &[Stage::Ocr, Stage::Translation], false, false);
-        scheduler.enable_scene_markup();
-        assert_eq!(scheduler.total(), 2);
-    }
-
-    #[test]
     fn hybrid_page_translation_waits_for_the_api_pass() {
         let pages = pages(1);
         let mut scheduler = Scheduler::new(&pages, &[Stage::Ocr, Stage::Translation], false, false);
@@ -443,7 +366,7 @@ mod tests {
         scheduler.complete_stage(local.0, local.1);
         let api = scheduler.start_next(&busy).unwrap();
         assert_eq!(api.1, Stage::Ocr);
-        assert_eq!(scheduler.pass(api.0, api.1), Pass::Final);
+        assert_eq!(scheduler.ocr_pass(api.0), OcrPass::Final);
         assert!(
             scheduler
                 .start_next(&BTreeSet::from([Stage::Ocr]))
@@ -481,13 +404,82 @@ mod tests {
 
         assert!(!scheduler.complete_stage(StageTarget::Page(pages[0]), Stage::Ocr));
         busy.remove(&Stage::Ocr);
-        let translation = scheduler.start_next(&busy).unwrap();
-        assert_eq!(
-            translation,
-            (StageTarget::Page(pages[0]), Stage::Translation)
-        );
+        let markup = scheduler.start_next(&busy).unwrap();
+        assert_eq!(markup, (StageTarget::Page(pages[0]), Stage::Markup));
         assert!(busy.contains(&Stage::Detection));
         assert!(busy.contains(&Stage::Inpainting));
+    }
+
+    #[test]
+    fn page_translation_waits_for_markup_only_when_it_is_in_the_run() {
+        let pages = pages(1);
+        let stages = [Stage::Ocr, Stage::Markup, Stage::Translation];
+        let mut scheduler = Scheduler::new(&pages, &stages, false, false);
+        let busy = BTreeSet::new();
+        let ocr = scheduler.start_next(&busy).unwrap();
+        scheduler.complete_stage(ocr.0, ocr.1);
+        let markup = scheduler.start_next(&busy).unwrap();
+        assert_eq!(markup, (StageTarget::Page(pages[0]), Stage::Markup));
+        assert!(
+            scheduler
+                .start_next(&BTreeSet::from([Stage::Markup]))
+                .is_none()
+        );
+        scheduler.complete_stage(markup.0, markup.1);
+        assert_eq!(
+            scheduler.start_next(&busy),
+            Some((StageTarget::Page(pages[0]), Stage::Translation))
+        );
+
+        let mut scheduler = Scheduler::new(&pages, &[Stage::Ocr, Stage::Translation], false, false);
+        let ocr = scheduler.start_next(&busy).unwrap();
+        scheduler.complete_stage(ocr.0, ocr.1);
+        assert_eq!(
+            scheduler.start_next(&busy),
+            Some((StageTarget::Page(pages[0]), Stage::Translation))
+        );
+    }
+
+    #[test]
+    fn chapter_translation_waits_for_markup_on_every_page() {
+        let pages = pages(2);
+        let mut scheduler = Scheduler::new(&pages, &Stage::ALL, true, false);
+        let busy = BTreeSet::new();
+        assert_eq!(scheduler.total(), 9);
+        for stage in [Stage::Detection, Stage::Ocr, Stage::Markup] {
+            for page in &pages {
+                let work = scheduler.start_next(&busy).unwrap();
+                assert_eq!(work, (StageTarget::Page(*page), stage));
+                assert!(scheduler.start_next(&BTreeSet::from([stage])).is_none());
+                scheduler.complete_stage(work.0, work.1);
+            }
+        }
+        let chapter = scheduler.start_next(&busy).unwrap();
+        assert_eq!(chapter, (StageTarget::Chapter, Stage::Translation));
+        assert!(
+            scheduler
+                .start_next(&BTreeSet::from([Stage::Translation]))
+                .is_none()
+        );
+        scheduler.complete_stage(chapter.0, chapter.1);
+        assert_eq!(
+            scheduler.start_next(&busy),
+            Some((StageTarget::Page(pages[0]), Stage::Inpainting))
+        );
+    }
+
+    #[test]
+    fn markup_alone_runs_each_page_in_project_order() {
+        let pages = pages(2);
+        let mut scheduler = Scheduler::new(&pages, &[Stage::Markup], true, false);
+        let busy = BTreeSet::new();
+        assert_eq!(scheduler.total(), 2);
+        for page in &pages {
+            let work = scheduler.start_next(&busy).unwrap();
+            assert_eq!(work, (StageTarget::Page(*page), Stage::Markup));
+            scheduler.complete_stage(work.0, work.1);
+        }
+        assert!(scheduler.start_next(&busy).is_none());
     }
 
     #[test]

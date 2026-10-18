@@ -3,14 +3,9 @@ use specta::Type;
 
 use koharu_scene::EntityId;
 
-/// An internal pass of a stage. A stage's earlier passes finish on every page
-/// of a chapter before its final pass, and none is a separate job kind.
 #[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
-pub(crate) enum Pass {
-    /// Hybrid OCR's local draft.
+pub(crate) enum OcrPass {
     Local,
-    /// Translation's per-page scene markup before chapter translation.
-    Markup,
     #[default]
     Final,
 }
@@ -36,14 +31,16 @@ pub(crate) enum Pass {
 pub enum Stage {
     Detection,
     Ocr,
+    Markup,
     Translation,
     Inpainting,
 }
 
 impl Stage {
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 5] = [
         Self::Detection,
         Self::Ocr,
+        Self::Markup,
         Self::Translation,
         Self::Inpainting,
     ];

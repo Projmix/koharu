@@ -1,9 +1,11 @@
-//! Scene markup: the Translation stage's per-page pass that labels each text
-//! with its kind, speaker and continuation before chapter translation.
+//! Scene markup: the per-page stage that labels each text with its kind,
+//! speaker and continuation. Translation reads whatever markup exists and
+//! never runs this stage itself.
 
 use std::{collections::BTreeSet, sync::Arc};
 
 use anyhow::{Context as _, Result};
+use async_trait::async_trait;
 use image::{DynamicImage, Rgb, RgbImage};
 use imageproc::{
     drawing::{draw_filled_rect_mut, draw_hollow_rect_mut},
@@ -18,8 +20,13 @@ use koharu_translator::{
     MarkupRegion, MarkupRequest, MarkupWithheld, PreviousMarkup, Translator,
 };
 
-use super::{PRODUCER, layout_containers, reading_permutation};
-use crate::{SceneMarkupConfig, stages::StageInput};
+use super::{
+    StageInput, StageProcessor,
+    translation::{layout_containers, reading_permutation},
+};
+use crate::SceneMarkupConfig;
+
+const PRODUCER: &str = "dev.koharu.pipeline.markup";
 
 /// How many marked texts of the previous page the model sees for continuity.
 const PREVIOUS_CONTEXT: usize = 6;
@@ -30,7 +37,51 @@ struct PageText {
     bounds: (f64, f64, f64, f64),
 }
 
-pub(super) fn model_name(config: &SceneMarkupConfig) -> String {
+pub(super) struct Processor {
+    config: SceneMarkupConfig,
+    source_language: Language,
+    translator: Translator,
+}
+
+impl Processor {
+    pub(super) fn new(
+        config: SceneMarkupConfig,
+        source_language: Language,
+        translator: Translator,
+    ) -> Self {
+        Self {
+            config,
+            source_language,
+            translator,
+        }
+    }
+}
+
+#[async_trait]
+impl StageProcessor for Processor {
+    fn model(&self, _input: &StageInput) -> String {
+        model_name(&self.config)
+    }
+
+    /// Markup holds no model of its own, so a failure has nothing to unload.
+    fn unload(&self) -> bool {
+        false
+    }
+
+    fn skip(&self, input: &StageInput) -> Result<bool> {
+        skip(input, self.source_language)
+    }
+
+    async fn load(&self, _input: &StageInput) -> Result<()> {
+        self.translator.load_model(&self.config.model).await
+    }
+
+    async fn process(&self, input: StageInput) -> Result<koharu_scene::Patch> {
+        process(&input, &self.config, &self.translator, self.source_language).await
+    }
+}
+
+fn model_name(config: &SceneMarkupConfig) -> String {
     let provider = Translator::model(&config.model);
     match config.model.model.as_deref() {
         Some(model) => format!("{provider}: {model}"),
@@ -40,7 +91,7 @@ pub(super) fn model_name(config: &SceneMarkupConfig) -> String {
 
 /// A page is up to date when its last complete markup saw exactly its
 /// current texts. A missing result is retried on the next run.
-pub(super) fn skip(input: &StageInput, source_language: Language) -> Result<bool> {
+fn skip(input: &StageInput, source_language: Language) -> Result<bool> {
     let page = input.page()?;
     let texts = page_texts(&input.scene, page, source_language)?;
     if texts.is_empty() {
@@ -72,9 +123,9 @@ impl PageContext {
 }
 
 /// Marks up one page. A withheld, invalid or failed answer does not fail the
-/// chapter: the page records why its markup is missing and translation runs
-/// without it.
-pub(super) async fn process(
+/// run: the page records why its markup is missing, the next run retries it,
+/// and translation runs without it.
+async fn process(
     input: &StageInput,
     config: &SceneMarkupConfig,
     translator: &Translator,
@@ -559,7 +610,7 @@ mod tests {
     use koharu_translator::MarkedRegion;
 
     use super::*;
-    use crate::{ImageCache, stage::Pass};
+    use crate::ImageCache;
 
     async fn page_with_texts(sources: &[&str]) -> (koharu_scene::Session, EntityId, Vec<EntityId>) {
         let mut session = koharu_scene::Session::memory().await.unwrap();
@@ -627,8 +678,7 @@ mod tests {
             None,
             Arc::new(ImageCache::default()),
             None,
-        )
-        .with_pass(Pass::Markup);
+        );
         skip(&input, Language::English).unwrap()
     }
 

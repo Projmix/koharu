@@ -652,6 +652,7 @@ enum AgentPipelineOperation {
     Full,
     Detection,
     Ocr,
+    Markup,
     Translation,
     Inpainting,
 }
@@ -664,6 +665,9 @@ impl From<AgentPipelineOperation> for Operation {
                 stage: Stage::Detection,
             },
             AgentPipelineOperation::Ocr => Self::Only { stage: Stage::Ocr },
+            AgentPipelineOperation::Markup => Self::Only {
+                stage: Stage::Markup,
+            },
             AgentPipelineOperation::Translation => Self::Only {
                 stage: Stage::Translation,
             },

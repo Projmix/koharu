@@ -19,7 +19,6 @@ pub(crate) struct StageRunner {
     accelerator: AcceleratorGate,
     parallel_inpainting: bool,
     hybrid_ocr: bool,
-    scene_markup: bool,
 }
 
 impl StageRunner {
@@ -34,7 +33,6 @@ impl StageRunner {
             accelerator: AcceleratorGate::new(device, resources),
             parallel_inpainting: config.inpainting.method == crate::InpaintingMethod::Api,
             hybrid_ocr: config.ocr.method == crate::OcrMethod::LocalApi,
-            scene_markup: config.translation.markup.enabled,
         })
     }
 
@@ -44,10 +42,6 @@ impl StageRunner {
 
     pub(crate) const fn hybrid_ocr(&self) -> bool {
         self.hybrid_ocr
-    }
-
-    pub(crate) const fn scene_markup(&self) -> bool {
-        self.scene_markup
     }
 
     #[tracing::instrument(skip_all)]

@@ -48,10 +48,16 @@ impl Operation {
             } => vec![Stage::Detection],
             Self::Through { stage: Stage::Ocr } => vec![Stage::Detection, Stage::Ocr],
             Self::Through {
+                stage: Stage::Markup,
+            } => vec![Stage::Detection, Stage::Ocr, Stage::Markup],
+            Self::Through {
                 stage: Stage::Translation,
-            } => {
-                vec![Stage::Detection, Stage::Ocr, Stage::Translation]
-            }
+            } => vec![
+                Stage::Detection,
+                Stage::Ocr,
+                Stage::Markup,
+                Stage::Translation,
+            ],
             Self::Through {
                 stage: Stage::Inpainting,
             } => vec![Stage::Detection, Stage::Inpainting],
