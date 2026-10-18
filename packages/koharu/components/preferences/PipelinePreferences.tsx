@@ -577,6 +577,11 @@ function OcrPreferences({
               <FileText className='size-3.5 shrink-0 text-muted-foreground' />
               <Select
                 value={ocr.method}
+                items={{
+                  local: t('settings.pipeline.ocr.local'),
+                  api: t('settings.pipeline.ocr.api'),
+                  'local-api': t('settings.pipeline.ocr.hybrid'),
+                }}
                 onValueChange={(method) =>
                   method && updateOcr({ ...ocr, method: method as typeof ocr.method })
                 }

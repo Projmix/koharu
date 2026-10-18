@@ -459,7 +459,7 @@
         "localModel": "本機 OCR 模型",
         "method": "OCR 方法",
         "hybrid": "本機 + API",
-        "hybridDescription": "先完成整章所有頁面的本機 OCR，再將裁剪影像及其辨識文字傳送給所選 API。結果自動套用。",
+        "hybridDescription": "先完成整章所有頁面的本機 OCR，再由所選 API 核對辨識文字。結果自動套用。",
         "crossCheck": "用第二個本機模型交叉核對",
         "crossCheckDescription": "每張裁剪影像也用第二個本機模型辨識，只將兩者結果不一致的傳送給 API。關閉後全部傳送：費用約為三倍，手寫文字略為準確。"
       },

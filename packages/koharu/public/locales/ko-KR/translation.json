@@ -459,7 +459,7 @@
         "localModel": "로컬 OCR 모델",
         "method": "OCR 방식",
         "hybrid": "로컬 + API",
-        "hybridDescription": "챕터의 모든 페이지에서 로컬 OCR을 완료한 뒤 이미지와 인식 텍스트를 선택한 API로 보냅니다. 결과는 자동 적용됩니다.",
+        "hybridDescription": "챕터의 모든 페이지에서 로컬 OCR을 완료한 뒤 선택한 API로 인식 텍스트를 검토합니다. 결과는 자동 적용됩니다.",
         "crossCheck": "두 번째 로컬 모델로 교차 확인",
         "crossCheckDescription": "각 이미지를 두 번째 로컬 모델로도 읽고, 두 결과가 다른 이미지만 API로 보냅니다. 끄면 모든 이미지를 보냅니다. 비용은 약 3배이고 손글씨는 조금 더 정확합니다."
       },

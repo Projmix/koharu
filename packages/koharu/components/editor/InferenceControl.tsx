@@ -1007,6 +1007,11 @@ function OcrStagePicker({
       <span className='px-1 text-[11px] font-medium'>{t('phase.ocr')}</span>
       <Select
         value={value.method}
+        items={{
+          local: t('settings.pipeline.ocr.local'),
+          api: t('settings.pipeline.ocr.api'),
+          'local-api': t('settings.pipeline.ocr.hybrid'),
+        }}
         onValueChange={(method) =>
           method && onChange({ ...value, method: method as OcrConfig['method'] })
         }
