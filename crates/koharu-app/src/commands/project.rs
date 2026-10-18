@@ -1307,9 +1307,17 @@ impl Project {
         let language = snapshot
             .component::<SceneTranslation>(content)?
             .and_then(|translation| translation.language);
+        let reviewed = snapshot
+            .component::<koharu_scene::TranslationReview>(content)?
+            .is_some();
         let patch = snapshot.patch(|edit| {
             edit.promote_entity_to_user(layer)?;
             edit.promote_entity_to_user(content)?;
+            // Writing the translation by hand is the review's answer, including
+            // keeping the reviewed text unchanged.
+            if reviewed {
+                edit.remove::<koharu_scene::TranslationReview>(content)?;
+            }
             match text {
                 Some(text) => edit.set(
                     content,

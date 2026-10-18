@@ -189,6 +189,65 @@ impl Component for Translation {
     }
 }
 
+/// Why a generated translation needs a human look before export.
+///
+/// The translation stage owns this component and rewrites or removes it in the
+/// same patch as the translation. `reviewed` is the translation text the check
+/// saw: once the translation changes, the review no longer applies to it.
+#[revisioned(revision = 1)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Type)]
+pub struct TranslationReview {
+    pub origin: Origin,
+    pub reason: TranslationReviewReason,
+    pub reviewed: String,
+    /// A reference translation to compare against, such as hosted machine
+    /// translation of the same source.
+    pub reference: Option<String>,
+}
+
+impl TranslationReview {
+    #[must_use]
+    pub fn applies_to(&self, translation: &Translation) -> bool {
+        self.reviewed == translation.text.value
+    }
+}
+
+#[revisioned(revision = 1)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "kebab-case")]
+pub enum TranslationReviewReason {
+    /// The source swears or insults, and the translation reads milder.
+    SoftenedProfanity,
+}
+
+impl Component for TranslationReview {
+    const KIND: &'static str = "dev.koharu.text.translation-review";
+
+    fn validate(&self, _context: &ValidationContext<'_>) -> Result<()> {
+        if self.reviewed.len() > 16 * 1024 * 1024
+            || self.reviewed.contains('\0')
+            || self
+                .reference
+                .as_ref()
+                .is_some_and(|text| text.len() > 16 * 1024 * 1024 || text.contains('\0'))
+        {
+            return Err(Error::invalid(
+                "translation review text is too large or contains NUL",
+            ));
+        }
+        self.origin.validate()
+    }
+
+    fn origin(&self) -> Option<&Origin> {
+        Some(&self.origin)
+    }
+
+    fn set_origin(&mut self, origin: Origin) -> bool {
+        self.origin = origin;
+        true
+    }
+}
+
 fn validate_authored_text(value: &Authored<String>) -> Result<()> {
     if value.value.len() > 16 * 1024 * 1024 || value.value.contains('\0') {
         return Err(Error::invalid("text is too large or contains NUL"));

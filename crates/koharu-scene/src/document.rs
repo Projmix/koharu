@@ -3,7 +3,7 @@
 use crate::{
     At, DetectionAnalysis, Edit, EntityId, Geometry, Group, OcrAnalysis, Origin, PageRef, Presents,
     Region, RegionSpec, Result, Snapshot, SourceText, TextContent, TextGroup, TextLayout, TextRole,
-    Translation, Typography, Visibility,
+    Translation, TranslationReview, Typography, Visibility,
 };
 
 #[derive(Copy, Clone)]
@@ -134,6 +134,17 @@ impl<'a> TextContentRef<'a> {
 
     pub fn translation(self) -> Result<Option<Translation>> {
         self.snapshot.component(self.id)
+    }
+
+    /// The review of the current translation, if one still applies to it.
+    pub fn translation_review(self) -> Result<Option<TranslationReview>> {
+        let Some(translation) = self.translation()? else {
+            return Ok(None);
+        };
+        Ok(self
+            .snapshot
+            .component::<TranslationReview>(self.id)?
+            .filter(|review| review.applies_to(&translation)))
     }
 
     pub fn role(self) -> Result<Option<TextRole>> {

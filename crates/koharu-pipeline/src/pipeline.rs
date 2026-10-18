@@ -13,6 +13,7 @@ use crate::{
 #[derive(Clone)]
 pub struct Pipeline {
     current: Arc<ArcSwap<StageRunner>>,
+    translator: koharu_translator::Translator,
     resources: Arc<ResourceMonitor>,
     execution: Arc<tokio::sync::Mutex<()>>,
 }
@@ -41,6 +42,7 @@ impl Pipeline {
         let current = Arc::new(ArcSwap::from_pointee(runner));
         let watched = current.clone();
         let watched_resources = resources.clone();
+        let stage_translator = translator.clone();
         let _watcher = tokio::runtime::Handle::try_current()
             .context("pipeline requires a Tokio runtime")?
             .spawn(async move {
@@ -49,7 +51,7 @@ impl Pipeline {
                     let runner = config.read().and_then(|value| {
                         StageRunner::new(
                             &value,
-                            translator.clone(),
+                            stage_translator.clone(),
                             &device,
                             watched_resources.clone(),
                         )
@@ -62,9 +64,16 @@ impl Pipeline {
             });
         Ok(Self {
             current,
+            translator,
             resources,
             execution: Arc::new(tokio::sync::Mutex::new(())),
         })
+    }
+
+    /// The translator shared by every stage, for work that runs outside a
+    /// pipeline job, such as importing a manually translated chapter.
+    pub fn translator(&self) -> &koharu_translator::Translator {
+        &self.translator
     }
 
     pub fn subscribe_resources(&self) -> tokio::sync::watch::Receiver<ResourceSnapshot> {

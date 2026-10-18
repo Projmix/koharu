@@ -194,16 +194,20 @@ through each provider's structured output.
   1. Done: the shared translation system prompt (also used by the manual
      chapter export) says to keep profanity, insults, threats and crude
      slang at the source's strength and never censor or soften them.
-  2. Mark suspicious segments deterministically: a small per-language list
-     of source markers (for Japanese, for example `くそ`, `ちくしょう`,
-     `てめえ`, `死ね`, `殺す`, `ぶっ`), a translation much shorter than its
-     source relative to the language pair, an empty or refused output, or a
-     content-filter finish.
-  The marking runs after an import as well as after a provider response.
-  3. For marked segments only, translate the same segment through DeepL or
-     Google Cloud Translation, which are already providers here with keys in
-     the keychain. Hosted machine translation fails immediately, per
-     `AGENTS.md`; if it fails, flag the segment without the comparison.
+  2. Done (dictionary part): after every provider response and every
+     chapter import, a source line with a profanity marker (Japanese,
+     Korean, Chinese, English) whose translation has no target-language
+     marker (Russian, English) is a candidate. Other target languages are
+     not checked yet. The length, refusal and content-filter signals are
+     still open.
+  3. Done: candidates only are translated through DeepL, else Google Cloud
+     Translation, when its key is in the keychain. A candidate is flagged
+     when that reference keeps a marker; with no key or a failed request
+     every candidate is flagged without a reference. The flag is a
+     `TranslationReview` scene component that stores the reviewed text and
+     the reference; it stops applying once the translation changes, and a
+     hand edit (including keeping the same text) removes it. The editor
+     does not show it yet.
   4. Decide with JEV (text only fits it well): a `choice` of "LLM keeps the
      intensity", "machine translation keeps it, LLM softened", "both
      softened", plus the text of both. Raise a review flag that shows the

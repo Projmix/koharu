@@ -3,8 +3,8 @@ use std::sync::Arc;
 use anyhow::Result;
 use async_trait::async_trait;
 use koharu_scene::{
-    Authored, BubbleRegion, EntityId, Geometry, LanguageTag, Origin, PanelRegion, Region,
-    RegionSpec, SourceText, Translation,
+    Authored, BubbleRegion, EntityId, Generation, Geometry, LanguageTag, Origin, PanelRegion,
+    Region, RegionSpec, SourceText, Translation, TranslationReview,
 };
 use koharu_translator::{
     Language, Provider, TranslationContext, TranslationRequest, TranslationSegmentMetadata,
@@ -22,6 +22,7 @@ use super::{
 const PRODUCER: &str = "dev.koharu.pipeline.translation";
 
 mod manual;
+mod review;
 
 pub(super) struct Processor {
     config: TranslationConfig,
@@ -65,6 +66,7 @@ pub struct ChapterTranslation {
     snapshot: koharu_scene::Snapshot,
     targets: Vec<(EntityId, String)>,
     request: TranslationRequest,
+    source_language: Language,
     target_language: Language,
 }
 
@@ -129,12 +131,14 @@ impl ChapterTranslation {
                 .map(|target| (target.entity, target.source))
                 .collect(),
             request,
+            source_language,
             target_language,
         })
     }
 
-    fn patch_from_translations(
+    async fn patch_from_translations(
         &self,
+        translator: &Translator,
         translated: Vec<String>,
         provider: &str,
     ) -> Result<koharu_scene::Patch> {
@@ -144,29 +148,82 @@ impl ChapterTranslation {
             translated.len(),
             self.targets.len()
         );
-        let language = koharu_scene::LanguageTag::new(self.target_language.tag())?;
         let generated = generation(PRODUCER, provider)?;
         let mut edit = self.snapshot.edit_as(generated.clone());
-        for (entity, _) in &self.targets {
-            edit.observe::<SourceText>(*entity)?;
-            edit.observe::<Translation>(*entity)?;
-        }
-        for ((entity, source), text) in self.targets.iter().zip(translated) {
+        write_translations(
+            &self.snapshot,
+            &mut edit,
+            translator,
+            &generated,
+            self.source_language,
+            self.target_language,
+            self.targets
+                .iter()
+                .map(|(entity, source)| (*entity, source.as_str()))
+                .zip(translated)
+                .collect(),
+        )
+        .await?;
+        finish(edit)
+    }
+}
+
+/// Write each translation together with its review, so a review never
+/// outlives or precedes the text it judged.
+async fn write_translations(
+    snapshot: &koharu_scene::Snapshot,
+    edit: &mut koharu_scene::Edit,
+    translator: &Translator,
+    generated: &Generation,
+    source_language: Language,
+    target_language: Language,
+    translations: Vec<((EntityId, &str), String)>,
+) -> Result<()> {
+    let language = LanguageTag::new(target_language.tag())?;
+    let translations = translations
+        .into_iter()
+        .map(|((entity, source), text)| {
             let text = if source.trim() == "\u{2026}" {
                 "\u{2026}".to_owned()
             } else {
                 text
             };
-            edit.set(
-                *entity,
-                &Translation {
-                    text: Authored::generated(text, generated.clone()),
-                    language: Some(language.clone()),
+            (entity, source, text)
+        })
+        .collect::<Vec<_>>();
+    let pairs = translations
+        .iter()
+        .map(|(_, source, text)| (*source, text.as_str()))
+        .collect::<Vec<_>>();
+    let findings = review::review(translator, source_language, target_language, &pairs).await;
+    for ((entity, _, text), finding) in translations.into_iter().zip(findings) {
+        edit.observe::<SourceText>(entity)?;
+        edit.observe::<Translation>(entity)?;
+        edit.observe::<TranslationReview>(entity)?;
+        match finding {
+            Some(finding) => edit.set(
+                entity,
+                &TranslationReview {
+                    origin: Origin::Generated(generated.clone()),
+                    reason: finding.reason,
+                    reviewed: text.clone(),
+                    reference: finding.reference,
                 },
-            )?;
+            )?,
+            None if snapshot.component::<TranslationReview>(entity)?.is_some() => {
+                edit.remove::<TranslationReview>(entity)?;
+            }
+            None => {}
         }
-        finish(edit)
+        edit.set(
+            entity,
+            &Translation {
+                text: Authored::generated(text, generated.clone()),
+                language: Some(language.clone()),
+            },
+        )?;
     }
+    Ok(())
 }
 
 #[async_trait]
@@ -222,7 +279,9 @@ impl StageProcessor for Processor {
                 .translator
                 .translate(&profile.model, profile.generation, chapter.request.clone())
                 .await?;
-            return chapter.patch_from_translations(translated, provider);
+            return chapter
+                .patch_from_translations(&self.translator, translated, provider)
+                .await;
         }
         let (targets, context) = collect_inputs(&input, self.config.source_language)?;
         anyhow::ensure!(
@@ -260,27 +319,22 @@ impl StageProcessor for Processor {
             .translator
             .translate(&profile.model, profile.generation, request)
             .await?;
-        let language = LanguageTag::new(self.config.target_language.tag())?;
         let generated = generation(PRODUCER, provider)?;
         let mut edit = input.scene.edit_as(generated.clone());
-        for target in &targets {
-            edit.observe::<SourceText>(target.entity)?;
-            edit.observe::<Translation>(target.entity)?;
-        }
-        for (target, text) in targets.into_iter().zip(translated) {
-            let text = if target.source.trim() == "\u{2026}" {
-                "\u{2026}".to_owned()
-            } else {
-                text
-            };
-            edit.set(
-                target.entity,
-                &Translation {
-                    text: Authored::generated(text, generated.clone()),
-                    language: Some(language.clone()),
-                },
-            )?;
-        }
+        write_translations(
+            &input.scene,
+            &mut edit,
+            &self.translator,
+            &generated,
+            self.config.source_language,
+            self.config.target_language,
+            targets
+                .iter()
+                .map(|target| (target.entity, target.source.as_str()))
+                .zip(translated)
+                .collect(),
+        )
+        .await?;
         finish(edit)
     }
 }
@@ -891,7 +945,10 @@ mod tests {
             }]
         });
 
-        let patch = chapter.patch_from_response(&response.to_string()).unwrap();
+        let patch = chapter
+            .patch_from_response(&processor().translator, &response.to_string())
+            .await
+            .unwrap();
         session.commit(patch).await.unwrap();
         assert_eq!(
             session
@@ -965,7 +1022,10 @@ mod tests {
                 _ => unreachable!(),
             }
             assert!(
-                chapter.patch_from_response(&invalid.to_string()).is_err(),
+                chapter
+                    .patch_from_response(&processor().translator, &invalid.to_string())
+                    .await
+                    .is_err(),
                 "{error}"
             );
             assert!(
@@ -983,7 +1043,10 @@ mod tests {
                     .is_none()
             );
         }
-        let patch = chapter.patch_from_response(&response.to_string()).unwrap();
+        let patch = chapter
+            .patch_from_response(&processor().translator, &response.to_string())
+            .await
+            .unwrap();
         session.commit(patch).await.unwrap();
         for (entity, expected) in [(first, "translated first"), (second, "translated second")] {
             assert_eq!(
@@ -1019,7 +1082,8 @@ mod tests {
         session.commit(edit.finish().unwrap()).await.unwrap();
         let current = ChapterTranslation::from_snapshot(session.snapshot(), &config).unwrap();
         let error = current
-            .patch_from_response(&response.to_string())
+            .patch_from_response(&processor().translator, &response.to_string())
+            .await
             .unwrap_err()
             .to_string();
         assert!(error.contains("expected 2"), "{error}");
@@ -1064,7 +1128,10 @@ mod tests {
                 "translated_text": "перевод"
             }]
         });
-        let patch = chapter.patch_from_response(&response.to_string()).unwrap();
+        let patch = chapter
+            .patch_from_response(&processor().translator, &response.to_string())
+            .await
+            .unwrap();
         session.commit(patch).await.unwrap();
 
         let snapshot = session.snapshot();
@@ -1085,7 +1152,12 @@ mod tests {
         assert!(matches!(manual.text.origin, Origin::User));
 
         let changed = response.to_string().replace("\"source\"", "\"changed\"");
-        assert!(chapter.patch_from_response(&changed).is_err());
+        assert!(
+            chapter
+                .patch_from_response(&processor().translator, &changed)
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]

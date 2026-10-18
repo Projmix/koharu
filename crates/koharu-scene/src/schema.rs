@@ -7,7 +7,8 @@
 use crate::{
     BubbleRegion, DetectionAnalysis, EntityId, EntityOrigin, Error, Geometry, Group, OcrAnalysis,
     Page, Project, RasterLayer, Region, RegionSpec, Relation, Result, SourceText, TextContent,
-    TextGroup, TextLayout, TextRegion, TextRole, Translation, Typography, Visibility,
+    TextGroup, TextLayout, TextRegion, TextRole, Translation, TranslationReview, Typography,
+    Visibility,
     component::{Component, ComponentRecord, ValidationContext, decode, key},
     components::Assets,
     state::{Components, State},
@@ -60,6 +61,7 @@ component_schema! {
     DETECTION_ANALYSIS = 15 => DetectionAnalysis,
     ASSETS = 16 => Assets,
     ENTITY_ORIGIN = 17 => EntityOrigin,
+    TRANSLATION_REVIEW = 18 => TranslationReview,
 }
 
 pub(crate) fn validate_components(
@@ -105,6 +107,10 @@ pub(crate) fn validate_entity(state: &State, id: EntityId) -> Result<()> {
     if (has_source || has_translation || has(TEXT_ROLE)) && !has_content {
         Err(Error::invalid(format!(
             "entity {id} carries text content data but is not text content"
+        )))
+    } else if has(TRANSLATION_REVIEW) && !has_translation {
+        Err(Error::invalid(format!(
+            "entity {id} has a translation review but no translation"
         )))
     } else if has_translation && !has_source {
         Err(Error::invalid(format!(

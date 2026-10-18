@@ -78,6 +78,10 @@ pub(crate) async fn import_chapter_translation(
         return Ok(false);
     };
     let response = tokio::fs::read_to_string(file.path()).await?;
+    let translator = handle
+        .state::<koharu_pipeline::Pipeline>()
+        .translator()
+        .clone();
     let (commit, page) = {
         let mut projects = project.project.lock().await;
         if !processing.stops.lock().is_empty() {
@@ -91,7 +95,9 @@ pub(crate) async fn import_chapter_translation(
         // and language while holding the same lock used to commit the import.
         let config = PipelineConfig::load()?.read()?.clone();
         let chapter = ChapterTranslation::from_snapshot(project.snapshot(), &config.translation)?;
-        let patch = chapter.patch_from_response(response.trim_start_matches('\u{feff}'))?;
+        let patch = chapter
+            .patch_from_response(&translator, response.trim_start_matches('\u{feff}'))
+            .await?;
         let commit = project
             .commit_rebased(patch)
             .await?
