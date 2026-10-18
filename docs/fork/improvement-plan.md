@@ -1,12 +1,12 @@
 # Pipeline improvement plan
 
-A stage-by-stage review of `main` at `7f2d58b` (2026-10-18), with what is
-weak, what to change, the expected gain and a rough effort (S: a day or less,
-M: a few days, L: a week or more). Nothing here is implemented yet; the owner
-picks items, and each lands as its own PR. Upstream PR #2 (merge of upstream
-`main` at `85d6de3`) does not change these stages beyond removing
-`koharu_metrics` telemetry, so measurements below must be offline, not
-metrics events.
+A review of each stage (detection, OCR, cleaning, translation, typesetting
+and a final check) on `main` at `ce0ce15` (2026-10-18, after the merge of
+upstream `main` at `85d6de3`), with what is weak, what to change, the
+expected gain and a rough effort (S: a day or less, M: a few days, L: a week
+or more). Nothing here is implemented yet; the owner picks items, and each
+lands as its own PR. Upstream removed `koharu_metrics` telemetry, so the
+measurements below must be offline, not metrics events.
 
 Read together with [README.md](README.md) (fork state and the JEV OCR flow)
 and the root `AGENTS.md`. Line references are to `main` at the commit above.
@@ -18,15 +18,17 @@ and the root `AGENTS.md`. Line references are to `main` at the commit above.
 | 1 | Concurrent API OCR requests within a page | OCR | API and hybrid OCR several times faster | S |
 | 2 | Offline evaluation set and scorer | all | Lets every later choice be measured | M |
 | 3 | Review flags in Scene, then JEV OCR selection | OCR | Better text and an explicit "check by hand" list | M+M |
+| 3a | Keep profanity and register; cross-check suspicious lines with DeepL or Google | translation | Swearing and rude lines are not softened or dropped | M |
 | 4 | Surface text overflow and add "shorten" | translation, typesetting | Fewer manual rewrites of long lines | M |
 | 5 | Project glossary and character sheet | translation | Consistent names, gender and address in Russian | M |
-| 6 | Masked compositing and a fallback chain for API cleanup | inpainting | Art outside text stays untouched; fewer failed pages | M |
+| 6 | Masked compositing and a fallback chain for API cleanup | cleaning | Art outside text stays untouched; fewer failed pages | M |
 | 7 | Page images in chapter translation | translation | Speaker and gender from the art | M |
-| 8 | Per-region inpainting routing (fill, LaMa, cloud) | inpainting | Lower cloud cost, faster cleanup | M |
+| 8 | Per-region inpainting routing (fill, LaMa, cloud) | cleaning | Lower cloud cost, faster cleanup | M |
 | 9 | Missed-text check per page | detection | Text the detector skipped gets flagged | M |
 | 10 | Translation QA through JEV | translation | Suspicious translations flagged like OCR | S after 3 |
 | 11 | Reading-order checks for Japanese pages | detection | Fewer swapped lines in chapter context | M |
-| 12 | Tighter text masks from an unused mask model | detection, inpainting | Less over-erased art | M |
+| 12 | Tighter text masks from an unused mask model | detection, cleaning | Less over-erased art | M |
+| 13 | Final check before export | final QA | One list of everything still wrong on a chapter | M after 3 |
 
 ## Cross-cutting
 
@@ -173,6 +175,32 @@ through each provider's structured output.
   attaches images, while page mode does. For vision models, attach downscaled
   page images within the existing token budget, and fall back to text only
   when the estimate is over it.
+- **Profanity and register (item 3a).** The system prompt asks to preserve
+  "emotional tone" (`koharu-translator/src/prompt.rs:277`) but never says to
+  keep swearing, insults and slang at the same strength, and hosted LLMs
+  tend to soften or drop them. Nothing detects it: the Gemini adapter sends
+  no safety settings and no adapter treats a content-filter finish as its own
+  error. Plan, cheapest first:
+  1. State it in the prompt: keep profanity, insults, slurs used by
+     characters and crude slang at the source's strength; never censor,
+     soften, omit or add euphemisms.
+  2. Mark suspicious segments deterministically: a small per-language list
+     of source markers (for Japanese, for example `くそ`, `ちくしょう`,
+     `てめえ`, `死ね`, `殺す`, `ぶっ`), a translation much shorter than its
+     source relative to the language pair, an empty or refused output, or a
+     content-filter finish.
+  3. For marked segments only, translate the same segment through DeepL or
+     Google Cloud Translation, which are already providers here with keys in
+     the keychain. Hosted machine translation fails immediately, per
+     `AGENTS.md`; if it fails, flag the segment without the comparison.
+  4. Decide with JEV (text only fits it well): a `choice` of "LLM keeps the
+     intensity", "machine translation keeps it, LLM softened", "both
+     softened", plus the text of both. Raise a review flag that shows the
+     machine translation next to the LLM line. Never replace the LLM line
+     automatically: machine translation is usually worse at tone and
+     context. Without JEV, flag when the machine translation contains a
+     profanity marker of the target language and the LLM line does not.
+  Effort M; the compare step costs one DeepL or Google call per marked line.
 - **Translation QA (item 10).** JEV fits well here because the check is
   text-only: `noul` "meaning preserved", "gender and address match the
   glossary", "no untranslated source text". Flag, do not rewrite.
@@ -180,7 +208,7 @@ through each provider's structured output.
   chapter. If this happens in practice, split large chapters into page groups
   that share the glossary, through the same prompt path. Measure first.
 
-## Inpainting
+## Cleaning (inpainting)
 
 Current state: local LaMa, AOT, FLUX.2 Klein or RORem, tiled at 512 px with
 128 px context, with flat bubbles filled without inference
@@ -214,3 +242,24 @@ contour and hyphenates as a last resort. The missing parts are item 4
 colors and stroke only (`stages/detection.rs:620`), so SFX and shouted lines
 get the same font as dialogue. The unused `font_detector` model could map a
 region to a font class; treat it like item 12 (compare first, issue first).
+
+## Final check
+
+There is no final stage. Before export, nothing tells the user which pages
+still have problems. Add one chapter-level check (item 13) that reads the
+scene and the prepared frame and lists, per page, with a jump to each region:
+
+- open review flags from OCR, translation, profanity, overflow and cleaning;
+- empty translations and translations that still contain source-script
+  characters (kana or kanji in Russian text);
+- `TextOverflow` and `TextBelowReadableSize` from the render diagnostics;
+- text regions with no cleanup under them and leftover ink inside cleaned
+  masks (the same residual-ink check as item 6);
+- regions the missed-text check (item 9) found.
+
+Everything above is deterministic and free. As an option, a vision LLM can
+look at each rendered page next to the source page and answer a fixed list
+(untranslated visible text, text over art, broken cleanup) through structured
+output; JEV cannot do this part because it cannot see images. Show the result
+as a checklist, not as a blocking error: export stays possible. This reuses
+the review flags and adds no second job kind.
