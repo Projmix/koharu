@@ -13,7 +13,7 @@ use std::{sync::Arc, time::Duration};
 
 use koharu_ml::Device;
 
-use error::{Error, Result};
+use error::Result;
 use local::LocalTranslator;
 
 const MAX_ESTIMATED_CHAPTER_INPUT_TOKENS: usize = 100_000;
@@ -38,8 +38,12 @@ fn chapter_output_budget(request: &TranslationRequest) -> anyhow::Result<u32> {
 }
 
 pub use backend::{
-    OcrRequest, TranslationContext, TranslationRequest, TranslationSegmentMetadata, TranslationUnit,
+    CharacterGender, MarkedRegion, MarkupCharacter, MarkupKind, MarkupOutcome, MarkupRegion,
+    MarkupRequest, MarkupWithheld, OcrRequest, PreviousMarkup, SegmentSpeaker,
+    TranslationCharacter, TranslationContext, TranslationRequest, TranslationSegmentMetadata,
+    TranslationUnit,
 };
+pub use error::Error;
 pub use language::Language;
 pub use model::{GenerationConfig, Model, ModelSelection, Quantization};
 pub(crate) use model::{ModelGeneration, QuantizationDefinition, display_name};
@@ -211,6 +215,42 @@ impl Translator {
         .await?;
         let provider: &'static str = selection.provider.into();
         Ok((provider, text))
+    }
+
+    /// Labels the numbered regions of one page. A refusal or filtered answer
+    /// is an outcome; an answer that breaks the contract is
+    /// [`Error::InvalidMarkup`].
+    pub async fn mark_up(
+        &self,
+        selection: &ModelSelection,
+        generation: GenerationConfig,
+        mut request: MarkupRequest,
+    ) -> anyhow::Result<(&'static str, MarkupOutcome)> {
+        anyhow::ensure!(
+            selection.provider.supports_markup(),
+            "{} does not support scene markup",
+            selection.provider
+        );
+        anyhow::ensure!(
+            selection.vision,
+            "the selected scene markup model does not accept images"
+        );
+        let model = selection.model.as_deref().ok_or_else(|| {
+            anyhow::anyhow!("{} requires a selected markup model", selection.provider)
+        })?;
+        request.prepare_image()?;
+        let generation = generation.for_model(selection);
+        let providers = self.providers.read()?.clone();
+        let outcome = remote::mark_up(
+            &self.client,
+            &providers,
+            selection.provider,
+            model,
+            &generation,
+            &request,
+        )
+        .await?;
+        Ok((selection.provider.into(), outcome))
     }
 
     #[tracing::instrument(skip_all)]

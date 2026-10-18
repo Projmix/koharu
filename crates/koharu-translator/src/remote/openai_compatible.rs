@@ -10,8 +10,8 @@ use url::Url;
 
 use super::send_json;
 use crate::{
-    GenerationConfig, Model, OcrRequest, Provider, Result, TranslationRequest,
-    backend::encode_image, display_name, prompt,
+    GenerationConfig, MarkupOutcome, MarkupRequest, MarkupWithheld, Model, OcrRequest, Provider,
+    Result, TranslationRequest, backend::encode_image, display_name, prompt,
 };
 
 const DEFAULT_BASE_URL: &str = "http://localhost:11434/v1";
@@ -66,20 +66,42 @@ pub(super) async fn compatible_ocr(
 ) -> Result<String> {
     let api_key = koharu_secrets::get("openai-compatible")?;
     let endpoint = endpoint(config.base_url.as_ref(), "chat/completions");
-    let backend = ChatBackend {
+    let backend = vision_backend(&endpoint, api_key.as_ref(), model, generation);
+    recognize(client, backend, request).await
+}
+
+pub(super) async fn compatible_markup(
+    client: &Client,
+    config: &OpenAiCompatibleConfig,
+    model: &str,
+    generation: &GenerationConfig,
+    request: &MarkupRequest,
+) -> Result<MarkupOutcome> {
+    let api_key = koharu_secrets::get("openai-compatible")?;
+    let endpoint = endpoint(config.base_url.as_ref(), "chat/completions");
+    let backend = vision_backend(&endpoint, api_key.as_ref(), model, generation);
+    mark_up(client, backend, request).await
+}
+
+fn vision_backend<'a>(
+    endpoint: &'a str,
+    api_key: Option<&'a koharu_secrets::SecretString>,
+    model: &'a str,
+    generation: &GenerationConfig,
+) -> ChatBackend<'a> {
+    ChatBackend {
         reasoning_effort: generation
             .reasoning
             .map(|enabled| if enabled { "medium" } else { "none" }),
         ..ChatBackend::new(
             "openai-compatible",
-            &endpoint,
-            api_key.as_ref().map(ExposeSecret::expose_secret),
+            endpoint,
+            api_key.map(ExposeSecret::expose_secret),
             model,
             generation,
             ResponseMode::PromptOnly,
         )
-    };
-    recognize(client, backend, request).await
+    }
 }
 
 pub(super) async fn translate(
@@ -94,13 +116,16 @@ pub(super) async fn translate(
         None => http,
     };
     let response: ChatResponse = send_json(backend.provider, http).await?;
-    let text = response
-        .choices
-        .into_iter()
-        .next()
-        .context("chat completion returned no choices")?
-        .message
-        .content;
+    let text = match response.reply()? {
+        ChatReply::Content(text) => text,
+        ChatReply::Withheld(reason) => {
+            return Err(anyhow::anyhow!(
+                "{} withheld the translation ({reason:?})",
+                backend.provider
+            )
+            .into());
+        }
+    };
     Ok(prompt::translations(backend.provider, &text, request)?)
 }
 
@@ -158,6 +183,74 @@ pub(super) async fn recognize(
     request: &OcrRequest,
 ) -> Result<String> {
     let (system, user) = prompt::ocr_prompts(request);
+    let reply = vision_chat(
+        client,
+        &backend,
+        system,
+        user,
+        &request.image,
+        "manga_ocr",
+        prompt::ocr_output_schema(),
+    )
+    .await?;
+    let text = match reply {
+        ChatReply::Content(text) => text,
+        ChatReply::Withheld(reason) => {
+            return Err(
+                anyhow::anyhow!("{} withheld the OCR text ({reason:?})", backend.provider).into(),
+            );
+        }
+    };
+    Ok(prompt::ocr_text(backend.provider, &text)?)
+}
+
+pub(super) async fn mark_up(
+    client: &Client,
+    backend: ChatBackend<'_>,
+    request: &MarkupRequest,
+) -> Result<MarkupOutcome> {
+    let (system, user) = prompt::markup_prompts(request)?;
+    let reply = vision_chat(
+        client,
+        &backend,
+        system,
+        user,
+        &request.image,
+        "manga_scene_markup",
+        prompt::markup_output_schema(),
+    )
+    .await?;
+    markup_outcome(backend.provider, reply, request)
+}
+
+fn markup_outcome(
+    provider: &'static str,
+    reply: ChatReply,
+    request: &MarkupRequest,
+) -> Result<MarkupOutcome> {
+    Ok(match reply {
+        ChatReply::Content(text) => {
+            let (regions, new_characters) = prompt::markup(provider, &text, request)?;
+            MarkupOutcome::Marked {
+                regions,
+                new_characters,
+            }
+        }
+        ChatReply::Withheld(reason) => MarkupOutcome::Withheld(reason),
+    })
+}
+
+/// One system prompt, one user text and one image, answered under the
+/// backend's response mode. OCR and scene markup share this request shape.
+async fn vision_chat(
+    client: &Client,
+    backend: &ChatBackend<'_>,
+    system: String,
+    user: String,
+    image: &image::DynamicImage,
+    schema_name: &'static str,
+    schema: Value,
+) -> Result<ChatReply> {
     let body = ChatRequest {
         model: backend.model,
         messages: [
@@ -171,7 +264,7 @@ pub(super) async fn recognize(
                     ContentPart::Text { text: user },
                     ContentPart::ImageUrl {
                         image_url: ImageUrl {
-                            url: encode_image(&request.image)?.data_url(),
+                            url: encode_image(image)?.data_url(),
                         },
                     },
                 ]),
@@ -186,9 +279,7 @@ pub(super) async fn recognize(
         reasoning_effort: backend.reasoning_effort,
         reasoning: backend.reasoning.map(|enabled| ReasoningConfig { enabled }),
         thinking: backend.thinking.map(|kind| ThinkingConfig { kind }),
-        response_format: backend
-            .response_mode
-            .response_format("manga_ocr", prompt::ocr_output_schema()),
+        response_format: backend.response_mode.response_format(schema_name, schema),
     };
     let mut body = serde_json::to_value(body).map_err(anyhow::Error::from)?;
     if backend.require_parameters {
@@ -200,14 +291,7 @@ pub(super) async fn recognize(
         None => http,
     };
     let response: ChatResponse = send_json(backend.provider, http).await?;
-    let text = response
-        .choices
-        .into_iter()
-        .next()
-        .context("chat completion returned no choices")?
-        .message
-        .content;
-    Ok(prompt::ocr_text(backend.provider, &text)?)
+    response.reply()
 }
 
 pub(super) struct ChatBackend<'a> {
@@ -412,11 +496,50 @@ struct ChatResponse {
 #[derive(Deserialize)]
 struct Choice {
     message: ResponseMessage,
+    #[serde(default)]
+    finish_reason: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct ResponseMessage {
-    content: String,
+    #[serde(default)]
+    content: Option<String>,
+    #[serde(default)]
+    refusal: Option<String>,
+}
+
+/// The first choice of a completion: its content, or why the model gave none.
+#[derive(Debug, PartialEq)]
+enum ChatReply {
+    Content(String),
+    Withheld(MarkupWithheld),
+}
+
+impl ChatResponse {
+    fn reply(self) -> Result<ChatReply> {
+        let choice = self
+            .choices
+            .into_iter()
+            .next()
+            .context("chat completion returned no choices")?;
+        Ok(
+            if choice
+                .message
+                .refusal
+                .as_deref()
+                .is_some_and(|refusal| !refusal.trim().is_empty())
+            {
+                ChatReply::Withheld(MarkupWithheld::Refused)
+            } else if choice.finish_reason.as_deref() == Some("content_filter") {
+                ChatReply::Withheld(MarkupWithheld::ContentFilter)
+            } else {
+                match choice.message.content {
+                    Some(content) if !content.trim().is_empty() => ChatReply::Content(content),
+                    _ => ChatReply::Withheld(MarkupWithheld::Empty),
+                }
+            },
+        )
+    }
 }
 
 #[derive(Deserialize)]
@@ -531,7 +654,9 @@ mod tests {
             }]
         }))
         .unwrap();
-        let text = response.choices.into_iter().next().unwrap().message.content;
+        let ChatReply::Content(text) = response.reply().unwrap() else {
+            panic!("the reproduction has content");
+        };
         let request = TranslationRequest::new(["one"], crate::Language::Russian);
 
         assert_eq!(
@@ -541,6 +666,61 @@ mod tests {
             ),
             "openrouter returned invalid translation JSON: expected value at line 1 column 1"
         );
+    }
+
+    fn reply(choice: serde_json::Value) -> ChatReply {
+        serde_json::from_value::<ChatResponse>(serde_json::json!({ "choices": [choice] }))
+            .unwrap()
+            .reply()
+            .unwrap()
+    }
+
+    #[test]
+    fn refusals_filters_and_empty_answers_withhold_markup() {
+        assert_eq!(
+            reply(serde_json::json!({
+                "finish_reason": "stop",
+                "message": { "content": null, "refusal": "I can't help with that." }
+            })),
+            ChatReply::Withheld(MarkupWithheld::Refused)
+        );
+        assert_eq!(
+            reply(serde_json::json!({
+                "finish_reason": "content_filter",
+                "message": { "content": "{\"regions\":" }
+            })),
+            ChatReply::Withheld(MarkupWithheld::ContentFilter)
+        );
+        assert_eq!(
+            reply(serde_json::json!({ "finish_reason": "stop", "message": { "content": null } })),
+            ChatReply::Withheld(MarkupWithheld::Empty)
+        );
+        assert_eq!(
+            reply(serde_json::json!({ "message": { "content": "  " } })),
+            ChatReply::Withheld(MarkupWithheld::Empty)
+        );
+
+        let request = MarkupRequest {
+            image: std::sync::Arc::new(image::DynamicImage::new_rgb8(1, 1)),
+            source_language: None,
+            regions: Vec::new(),
+            previous: Vec::new(),
+            characters: Vec::new(),
+            instructions: None,
+        };
+        assert_eq!(
+            markup_outcome(
+                "test",
+                ChatReply::Withheld(MarkupWithheld::Refused),
+                &request
+            )
+            .unwrap(),
+            MarkupOutcome::Withheld(MarkupWithheld::Refused)
+        );
+        assert!(matches!(
+            markup_outcome("test", ChatReply::Content("{}".to_owned()), &request),
+            Err(crate::Error::InvalidMarkup { .. })
+        ));
     }
 
     #[test]

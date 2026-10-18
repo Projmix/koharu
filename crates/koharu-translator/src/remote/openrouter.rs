@@ -8,7 +8,10 @@ use reqwest::Client;
 use serde::Deserialize;
 
 use super::openai_compatible::{ChatBackend, ResponseMode};
-use crate::{GenerationConfig, Model, OcrRequest, Provider, Result, TranslationRequest};
+use crate::{
+    GenerationConfig, MarkupOutcome, MarkupRequest, Model, OcrRequest, Provider, Result,
+    TranslationRequest,
+};
 
 const CHAT_URL: &str = "https://openrouter.ai/api/v1/chat/completions";
 const MODELS_URL: &str = "https://openrouter.ai/api/v1/models";
@@ -60,19 +63,21 @@ pub(super) async fn recognize(
         koharu_secrets::get("openrouter")?.context("openrouter API key is not configured")?;
     // Enforce the OCR schema natively, as translation does; without it some
     // models (Gemini Flash among them) wrap the JSON in a Markdown fence.
-    let backend = ChatBackend {
-        require_parameters: true,
-        reasoning: generation.reasoning,
-        ..ChatBackend::new(
-            "openrouter",
-            CHAT_URL,
-            Some(api_key.expose_secret()),
-            model,
-            generation,
-            ResponseMode::JsonSchema,
-        )
-    };
+    let backend = translation_backend(Some(api_key.expose_secret()), model, generation);
     super::openai_compatible::recognize(client, backend, request).await
+}
+
+pub(super) async fn mark_up(
+    client: &Client,
+    _config: &OpenRouterConfig,
+    model: &str,
+    generation: &GenerationConfig,
+    request: &MarkupRequest,
+) -> Result<MarkupOutcome> {
+    let api_key =
+        koharu_secrets::get("openrouter")?.context("openrouter API key is not configured")?;
+    let backend = translation_backend(Some(api_key.expose_secret()), model, generation);
+    super::openai_compatible::mark_up(client, backend, request).await
 }
 
 pub(super) async fn models(client: &Client) -> Result<Vec<Model>> {

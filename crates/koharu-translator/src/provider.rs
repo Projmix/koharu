@@ -216,6 +216,15 @@ impl Provider {
         )
     }
 
+    /// Providers that answer a page image under a JSON response contract.
+    #[must_use]
+    pub const fn supports_markup(self) -> bool {
+        matches!(
+            self,
+            Self::OpenAi | Self::OpenAiCompatible | Self::OpenRouter
+        )
+    }
+
     #[must_use]
     pub const fn supports_translation(self) -> bool {
         !matches!(self, Self::QwenOcr)

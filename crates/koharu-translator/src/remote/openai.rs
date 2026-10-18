@@ -8,7 +8,8 @@ use serde::Deserialize;
 use super::openai_compatible::{ChatBackend, ResponseMode};
 use super::send_json;
 use crate::{
-    GenerationConfig, Model, OcrRequest, Provider, Result, TranslationRequest, display_name,
+    GenerationConfig, MarkupOutcome, MarkupRequest, Model, OcrRequest, Provider, Result,
+    TranslationRequest, display_name,
 };
 
 const URL: &str = "https://api.openai.com/v1/chat/completions";
@@ -78,21 +79,7 @@ pub(super) async fn translate(
     request: &TranslationRequest,
 ) -> Result<Vec<String>> {
     let api_key = koharu_secrets::get("openai")?.context("openai API key is not configured")?;
-    let backend = ChatBackend {
-        max_tokens: None,
-        max_completion_tokens: generation.max_tokens,
-        reasoning_effort: generation
-            .reasoning
-            .map(|enabled| if enabled { "medium" } else { "none" }),
-        ..ChatBackend::new(
-            "openai",
-            URL,
-            Some(api_key.expose_secret()),
-            model,
-            generation,
-            ResponseMode::JsonSchema,
-        )
-    };
+    let backend = chat_backend(api_key.expose_secret(), model, generation);
     super::openai_compatible::translate(client, backend, request).await
 }
 
@@ -104,7 +91,28 @@ pub(super) async fn recognize(
     request: &OcrRequest,
 ) -> Result<String> {
     let api_key = koharu_secrets::get("openai")?.context("openai API key is not configured")?;
-    let backend = ChatBackend {
+    let backend = chat_backend(api_key.expose_secret(), model, generation);
+    super::openai_compatible::recognize(client, backend, request).await
+}
+
+pub(super) async fn mark_up(
+    client: &Client,
+    _config: &OpenAiConfig,
+    model: &str,
+    generation: &GenerationConfig,
+    request: &MarkupRequest,
+) -> Result<MarkupOutcome> {
+    let api_key = koharu_secrets::get("openai")?.context("openai API key is not configured")?;
+    let backend = chat_backend(api_key.expose_secret(), model, generation);
+    super::openai_compatible::mark_up(client, backend, request).await
+}
+
+fn chat_backend<'a>(
+    api_key: &'a str,
+    model: &'a str,
+    generation: &GenerationConfig,
+) -> ChatBackend<'a> {
+    ChatBackend {
         max_tokens: None,
         max_completion_tokens: generation.max_tokens,
         reasoning_effort: generation
@@ -113,13 +121,12 @@ pub(super) async fn recognize(
         ..ChatBackend::new(
             "openai",
             URL,
-            Some(api_key.expose_secret()),
+            Some(api_key),
             model,
             generation,
             ResponseMode::JsonSchema,
         )
-    };
-    super::openai_compatible::recognize(client, backend, request).await
+    }
 }
 
 #[derive(Deserialize)]
