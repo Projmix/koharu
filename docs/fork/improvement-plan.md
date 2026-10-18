@@ -14,6 +14,14 @@ status) and the root `AGENTS.md`. Line references are to `main` at the commit ab
 
 ## Priorities
 
+Owner's priority (2026-10-18): OCR accuracy and overlapping text blocks come
+first; profanity and translation accuracy wait. Done for it so far: OCR crops
+no longer read a neighbor region's text from their context padding. Open:
+text shared by two partially overlapping regions is still read in both, and
+detection keeps partially overlapping text boxes unless one is nested in the
+other or they are near-identical; fixing that needs measurements on real
+pages first.
+
 | # | Item | Stage | Gain | Effort |
 | --- | --- | --- | --- | --- |
 | 1 | Concurrent API OCR requests within a page (done) | OCR | API and hybrid OCR several times faster | S |
