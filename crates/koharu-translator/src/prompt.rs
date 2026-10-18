@@ -367,7 +367,9 @@ pub(crate) fn ocr_prompts(request: &OcrRequest) -> (String, String) {
     let mut system = indoc! {"
         You are an OCR engine for manga and comics.
         Transcribe every visible character in the attached cropped text region exactly as written.
-        Preserve the original language, punctuation, repeated characters, ruby/furigana, and meaningful line breaks.
+        Preserve the original language, punctuation, repeated characters, and meaningful line breaks.
+        Omit ruby/furigana: small reading glosses beside kanji are not part of the text.
+        Read vertical text column by column from right to left, each column from top to bottom.
         Do not translate, explain, normalize, autocorrect, censor, or infer text that is not visible.
         Return only a JSON object with one string field named `text`.
     "}
