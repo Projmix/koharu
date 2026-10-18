@@ -288,8 +288,7 @@ async fn run_api(
         requests.push((content, region, geometry, request));
     }
     // Regions are independent requests, so a page keeps a few in flight while
-    // results stay in region order. The first error drops the requests still
-    // running, which also stops further spending after a quota error.
+    // results stay in region order.
     let recognized = stream::iter(requests)
         .map(|(content, region, geometry, request)| async move {
             let (_, text) = translator
@@ -302,14 +301,48 @@ async fn run_api(
                 text: normalize_ocr_text(text),
             })
         })
-        .buffered(API_OCR_CONCURRENCY)
-        .try_collect::<Vec<_>>();
-    let results = tokio::select! {
-        biased;
-        _ = input.stop.cancelled() => return finish(input.scene.edit()),
-        results = recognized => results?,
+        .buffered(API_OCR_CONCURRENCY);
+    let results = if config.method == OcrMethod::LocalApi {
+        let recognized = recognized.collect::<Vec<_>>();
+        let attempts = tokio::select! {
+            biased;
+            _ = input.stop.cancelled() => return finish(input.scene.edit()),
+            attempts = recognized => attempts,
+        };
+        keep_drafts_for_failures(attempts)?
+    } else {
+        // The first error drops the requests still running, which also stops
+        // further spending after a quota error.
+        tokio::select! {
+            biased;
+            _ = input.stop.cancelled() => return finish(input.scene.edit()),
+            results = recognized.try_collect::<Vec<_>>() => results?,
+        }
     };
     apply_results(input, page, model_name, source_language, results)
+}
+
+/// A hybrid region whose API request failed keeps its committed local draft
+/// instead of failing the page, and stays eligible for the next API pass
+/// because its text is still owned by the local model. A failure on every
+/// region (a bad key, an exhausted quota) is a configuration problem and
+/// fails the page.
+fn keep_drafts_for_failures(attempts: Vec<Result<OcrResult>>) -> Result<Vec<OcrResult>> {
+    let mut results = Vec::with_capacity(attempts.len());
+    let mut first_error = None;
+    for attempt in attempts {
+        match attempt {
+            Ok(result) => results.push(result),
+            Err(error) => {
+                tracing::warn!(error = %format!("{error:#}"), "API OCR failed; keeping the local draft");
+                first_error.get_or_insert(error);
+            }
+        }
+    }
+    match first_error {
+        Some(error) if results.is_empty() => Err(error),
+        _ => Ok(results),
+    }
 }
 
 /// Keep provider-facing OCR images above the minimum side length accepted by
@@ -719,6 +752,30 @@ mod tests {
             !hybrid
                 .skip(&input(&session, page).with_ocr_pass(OcrPass::Local))
                 .unwrap()
+        );
+    }
+
+    #[test]
+    fn hybrid_api_failure_keeps_the_local_draft_unless_every_region_fails() {
+        let result = |content| OcrResult {
+            content,
+            region: EntityId::new(),
+            geometry: Geometry::rectangle(0.0, 0.0, 10.0, 10.0),
+            text: "テキスト".to_owned(),
+        };
+        let (first, last) = (EntityId::new(), EntityId::new());
+        let kept = keep_drafts_for_failures(vec![
+            Ok(result(first)),
+            Err(anyhow!("EOF while parsing")),
+            Ok(result(last)),
+        ])
+        .unwrap();
+        assert_eq!(
+            kept.iter().map(|result| result.content).collect::<Vec<_>>(),
+            [first, last]
+        );
+        assert!(
+            keep_drafts_for_failures(vec![Err(anyhow!("quota")), Err(anyhow!("quota"))]).is_err()
         );
     }
 
