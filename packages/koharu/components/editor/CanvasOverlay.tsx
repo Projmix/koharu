@@ -30,7 +30,6 @@ import type {
 
 interface CanvasOverlayProps {
   page: Page
-  camera: Camera
   selected: EntityId[]
   hovered: EntityId | null
   frames: Readonly<Record<EntityId, Frame>>
@@ -47,7 +46,6 @@ interface CanvasOverlayProps {
 
 export function CanvasOverlay({
   page,
-  camera,
   selected,
   hovered,
   frames,
@@ -62,6 +60,8 @@ export function CanvasOverlay({
   onTransformEnd,
 }: CanvasOverlayProps) {
   const root = useRef<HTMLDivElement>(null)
+  // Subscribed here so a camera change re-renders the overlay alone, not the whole workspace.
+  const camera = useKoharuStore((state) => state.camera)
   const textTransformTarget = useKoharuStore((state) => state.textTransformTarget)
   const expandedSelection = useMemo(
     () => expandLayerSelection(page.layers, selected),

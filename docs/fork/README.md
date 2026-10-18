@@ -20,8 +20,12 @@ the plan changes; it was last checked on 2026-10-18 against the rebuilt `main`.
 ## Branch and upstream state
 
 On 2026-10-18 `main` was rebuilt (PR #1) from `codex/upstream-editor-ocr`
-plus a real `git merge` of upstream tag `0.83.5`. Git now tracks the upstream
-base, so the next sync is `git fetch upstream tag <x>` then `git merge`.
+plus a real `git merge` of upstream tag `0.83.5`, then of upstream `main` at
+`85d6de3` (unreleased work after 0.83.5). Git tracks the upstream base, so the
+next sync is `git fetch upstream main` (or a tag) then `git merge`. Upstream
+removed `koharu-metrics` telemetry; fork code must not emit `koharu_metrics`
+events. The Wu Chinese locale reuses Simplified Chinese text for fork-only
+strings until someone translates them.
 
 The previous `main` commit `d1ebfef` (JEV, Japanese OCR validation, copyfit
 variants, cloud inpainting fallback chain) never compiled and is not in the
