@@ -35,7 +35,7 @@ use specta::Type;
 use super::{StageInput, StageProcessor, finish, generation};
 use crate::{DetectionModel, ModelCell};
 
-const OUTPUT_MODEL_ID: &str = "mayocream/koharu-layout-rfdetr-seg-2xl-1152#postprocess-4";
+const OUTPUT_MODEL_ID: &str = "mayocream/koharu-layout-rfdetr-seg-2xl-1152#postprocess-5";
 #[cfg(test)]
 const LEGACY_OUTPUT_MODEL_ID: &str = "mayocream/koharu-layout-rfdetr-seg-2xl-1152";
 const MODEL_NAME: &str = "koharu-layout-rfdetr-seg-2xl";
@@ -1840,34 +1840,41 @@ fn clamp_to_image(detections: &mut Vec<KoharuLayoutDetection>, size: ImageSize) 
 }
 
 /// On real pages the detector returns low-confidence onomatopoeia boxes that
-/// span several lines of dialogue or a large part of the page. Such a box is
-/// dropped when it is below `SPURIOUS_ONOMATOPOEIA_MAX_SCORE` and either
-/// encloses at least half of two other text or onomatopoeia boxes, or covers
-/// more than `SPURIOUS_ONOMATOPOEIA_PAGE_FRACTION` of the page. Box
+/// span several lines of dialogue, several smaller effects, or a large part of
+/// the page. Below `SPURIOUS_ONOMATOPOEIA_MAX_SCORE`, a box is dropped when it
+/// encloses at least half of two text or onomatopoeia boxes scored at least as
+/// high as itself, or when it covers more than
+/// `SPURIOUS_ONOMATOPOEIA_PAGE_FRACTION` of the page and encloses one. Box
 /// containment is used, not masks: such a box's mask covers its own strokes,
-/// not the dialogue it spans. A confident effect is always kept.
+/// not the dialogue it spans. A confident effect, or a large one that covers
+/// no other text, such as a title, is kept.
 fn remove_spurious_onomatopoeia(detections: &mut Vec<KoharuLayoutDetection>, size: ImageSize) {
     let page_area = size.width as f32 * size.height as f32;
     let spurious = detections
         .iter()
         .enumerate()
         .map(|(index, candidate)| {
-            candidate.label == "onomatopoeia"
-                && candidate.score < SPURIOUS_ONOMATOPOEIA_MAX_SCORE
-                && (area(candidate.bbox) > page_area * SPURIOUS_ONOMATOPOEIA_PAGE_FRACTION
-                    || detections
-                        .iter()
-                        .enumerate()
-                        .filter(|&(other_index, other)| {
-                            let other_area = area(other.bbox);
-                            other_index != index
-                                && is_text_detection(other)
-                                && other_area > 0.0
-                                && intersection_area(candidate.bbox, other.bbox) / other_area
-                                    >= SPURIOUS_ONOMATOPOEIA_CONTAINMENT
-                        })
-                        .count()
-                        >= 2)
+            if candidate.label != "onomatopoeia"
+                || candidate.score >= SPURIOUS_ONOMATOPOEIA_MAX_SCORE
+            {
+                return false;
+            }
+            let enclosed = detections
+                .iter()
+                .enumerate()
+                .filter(|&(other_index, other)| {
+                    let other_area = area(other.bbox);
+                    other_index != index
+                        && is_text_detection(other)
+                        && other.score >= candidate.score
+                        && other_area > 0.0
+                        && intersection_area(candidate.bbox, other.bbox) / other_area
+                            >= SPURIOUS_ONOMATOPOEIA_CONTAINMENT
+                })
+                .count();
+            enclosed >= 2
+                || enclosed >= 1
+                    && area(candidate.bbox) > page_area * SPURIOUS_ONOMATOPOEIA_PAGE_FRACTION
         })
         .collect::<Vec<_>>();
     let mut index = 0usize;
@@ -3207,9 +3214,11 @@ mod tests {
 
     #[test]
     fn spurious_onomatopoeia_boxes_are_removed() {
-        // Raw boxes from a real 1280x1280 page: a 0.25 effect over a line of
-        // dialogue and two small effects, a 0.38 effect over 42% of the page,
-        // and a 0.81 effect that overlaps one line and must stay.
+        // Raw boxes from real 1280-pixel-wide pages: a 0.25 effect over a line
+        // of dialogue and two better-scored effects, a 0.38 effect over 42% of
+        // a page and a line of dialogue, a 0.81 effect that overlaps one line,
+        // a 0.37 effect around two weaker fragments, and a 0.23 title over 25%
+        // of a short page that covers nothing else. The last three must stay.
         let page = ImageSize {
             width: 1280,
             height: 1280,
@@ -3217,11 +3226,15 @@ mod tests {
         let mut detections = vec![
             detection("onomatopoeia", 0.25, [626.0, 380.0, 849.0, 608.0]),
             detection("text", 0.9, [828.0, 366.0, 859.0, 426.0]),
-            detection("onomatopoeia", 0.6, [706.0, 416.0, 727.0, 460.0]),
-            detection("onomatopoeia", 0.6, [830.0, 490.0, 846.0, 541.0]),
+            detection("onomatopoeia", 0.48, [706.0, 416.0, 727.0, 460.0]),
+            detection("onomatopoeia", 0.33, [770.0, 490.0, 786.0, 541.0]),
             detection("onomatopoeia", 0.38, [18.0, 12.0, 1267.0, 566.0]),
-            detection("onomatopoeia", 0.81, [433.0, 335.0, 712.0, 567.0]),
-            detection("text", 0.9, [624.0, 309.0, 659.0, 392.0]),
+            detection("text", 0.9, [100.0, 100.0, 140.0, 300.0]),
+            detection("onomatopoeia", 0.81, [433.0, 735.0, 712.0, 967.0]),
+            detection("text", 0.9, [624.0, 709.0, 659.0, 792.0]),
+            detection("onomatopoeia", 0.37, [1121.0, 831.0, 1154.0, 889.0]),
+            detection("onomatopoeia", 0.2, [1125.0, 835.0, 1150.0, 850.0]),
+            detection("onomatopoeia", 0.2, [1125.0, 860.0, 1150.0, 880.0]),
         ];
 
         remove_spurious_onomatopoeia(&mut detections, page);
@@ -3231,8 +3244,21 @@ mod tests {
             .filter(|detection| detection.label == "onomatopoeia")
             .map(|detection| detection.score)
             .collect::<Vec<_>>();
-        assert_eq!(scores, [0.6, 0.6, 0.81]);
-        assert_eq!(detections.len(), 5);
+        assert_eq!(scores, [0.48, 0.33, 0.81, 0.37, 0.2, 0.2]);
+
+        let mut title = vec![detection(
+            "onomatopoeia",
+            0.23,
+            [203.0, 123.0, 1250.0, 300.0],
+        )];
+        remove_spurious_onomatopoeia(
+            &mut title,
+            ImageSize {
+                width: 1280,
+                height: 568,
+            },
+        );
+        assert_eq!(title.len(), 1);
     }
 
     #[test]
