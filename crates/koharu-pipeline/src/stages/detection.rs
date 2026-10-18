@@ -35,7 +35,7 @@ use specta::Type;
 use super::{StageInput, StageProcessor, finish, generation};
 use crate::{DetectionModel, ModelCell};
 
-const OUTPUT_MODEL_ID: &str = "mayocream/koharu-layout-rfdetr-seg-2xl-1152#postprocess-5";
+const OUTPUT_MODEL_ID: &str = "mayocream/koharu-layout-rfdetr-seg-2xl-1152#postprocess-6";
 #[cfg(test)]
 const LEGACY_OUTPUT_MODEL_ID: &str = "mayocream/koharu-layout-rfdetr-seg-2xl-1152";
 const MODEL_NAME: &str = "koharu-layout-rfdetr-seg-2xl";
@@ -57,6 +57,10 @@ const NESTED_TEXT_CONTAINMENT_THRESHOLD: f32 = 0.8;
 const SPURIOUS_ONOMATOPOEIA_MAX_SCORE: f32 = 0.5;
 const SPURIOUS_ONOMATOPOEIA_CONTAINMENT: f32 = 0.5;
 const SPURIOUS_ONOMATOPOEIA_PAGE_FRACTION: f32 = 0.2;
+const PAGE_NUMBER_EDGE_FRACTION: f32 = 0.012;
+const PAGE_NUMBER_MAX_WIDTH_FRACTION: f32 = 0.016;
+const PAGE_NUMBER_MAX_HEIGHT_FRACTION: f32 = 0.035;
+const PAGE_NUMBER_MARGIN_FRACTION: f32 = 0.15;
 const FREE_TEXT_ROLE: &str = "dev.koharu.text.free-text";
 const DIALOGUE_ROLE: &str = "dev.koharu.text.dialogue";
 const ONOMATOPOEIA_ROLE: &str = "dev.koharu.text.onomatopoeia";
@@ -379,6 +383,7 @@ async fn write_page(
     clamp_to_image(&mut detections, size);
     non_maximum_suppression(&mut detections, 0.5);
     remove_spurious_onomatopoeia(&mut detections, size);
+    remove_page_numbers(&mut detections, size);
     remove_nested_text_detections(&mut detections);
     sort_by_layout(&mut detections, source_language);
 
@@ -1885,6 +1890,29 @@ fn remove_spurious_onomatopoeia(detections: &mut Vec<KoharuLayoutDetection>, siz
     });
 }
 
+/// Scanned chapters print the page number as a narrow column of digits
+/// against the left or right page edge, in the top or bottom margin, and the
+/// detector reports it as text. It is not part of the work, so a text box that
+/// touches a side edge within `PAGE_NUMBER_EDGE_FRACTION` of the page width,
+/// is narrower than `PAGE_NUMBER_MAX_WIDTH_FRACTION` of it, is shorter than
+/// `PAGE_NUMBER_MAX_HEIGHT_FRACTION` of the page height, and sits in the outer
+/// `PAGE_NUMBER_MARGIN_FRACTION` of the height is dropped.
+fn remove_page_numbers(detections: &mut Vec<KoharuLayoutDetection>, size: ImageSize) {
+    let (width, height) = (size.width as f32, size.height as f32);
+    detections.retain(|detection| {
+        let [left, top, right, bottom] = detection.bbox;
+        let center_y = (top + bottom) / 2.0;
+        let page_number = detection.label == "text"
+            && (left <= width * PAGE_NUMBER_EDGE_FRACTION
+                || right >= width * (1.0 - PAGE_NUMBER_EDGE_FRACTION))
+            && right - left < width * PAGE_NUMBER_MAX_WIDTH_FRACTION
+            && bottom - top < height * PAGE_NUMBER_MAX_HEIGHT_FRACTION
+            && (center_y < height * PAGE_NUMBER_MARGIN_FRACTION
+                || center_y > height * (1.0 - PAGE_NUMBER_MARGIN_FRACTION));
+        !page_number
+    });
+}
+
 fn remove_nested_text_detections(detections: &mut Vec<KoharuLayoutDetection>) {
     let nested = detections
         .iter()
@@ -2451,7 +2479,8 @@ mod tests {
         StageInput, StageProcessor, best_container, clamp_to_image, closed_mask_for, color_palette,
         generation, infer_typography, layout_order, link_dialogue_regions, mask_containment,
         mask_for, mask_geometry, non_maximum_suppression, normalize_text_color,
-        remove_nested_text_detections, remove_spurious_onomatopoeia, write_region,
+        remove_nested_text_detections, remove_page_numbers, remove_spurious_onomatopoeia,
+        write_region,
     };
 
     #[test]
@@ -3259,6 +3288,35 @@ mod tests {
             },
         );
         assert_eq!(title.len(), 1);
+    }
+
+    #[test]
+    fn page_numbers_at_the_side_edge_are_removed() {
+        // Page numbers from a real 1280-pixel chapter (already clipped to the
+        // page), then a short line of text at the edge mid-page, a wider
+        // caption in the bottom margin, and an effect where a number would be.
+        let page = ImageSize {
+            width: 1280,
+            height: 1280,
+        };
+        let mut detections = vec![
+            detection("text", 0.45, [0.0, 1115.0, 10.0, 1147.0]),
+            detection("text", 0.61, [1268.0, 1114.0, 1280.0, 1146.0]),
+            detection("text", 0.25, [1269.0, 1115.0, 1280.0, 1146.0]),
+            detection("text", 0.9, [2.0, 600.0, 18.0, 640.0]),
+            detection("text", 0.9, [1180.0, 1110.0, 1278.0, 1150.0]),
+            detection("onomatopoeia", 0.4, [1268.0, 1114.0, 1280.0, 1146.0]),
+        ];
+
+        remove_page_numbers(&mut detections, page);
+
+        assert_eq!(
+            detections
+                .iter()
+                .map(|detection| detection.bbox[1])
+                .collect::<Vec<_>>(),
+            [600.0, 1110.0, 1114.0]
+        );
     }
 
     #[test]
