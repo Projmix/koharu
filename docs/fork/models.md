@@ -45,6 +45,20 @@ the result. Last updated 2026-10-18.
 
 Local, per region crop.
 
+Measured 2026-10-18 on 240 crops of JMangaBench_Read @ `b3e5765` (180
+printed, 60 handwritten, seeded sample; pages newer than Manga109), CPU only
+(i5-1235U), debug build, CER after the benchmark's RIN normalization:
+
+| Model | CER printed | CER handwritten | Exact line | Time per crop |
+| --- | --- | --- | --- | --- |
+| Manga OCR | 1.6% | 14.4% | 78% | 0.4 s |
+| Hayai OCR v2.1 | 2.0% | 4.7% | 85% | 0.6 s |
+| PaddleOCR-VL 1.6 GGUF | 2.5% | 12.4% | 78% | 12 s |
+| PaddleOCR-VL-For-Manga (143 printed crops so far) | 0.7% | pending | 94% | 19 s |
+
+On the same 143 printed crops the others score 1.8% (Manga OCR), 2.1%
+(Hayai) and 2.7% (Paddle 1.6).
+
 | Model | Status | Source | Notes |
 | --- | --- | --- | --- |
 | PaddleOCR-VL 1.6 (GGUF) | in use (default) | `PaddlePaddle/PaddleOCR-VL-1.6-GGUF` @ `511b096` | General document VLM, multilingual. No manga-specific evidence. |
@@ -52,7 +66,7 @@ Local, per region crop.
 | Baberu OCR | in use | `genshiai-daichi/baberu-ocr` @ `d9cc131` | Japanese. |
 | Manga OCR | in use | `mayocream/manga-ocr` @ `4380edb` | Japanese baseline; known to invent text on empty crops. |
 | PP-OCRv6 rec | shipped, unused | PaddlePaddle | Line recognizer; not manga-specific. |
-| PaddleOCR-VL-For-Manga | candidate (high) | `jzhang533/PaddleOCR-VL-For-Manga` ([demo](https://huggingface.co/spaces/jzhang533/paddleocr-vl-for-manga-demo)) | Best CER in [JMangaBench_Read](https://github.com/muscgab/JMangaBench_Read) (2.13% vs Hayai v2.1 2.67%, Manga OCR 5.01%), but about 2.5x slower per crop. Fine-tuned from PaddleOCR-VL (the original 0.9B, not 1.6) and run with the plain `OCR:` prompt in its demo. The pipeline uses a GGUF of 1.6, so trying it needs either the unquantized `paddle_ocr_vl` path with these weights or a GGUF conversion, then a comparison on identical crops. Hugging Face is not reachable from the cloud sessions, so this runs on a desktop. |
+| PaddleOCR-VL-For-Manga | candidate (high, measured) | `jzhang533/PaddleOCR-VL-For-Manga` ([demo](https://huggingface.co/spaces/jzhang533/paddleocr-vl-for-manga-demo)) | Best CER in [JMangaBench_Read](https://github.com/muscgab/JMangaBench_Read) (2.13% vs Hayai v2.1 2.67%, Manga OCR 5.01%), but about 2.5x slower per crop. Fine-tuned from PaddleOCR-VL (the original 0.9B, not 1.6) and run with the plain `OCR:` prompt in its demo. The pipeline uses a GGUF of 1.6, so trying it needs either the unquantized `paddle_ocr_vl` path with these weights or a GGUF conversion, then a comparison on identical crops. Measured above: its weights load unchanged through the unquantized PaddleOCR-VL 1.6 path (same tensor names, shapes and tokenizer; only the image pixel limits differ). A quantized GGUF is untested. |
 | PaddleOCR-VL-1.6 Manga fine-tune | candidate (medium) | [`gigass03/PaddleOCR-VL-1.6-Manga-Finetuned`](https://mixpeek.com/model/gigass03/PaddleOCR-VL-1.6-Manga-Finetuned) | Apache-2.0, Manga109-s and synthetic data, same base as the default. No published metrics. |
 | Hayai OCR v2.5 Nova | candidate (low) | JMangaBench_Read | CER 2.63–3.08% depending on input size versus 2.67% for the v2.1 already in use; no clear gain. |
 | manga-ocr-nar-small / -distil | candidate (blocked by license) | [`muscgab/manga-ocr-nar`](https://github.com/muscgab/manga-ocr-nar) | Non-autoregressive, 54M/30M params, CER 1.73% / 2.32% on JMangaBench_Read v1.3, very fast on CPU (ONNX int8). Same author as the benchmark. Weights CC BY-NC-SA 4.0: usable only while the fork stays non-commercial. |
