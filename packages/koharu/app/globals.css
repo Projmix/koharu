@@ -79,12 +79,24 @@
     background-color: transparent;
     overflow: hidden;
     font-family:
-      'Noto Sans JP', 'Noto Sans SC', 'Noto Sans TC', 'Yu Gothic UI', 'Microsoft YaHei UI',
-      'Microsoft JhengHei UI', ui-sans-serif, system-ui, sans-serif;
+      var(--font-noto-sans-cjk), 'Noto Sans JP', 'Noto Sans SC', 'Noto Sans TC', 'Yu Gothic UI',
+      'Microsoft YaHei UI', 'Microsoft JhengHei UI', ui-sans-serif, system-ui, sans-serif;
     font-feature-settings:
       'cv02' 1,
       'cv03' 1,
       'cv04' 1;
+  }
+
+  html:lang(ja-JP) {
+    font-variant-east-asian: jis04;
+  }
+
+  html:lang(zh-CN) {
+    font-variant-east-asian: simplified;
+  }
+
+  html:lang(zh-TW) {
+    font-variant-east-asian: traditional;
   }
 
   input,

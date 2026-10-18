@@ -9,7 +9,7 @@ mod prompt;
 mod provider;
 mod remote;
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use anyhow::Context as _;
 use koharu_ml::Device;
@@ -162,35 +162,15 @@ impl Translator {
         Ok(())
     }
 
-    #[tracing::instrument(
-        target = "koharu_metrics",
-        name = "model_run",
-        skip_all,
-        fields(
-            stage = "translation",
-            provider = %selection.provider,
-            model = selection.model.as_deref().unwrap_or("provider_default"),
-            target_language = request.target_language.tag(),
-            outcome = tracing::field::Empty,
-        ),
-    )]
     pub async fn translate(
         &self,
         selection: &ModelSelection,
         generation: GenerationConfig,
         mut request: TranslationRequest,
     ) -> anyhow::Result<(&'static str, Vec<String>)> {
-        let _metric = tracing::info_span!(
-            target: "koharu_metrics",
-            "translation_request",
-            provider = %selection.provider,
-            model = selection.model.as_deref().unwrap_or("provider_default"),
-            target_language = request.target_language.tag(),
-        );
         let provider = selection.provider;
         let provider_id: &'static str = provider.into();
         if request.segments.is_empty() {
-            tracing::Span::current().record("outcome", "skipped");
             return Ok((provider_id, request.segments));
         }
 
@@ -237,7 +217,6 @@ impl Translator {
             }
             .into());
         }
-        tracing::Span::current().record("outcome", "completed");
         Ok((provider_id, translated))
     }
 
@@ -311,11 +290,19 @@ impl Translator {
 
     #[tracing::instrument(skip_all)]
     pub async fn models() -> anyhow::Result<Vec<Model>> {
+        static CLIENT: tokio::sync::OnceCell<reqwest::Client> = tokio::sync::OnceCell::const_new();
+
         let providers = ProvidersConfig::load()?;
         let providers = providers.read()?.clone();
-        let client = koharu_runtime::http_client()?;
+        let client = CLIENT
+            .get_or_try_init(|| async {
+                reqwest::Client::builder()
+                    .timeout(Duration::from_secs(5))
+                    .build()
+            })
+            .await?;
         let mut models = local::models();
-        models.extend(remote::models(&client, &providers).await);
+        models.extend(remote::models(client, &providers).await);
         Ok(models)
     }
 

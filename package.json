@@ -4,20 +4,32 @@
     "packages/*"
   ],
   "scripts": {
+    "tauri": "cargo tauri",
     "dev": "npm run dev --workspace=@koharu/app",
     "build": "npm run build --workspace=@koharu/app",
     "start": "npm run start --workspace=@koharu/app",
+    "docs": "bun run --filter @koharu/docs dev",
     "lint": "npm run lint --workspaces --if-present",
     "test": "npm run test --workspace=@koharu/app",
+    "sponsors": "cd .github/sponsorkit && sponsorkit --force",
     "format": "oxfmt packages tests package.json .oxfmtrc.json .vscode",
     "check": "oxfmt --check packages tests package.json .oxfmtrc.json .vscode"
   },
   "devDependencies": {
-    "@types/node": "^26.2.0",
-    "git-cliff": "^2.13.1",
+    "@actions/artifact": "6.3.1",
+    "@types/bun": "^1.4.2",
+    "@types/node": "^26.6.5",
+    "fflate": "0.8.3",
+    "git-cliff": "^2.14.2",
     "kill-port": "^2.0.1",
-    "oxfmt": "^0.56.0",
-    "sponsorkit": "^17.1.1",
-    "typescript": "^6.0.3"
+    "oxfmt": "^0.73.0",
+    "playwright": "1.64.0",
+    "release-please": "17.11.2",
+    "sponsorkit": "^18.0.0",
+    "typescript": "^7.0.2"
+  },
+  "overrides": {
+    "react": "^19.3.0",
+    "sharp": "^0.35.5"
   }
 }

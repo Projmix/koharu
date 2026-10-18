@@ -121,6 +121,7 @@ function textLayer(
     id,
     parent: 'page',
     geometry: null,
+    angle_degrees: null,
     visibility: { visible: true, opacity: 1 },
     content: {
       id: `${id}-content`,

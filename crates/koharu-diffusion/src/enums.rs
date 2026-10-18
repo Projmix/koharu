@@ -203,6 +203,9 @@ named_ffi_enum! {
         Mxfp4 = sys::SD_TYPE_MXFP4 => "mxfp4",
         Nvfp4 = sys::SD_TYPE_NVFP4 => "nvfp4",
         Q1_0 = sys::SD_TYPE_Q1_0 => "q1_0",
+        Q2_0 = sys::SD_TYPE_Q2_0 => "q2_0",
+        F8E4m3 = sys::SD_TYPE_F8_E4M3 => "f8_e4m3",
+        F8E5m2 = sys::SD_TYPE_F8_E5M2 => "f8_e5m2",
         Auto = sys::SD_TYPE_COUNT => "auto"
     }
 }
@@ -279,6 +282,7 @@ named_ffi_enum! {
         Flux2 = sys::FLUX2_SCHEDULER => "flux2",
         Flux = sys::FLUX_SCHEDULER => "flux",
         Beta = sys::BETA_SCHEDULER => "beta",
+        LladaImage = sys::LLADA_IMAGE_SCHEDULER => "llada_image",
         Auto = sys::SCHEDULER_COUNT => "auto"
     }
 }
@@ -300,6 +304,7 @@ named_ffi_enum! {
         FluxFlow = sys::FLUX_FLOW_PRED => "flux_flow",
         SefiFlow = sys::SEFI_FLOW_PRED => "sefi_flow",
         MiniT2iFlow = sys::MINIT2I_FLOW_PRED => "minit2i_flow",
+        SenseNovaU1Flow = sys::SENSENOVA_U1_FLOW_PRED => "sensenova_u1_flow",
         Auto = sys::PREDICTION_COUNT => "auto"
     }
 }
@@ -400,6 +405,7 @@ ffi_enum! {
     /// Severity attached to a native log message.
     pub enum LogLevel: sys::sd_log_level_t, "log level" {
         Debug = sys::SD_LOG_DEBUG => "debug",
+        Verbose = sys::SD_LOG_VERBOSE => "verbose",
         Info = sys::SD_LOG_INFO => "info",
         Warn = sys::SD_LOG_WARN => "warn",
         Error = sys::SD_LOG_ERROR => "error"

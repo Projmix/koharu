@@ -2,7 +2,8 @@ use anyhow::{Context as _, Result, bail};
 use koharu_desktop::Desktop;
 use serde::Serialize;
 use specta::Type;
-use tauri::{AppHandle, Cef, Manager as _, State};
+use tauri::{AppHandle, Manager as _, State};
+use tauri_runtime_cef::CefRuntime;
 
 use super::{
     ChannelExt as _, Error,
@@ -79,7 +80,7 @@ pub(crate) async fn delete_project_version(
 #[specta::specta]
 pub(crate) async fn restore_project_version(
     id: koharu_scene::VersionId,
-    handle: AppHandle<Cef>,
+    handle: AppHandle<CefRuntime>,
 ) -> std::result::Result<ProjectInfo, Error> {
     ensure_idle(&handle.state::<Processing>())?;
     handle.state::<AgentState>().reset().await;

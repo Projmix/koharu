@@ -71,6 +71,9 @@ export function TranslationPreferences({
   }
   const choices = selected ? modelChoices : [current, ...modelChoices]
   const quantizations = current.quantizations
+  const quantization =
+    current.quantizations.find((quantization) => quantization.id === profile.model.quantization) ??
+    current.quantizations[0]
   const unitPolicy =
     profile.unit_policy ?? (profileName === 'chapter' ? 'adaptive_v1' : 'page_only')
   const selectedPreset =
@@ -108,7 +111,11 @@ export function TranslationPreferences({
                 className='flex h-9 w-full min-w-0 items-center justify-between gap-2 rounded-lg border border-input bg-transparent px-2.5 text-[11px] transition-colors outline-none hover:bg-foreground/[0.03] focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50'
               >
                 <span className='min-w-0 flex-1 text-left'>
-                  <ModelLabel model={current} providers={providers} />
+                  <ModelLabel
+                    model={current}
+                    providers={providers}
+                    quantization={quantization?.name ?? profile.model.quantization}
+                  />
                 </span>
                 <ChevronDown className='size-3.5 shrink-0 text-muted-foreground' />
               </PopoverTrigger>
@@ -300,13 +307,24 @@ export function TranslationPreferences({
   )
 }
 
-function ModelLabel({ model, providers }: { model: Model; providers: ProviderPreference[] }) {
+function ModelLabel({
+  model,
+  providers,
+  quantization,
+}: {
+  model: Model
+  providers: ProviderPreference[]
+  quantization: string | null | undefined
+}) {
   return (
     <span className='flex min-w-0 items-center gap-2'>
       <Badge variant='outline' className='shrink-0 px-1.5 py-0 text-[9px] font-medium'>
         {providerName(providers, model.provider)}
       </Badge>
-      <span className='truncate'>{model.name}</span>
+      <span className='truncate'>
+        {model.name}
+        {quantization && <span className='text-muted-foreground'> · {quantization}</span>}
+      </span>
     </span>
   )
 }

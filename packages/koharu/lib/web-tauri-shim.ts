@@ -109,6 +109,7 @@ function createSamplePages(): Page[] {
           id: 'layer-text-1',
           parent: null,
           geometry: { points: rectPoints(565, 110, 175, 170) },
+          angle_degrees: null,
           visibility: { visible: true, opacity: 1 },
           content: {
             id: 'text-content-1',
@@ -137,6 +138,7 @@ function createSamplePages(): Page[] {
           id: 'layer-text-2',
           parent: null,
           geometry: { points: rectPoints(94, 780, 160, 130) },
+          angle_degrees: null,
           visibility: { visible: true, opacity: 1 },
           content: {
             id: 'text-content-2',
@@ -165,6 +167,7 @@ function createSamplePages(): Page[] {
           id: 'layer-text-3',
           parent: null,
           geometry: { points: rectPoints(608, 795, 154, 138) },
+          angle_degrees: null,
           visibility: { visible: true, opacity: 1 },
           content: {
             id: 'text-content-3',
@@ -217,6 +220,7 @@ function createSamplePages(): Page[] {
           id: 'layer-text-2-1',
           parent: null,
           geometry: { points: rectPoints(565, 110, 175, 170) },
+          angle_degrees: null,
           visibility: { visible: true, opacity: 1 },
           content: {
             id: 'text-content-2-1',
@@ -258,6 +262,7 @@ const defaultPreferences: Preferences = {
           quantization: null,
           vision: true,
           reasoning: true,
+          reasoning_required: false,
         },
         generation: {
           temperature: 0,
@@ -278,6 +283,7 @@ const defaultPreferences: Preferences = {
           quantization: null,
           vision: false,
           reasoning: false,
+          reasoning_required: false,
         },
         generation: {
           temperature: 0.3,
@@ -294,6 +300,7 @@ const defaultPreferences: Preferences = {
           quantization: null,
           vision: true,
           reasoning: true,
+          reasoning_required: false,
         },
         generation: {
           temperature: 0.2,
@@ -376,7 +383,7 @@ const sampleTranslationModels: Model[] = [
     provider: 'local',
     model: 'lfm2.5-1.2b-instruct',
     name: 'LFM 2.5 1.2B Instruct (Local)',
-    quantizations: [{ id: 'Q4_K_M', name: 'Q4_K_M' }],
+    quantizations: [{ id: 'Q4_K_M', name: 'Q4_K_M', downloaded: true }],
     vision: false,
     reasoning: false,
     reasoning_required: false,
@@ -514,7 +521,7 @@ export function installWebTauriShim(): void {
 
   let onCanvasChannel: ChannelLike<CanvasState> | null = null
   let onJobChannel: ChannelLike<Job> | null = null
-  let onDownloadChannel: ChannelLike<Download> | null = null
+  let _onDownloadChannel: ChannelLike<Download> | null = null
   let onResourcesChannel: ChannelLike<ModelResources> | null = null
   let onProjectChannel: ChannelLike<ProjectInfo | null> | null = null
 
@@ -639,7 +646,7 @@ export function installWebTauriShim(): void {
         case 'subscribe': {
           onCanvasChannel = (args.onCanvas as ChannelLike<CanvasState>) ?? null
           onJobChannel = (args.onJob as ChannelLike<Job>) ?? null
-          onDownloadChannel = (args.onDownload as ChannelLike<Download>) ?? null
+          _onDownloadChannel = (args.onDownload as ChannelLike<Download>) ?? null
           onResourcesChannel = (args.onResources as ChannelLike<ModelResources>) ?? null
           onProjectChannel = (args.onProject as ChannelLike<ProjectInfo | null>) ?? null
 
@@ -780,6 +787,7 @@ export function installWebTauriShim(): void {
           }
         }
 
+        case 'import':
         case 'import_pages': {
           const proj = currentStoredProject()
           if (proj) {
@@ -953,6 +961,7 @@ export function installWebTauriShim(): void {
               id,
               parent: null,
               geometry: { points: rectPoints(pt.x, pt.y, 160, 60) },
+              angle_degrees: null,
               visibility: { visible: true, opacity: 1 },
               content: {
                 id: `content-${id}`,
@@ -1000,6 +1009,7 @@ export function installWebTauriShim(): void {
               id,
               parent: null,
               geometry: { points: rectPoints(frame.x, frame.y, frame.width, frame.height) },
+              angle_degrees: frame.angle_degrees || null,
               visibility: { visible: true, opacity: 1 },
               content: {
                 id: `content-${id}`,
@@ -1200,6 +1210,7 @@ export function installWebTauriShim(): void {
         case 'undo':
         case 'redo':
         case 'stop_job':
+        case 'export':
         case 'export_pages':
         case 'export_chapter_translation':
         case 'import_chapter_translation':

@@ -7,7 +7,8 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use specta::Type;
-use tauri::{AppHandle, Cef, Manager as _, State, ipc::Channel};
+use tauri::{AppHandle, Manager as _, State, ipc::Channel};
+use tauri_runtime_cef::CefRuntime;
 use uuid::Uuid;
 
 use super::{
@@ -174,7 +175,7 @@ pub(crate) struct JobChannel {
 #[specta::specta]
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn process(
-    handle: AppHandle<Cef>,
+    handle: AppHandle<CefRuntime>,
     scope: koharu_pipeline::Scope,
     operation: koharu_pipeline::Operation,
     project: State<'_, CurrentProject>,
@@ -253,17 +254,7 @@ pub(crate) async fn process(
             }
 
             let update = match event {
-                Progress::Started {
-                    pages,
-                    stages,
-                    total,
-                } => {
-                    tracing::info!(
-                        target: "koharu_metrics",
-                        metric = "pipeline_start",
-                        page_count = pages.len(),
-                        stage_count = stages.len(),
-                    );
+                Progress::Started { total, .. } => {
                     let mut progress = progress.lock();
                     *progress = (0, total);
                     Some(JobUpdate::Replace {
@@ -279,12 +270,6 @@ pub(crate) async fn process(
                     stage,
                     model,
                 } => {
-                    tracing::info!(
-                        target: "koharu_metrics",
-                        metric = "stage_loading",
-                        stage = %stage,
-                        model,
-                    );
                     let progress = progress.lock();
                     Some(JobUpdate::Replace {
                         completed: progress.0,
@@ -298,17 +283,8 @@ pub(crate) async fn process(
                     target,
                     stage,
                     model,
-                    elapsed,
+                    ..
                 } => {
-                    if stage != koharu_pipeline::Stage::Translation {
-                        tracing::info!(
-                            target: "koharu_metrics",
-                            metric = "model_run",
-                            stage = %stage,
-                            model,
-                            duration_ms = elapsed.as_secs_f64() * 1000.0,
-                        );
-                    }
                     if stage == koharu_pipeline::Stage::Inpainting
                         && let Some(page) = target.page()
                     {
@@ -327,11 +303,6 @@ pub(crate) async fn process(
                     })
                 }
                 Progress::Skipped { target, stage } => {
-                    tracing::info!(
-                        target: "koharu_metrics",
-                        metric = "stage_skip",
-                        stage = %stage,
-                    );
                     let mut progress = progress.lock();
                     progress.0 = progress.0.saturating_add(1).min(progress.1);
                     if stage == koharu_pipeline::Stage::Inpainting
@@ -381,15 +352,7 @@ pub(crate) async fn process(
                         model: Some(model),
                     })
                 }
-                Progress::Running { stage, model, .. } => {
-                    tracing::info!(
-                        target: "koharu_metrics",
-                        metric = "stage_running",
-                        stage = %stage,
-                        model,
-                    );
-                    None
-                }
+                Progress::Running { .. } => None,
             };
             if let Some(update) = update {
                 let job = {
@@ -425,7 +388,7 @@ pub(crate) async fn process(
         }));
 
         struct PipelineCommitter {
-            handle: AppHandle<Cef>,
+            handle: AppHandle<CefRuntime>,
         }
 
         #[async_trait::async_trait]
@@ -462,17 +425,6 @@ pub(crate) async fn process(
                 (false, Some(format!("{error:#}")))
             }
         };
-        tracing::info!(
-            target: "koharu_metrics",
-            metric = "pipeline_result",
-            outcome = if stopped {
-                "stopped"
-            } else if error.is_some() {
-                "failed"
-            } else {
-                "completed"
-            },
-        );
         task_handle
             .state::<Processing>()
             .finish(retry, stopped || error.is_some());
@@ -518,7 +470,7 @@ struct ChapterTranslationExport {
 #[tauri::command]
 #[specta::specta]
 pub(crate) async fn export_chapter_translation(
-    window: tauri::WebviewWindow<Cef>,
+    window: tauri::WebviewWindow<CefRuntime>,
     project: State<'_, CurrentProject>,
     processing: State<'_, Processing>,
 ) -> std::result::Result<(), Error> {
@@ -578,7 +530,6 @@ pub(crate) async fn export_chapter_translation(
     };
     let bytes = serde_json::to_vec_pretty(&export)?;
     tokio::fs::write(file.path(), bytes).await?;
-    tracing::info!(target: "koharu_metrics", metric = "chapter_translation_exported");
     Ok(())
 }
 
@@ -586,8 +537,8 @@ pub(crate) async fn export_chapter_translation(
 #[tauri::command]
 #[specta::specta]
 pub(crate) async fn import_chapter_translation(
-    window: tauri::WebviewWindow<Cef>,
-    handle: AppHandle<Cef>,
+    window: tauri::WebviewWindow<CefRuntime>,
+    handle: AppHandle<CefRuntime>,
     project: State<'_, CurrentProject>,
     processing: State<'_, Processing>,
 ) -> std::result::Result<(), Error> {
@@ -644,7 +595,6 @@ pub(crate) async fn import_chapter_translation(
         .state::<CanvasChannel>()
         .channel
         .publish(desktop.canvas_state());
-    tracing::info!(target: "koharu_metrics", metric = "chapter_translation_imported");
     Ok(())
 }
 
@@ -858,12 +808,6 @@ mod tests {
     }
 }
 
-#[tracing::instrument(
-    target = "koharu_metrics",
-    name = "pipeline_stop",
-    skip_all,
-    fields(state = "requested")
-)]
 #[tauri::command]
 #[specta::specta]
 pub(crate) async fn stop_job(

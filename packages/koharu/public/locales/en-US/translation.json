@@ -13,6 +13,7 @@
     "downloadingFiles_one": "Downloading {{count}} file",
     "downloadingFiles_other": "Downloading {{count}} files",
     "modelDownload": "Model download",
+    "pageLabel": "Page {{number}}: {{label}}",
     "processing": "Processing",
     "processingFailed": "Processing failed.",
     "stop": "Stop",
@@ -216,6 +217,7 @@
     "pt-BR": "Português brasileiro",
     "ru-RU": "Русский",
     "tr-TR": "Türkçe",
+    "wuu": "吴语",
     "zh-CN": "简体中文",
     "zh-TW": "繁體中文"
   },
@@ -256,13 +258,12 @@
     "delete": "Delete Selected",
     "discord": "Discord",
     "edit": "Edit",
-    "exportPng": "Export PNG…",
-    "exportPsd": "Export PSD…",
+    "export": "Export Project",
     "file": "File",
     "fit": "Fit Window",
     "github": "GitHub",
     "help": "Help",
-    "importPages": "Import Pages…",
+    "import": "Import Pages",
     "process": "Process",
     "processLayers": "Process Selected Layers",
     "processPages": "Process Selected Pages",
@@ -331,7 +332,8 @@
     "pages": "Pages",
     "rename": "Rename",
     "renameDescription": "Choose a new name for this page.",
-    "renameTitle": "Rename page"
+    "renameTitle": "Rename page",
+    "selected": "{{count}} selected"
   },
   "outputPicker": {
     "instructions": "Translation instructions",
@@ -358,7 +360,6 @@
     "translation": "Convert source text to the target language."
   },
   "providerDescriptions": {
-    "atlas-cloud": "Atlas-hosted language models.",
     "caiyun": "Caiyun translation API.",
     "claude": "Anthropic Claude models.",
     "deepl": "DeepL translation API.",

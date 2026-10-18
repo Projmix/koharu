@@ -6,9 +6,10 @@
 //! https://github.com/ggml-org/llama.cpp/blob/99f3dc32296f825fec94f202da1e9fede1e78cf9/tools/mtmd/mtmd-helper.cpp
 
 use std::{
+    fmt::{Debug, Formatter},
     num::NonZeroU32,
     path::{Path, PathBuf},
-    sync::Mutex,
+    sync::{Mutex, OnceLock},
     time::Instant,
 };
 
@@ -25,8 +26,8 @@ use koharu_llama::{
     sampling::LlamaSampler,
     token::LlamaToken,
 };
+use llguidance::{Matcher, ParserFactory, api::TopLevelGrammar};
 use minijinja::{Environment, Error as TemplateError, ErrorKind as TemplateErrorKind, context};
-use serde::Serialize;
 
 use super::{
     Capabilities, ChatMessage, ChatTemplateOptions, FinishReason, Generation, GenerationControl,
@@ -37,7 +38,6 @@ use crate::Backend;
 const DEFAULT_MAX_UBATCH: u32 = 512;
 const CHAT_TEMPLATE_NAME: &str = "chat";
 
-#[derive(Debug)]
 pub(super) struct Model {
     backend: &'static LlamaBackend,
     model: LlamaModel,
@@ -45,6 +45,16 @@ pub(super) struct Model {
     capabilities: Capabilities,
     eos_token: LlamaToken,
     chat_template: ChatTemplate,
+    llguidance_factory: OnceLock<std::result::Result<ParserFactory, String>>,
+}
+
+impl Debug for Model {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Model")
+            .field("model", &self.model)
+            .field("capabilities", &self.capabilities)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug)]
@@ -52,12 +62,6 @@ struct ChatTemplate {
     environment: Environment<'static>,
     bos_token: String,
     eos_token: String,
-}
-
-#[derive(Serialize)]
-struct TemplateMessage<'a> {
-    role: &'a str,
-    content: &'a str,
 }
 
 impl ChatTemplate {
@@ -89,9 +93,11 @@ impl ChatTemplate {
     fn render(&self, messages: &[ChatMessage], options: ChatTemplateOptions) -> Result<String> {
         let messages = messages
             .iter()
-            .map(|message| TemplateMessage {
-                role: message.role.as_str(),
-                content: &message.content,
+            .map(|message| {
+                context! {
+                    role => message.role.as_str(),
+                    content => message.content.as_str(),
+                }
             })
             .collect::<Vec<_>>();
         let template = self
@@ -193,6 +199,7 @@ impl Model {
             capabilities,
             eos_token,
             chat_template,
+            llguidance_factory: OnceLock::new(),
         })
     }
 
@@ -506,10 +513,21 @@ impl Model {
             }
             let schema = serde_json::to_string(&schema)
                 .context("failed to serialize structured output schema")?;
-            samplers.push(
-                LlamaSampler::llguidance(&self.model, "json_schema", &schema)
-                    .context("failed to compile structured output schema")?,
-            );
+            let factory = self
+                .llguidance_factory
+                .get_or_init(|| {
+                    let tok_env = LlamaSampler::llguidance_tok_env(&self.model);
+                    ParserFactory::new_simple(&tok_env).map_err(|error| error.to_string())
+                })
+                .as_ref()
+                .map_err(|error| anyhow::Error::msg(error.clone()))
+                .context("failed to initialize structured output tokenizer")?;
+            let grammar = TopLevelGrammar::from_tagged_str("json_schema", &schema)
+                .context("failed to compile structured output schema")?;
+            let parser = factory
+                .create_parser(grammar)
+                .context("failed to create structured output parser")?;
+            samplers.push(LlamaSampler::from(Matcher::new(Ok(parser))));
         }
 
         let has_repeat =
@@ -778,6 +796,48 @@ fn available_threads() -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn chat_template_preserves_messages_and_options() {
+        let mut environment = Environment::new();
+        minijinja_contrib::add_to_environment(&mut environment);
+        environment
+            .set_unknown_method_callback(minijinja_contrib::pycompat::unknown_method_callback);
+        environment
+            .add_template(
+                CHAT_TEMPLATE_NAME,
+                "{{ bos_token }}{% for message in messages %}{{ message.role.upper() }}:{{ message.content.strip() }};{% endfor %}{{ eos_token }}|{{ add_generation_prompt }}|{{ enable_thinking }}|{{ tools|length }}|{{ documents|length }}",
+            )
+            .unwrap();
+        let template = ChatTemplate {
+            environment,
+            bos_token: "<s>".to_owned(),
+            eos_token: "</s>".to_owned(),
+        };
+        let messages = [
+            ChatMessage::system(" Translate "),
+            ChatMessage::user("こんにちは"),
+        ];
+
+        assert_eq!(
+            template
+                .render(&messages, ChatTemplateOptions::default())
+                .unwrap(),
+            "<s>SYSTEM:Translate;USER:こんにちは;</s>|True|False|0|0"
+        );
+        assert_eq!(
+            template
+                .render(
+                    &[],
+                    ChatTemplateOptions {
+                        add_generation_prompt: false,
+                        enable_thinking: true,
+                    },
+                )
+                .unwrap(),
+            "<s></s>|False|True|0|0"
+        );
+    }
 
     fn prepared(tokens: usize, non_causal: bool) -> PreparedPrompt {
         PreparedPrompt {

@@ -53,7 +53,7 @@ impl<T: IpcResponse> ChannelExt<T> for Mutex<Option<Channel<T>>> {
     }
 }
 
-pub fn bindings() -> tauri_specta::Builder<tauri::Cef> {
+pub fn bindings() -> tauri_specta::Builder<tauri_runtime_cef::CefRuntime> {
     use tauri_specta::{Builder, ErrorHandlingMode, collect_commands};
 
     Builder::new()
@@ -73,7 +73,7 @@ pub fn bindings() -> tauri_specta::Builder<tauri::Cef> {
             lifecycle::open_project,
             lifecycle::delete_project,
             lifecycle::close_project,
-            lifecycle::import_pages,
+            lifecycle::import,
             lifecycle::select_page,
             versions::list_project_versions,
             versions::save_project_version,
@@ -97,7 +97,7 @@ pub fn bindings() -> tauri_specta::Builder<tauri::Cef> {
             processing::stop_job,
             processing::export_chapter_translation,
             processing::import_chapter_translation,
-            output::export_pages,
+            output::export,
             output::get_thumbnail,
             fonts::get_fonts,
             fonts::get_font_preview,

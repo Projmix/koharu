@@ -16,11 +16,11 @@ export function modelKey(model: Model | ModelSelection): string {
   return `${model.provider}:${model.model ?? ''}`
 }
 
-export function modelSelection(model: Model): ModelSelection {
+export function modelSelection(model: Model, quantization: string | null = null): ModelSelection {
   return {
     provider: model.provider,
     model: model.model,
-    quantization: model.quantizations[0]?.id ?? null,
+    quantization,
     vision: model.vision,
     reasoning: model.reasoning,
     reasoning_required: model.reasoning_required,
@@ -29,14 +29,21 @@ export function modelSelection(model: Model): ModelSelection {
 
 export function translationProfileSelection(
   profile: TranslationProfile,
-  model: Model,
+  model: Model | ModelSelection,
 ): TranslationProfile {
-  const selection = modelSelection(model)
+  const selection: ModelSelection =
+    'quantizations' in model ? modelSelection(model, model.quantizations[0]?.id ?? null) : model
   return {
     ...profile,
     model:
       modelKey(profile.model) === modelKey(model)
-        ? { ...selection, quantization: profile.model.quantization }
+        ? {
+            ...selection,
+            quantization:
+              'quantizations' in model
+                ? (profile.model.quantization ?? selection.quantization)
+                : selection.quantization,
+          }
         : selection,
     generation: model.reasoning_required
       ? { ...profile.generation, reasoning: true }

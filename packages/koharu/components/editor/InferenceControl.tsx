@@ -261,7 +261,7 @@ function RuntimeSelector({
       .finally(() => setLoadingModels(false))
   }
 
-  const chooseModel = (next: Model) => {
+  const chooseModel = (next: Model & ModelSelection) => {
     if (!preferences || saving) return
     const nextProfile = translationProfileSelection(
       preferences.pipeline.translation[profileName],
@@ -270,6 +270,7 @@ function RuntimeSelector({
     if (
       model &&
       modelKey(model) === modelKey(next) &&
+      model.quantization === next.quantization &&
       JSON.stringify(preferences.pipeline.translation[profileName]) === JSON.stringify(nextProfile)
     ) {
       setView('root')

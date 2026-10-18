@@ -11,9 +11,7 @@ use fontique::{
     Attributes, Blob, Collection, CollectionOptions, FallbackKey, FontInfoOverride, FontStyle,
     GenericFamily, Language, QueryFamily, QueryFont, QueryStatus, Script, SourceCache,
 };
-use harfrust::{
-    ShapeOptions, ShapePlan, ShapePlanKey, ShaperData, ShaperInstance, UnicodeBuffer, Variation,
-};
+use harfrust::{Buffer, ShapeOptions, ShapePlan, ShapePlanKey, ShaperFont, font::Variation};
 use koharu_runtime::HuggingFaceFile;
 use parking_lot::Mutex;
 use serde::Deserialize;
@@ -71,8 +69,7 @@ pub struct Font {
     font_name: String,
     post_script_name: String,
     synthesis: fontique::Synthesis,
-    shaper_data: Arc<ShaperData>,
-    shaper_instance: ShaperInstance,
+    shaper_font: harfrust::Font,
     shape_plans: Arc<Mutex<VecDeque<Arc<ShapePlan>>>>,
     normalized_coords: Vec<skrifa::instance::NormalizedCoord>,
     vello_coords: Vec<vello::NormalizedCoord>,
@@ -102,10 +99,11 @@ impl Font {
                 value: *value,
             })
             .collect::<Vec<_>>();
-        let harfrust_font = harfrust::FontRef::from_index(font.blob.as_ref(), font.index)
-            .context("failed to create HarfRust font reference")?;
-        let shaper_data = Arc::new(ShaperData::new(&harfrust_font));
-        let shaper_instance = ShaperInstance::from_variations(&harfrust_font, &variations);
+        let shaper_font = harfrust::Font::new(font.blob.clone().into_raw_parts().0, font.index)
+            .context("failed to create HarfRust font")?
+            .instance_builder()
+            .variations(&variations)
+            .build();
         let skrifa_font = skrifa::FontRef::from_index(font.blob.as_ref(), font.index)
             .context("failed to create Skrifa font reference")?;
         let location = skrifa_font
@@ -142,8 +140,7 @@ impl Font {
             font_name,
             post_script_name,
             synthesis: font.synthesis,
-            shaper_data,
-            shaper_instance,
+            shaper_font,
             shape_plans: Arc::new(Mutex::new(VecDeque::new())),
             normalized_coords,
             vello_coords,
@@ -172,25 +169,19 @@ impl Font {
         LocationRef::new(&self.normalized_coords)
     }
 
-    pub(crate) fn shaper_instance(&self) -> &ShaperInstance {
-        &self.shaper_instance
-    }
-
-    pub(crate) fn shaper_data(&self) -> &ShaperData {
-        &self.shaper_data
+    pub(crate) fn shaper_font(&self) -> &harfrust::Font {
+        &self.shaper_font
     }
 
     pub(crate) fn shape_plan(
         &self,
-        font: &harfrust::FontRef<'_>,
         direction: harfrust::Direction,
         script: Option<harfrust::Script>,
         language: Option<&harfrust::Language>,
         features: &[harfrust::Feature],
     ) -> Arc<ShapePlan> {
-        let key = ShapePlanKey::new(script, direction)
+        let key = ShapePlanKey::new(&self.shaper_font, script, direction)
             .language(language)
-            .instance(Some(&self.shaper_instance))
             .features(features);
         let mut plans = self.shape_plans.lock();
         if let Some(index) = plans.iter().position(|plan| key.matches(plan)) {
@@ -199,13 +190,12 @@ impl Font {
             return plan;
         }
 
-        let shaper = self
-            .shaper_data
-            .shaper(font)
-            .instance(Some(&self.shaper_instance))
-            .build();
         let plan = Arc::new(ShapePlan::new(
-            &shaper, direction, script, language, features,
+            &self.shaper_font,
+            direction,
+            script,
+            language,
+            features,
         ));
         if plans.len() == SHAPE_PLAN_CACHE_CAPACITY {
             plans.pop_front();
@@ -225,11 +215,6 @@ impl Font {
     pub(crate) fn skrifa_ref(&self) -> Result<skrifa::FontRef<'_>> {
         skrifa::FontRef::from_index(self.data.as_ref(), self.index)
             .context("failed to create Skrifa font reference")
-    }
-
-    pub(crate) fn harfrust_ref(&self) -> Result<harfrust::FontRef<'_>> {
-        harfrust::FontRef::from_index(self.data.as_ref(), self.index)
-            .context("failed to create HarfRust font reference")
     }
 
     #[cfg(test)]
@@ -258,24 +243,24 @@ impl Font {
         if font.charmap().is_symbol() {
             return false;
         }
-        let Ok(harfrust_font) = self.harfrust_ref() else {
-            return false;
-        };
-        let mut buffer = UnicodeBuffer::new();
+        let mut buffer = Buffer::new();
         buffer.push_str(text);
         buffer.guess_segment_properties();
-        let shaped = self
-            .shaper_data
-            .shaper(&harfrust_font)
-            .instance(Some(&self.shaper_instance))
-            .build()
-            .shape(buffer, ShapeOptions::new());
+        if harfrust::shape(
+            &ShaperFont::new(&self.shaper_font),
+            &mut buffer,
+            ShapeOptions::new(),
+        )
+        .is_err()
+        {
+            return false;
+        }
         let outlines = font.outline_glyphs();
         let size = Size::new(font_size);
         let metrics = font.glyph_metrics(size, self.location());
         let mut rendered = false;
 
-        for glyph in shaped.glyph_infos() {
+        for glyph in buffer.glyph_infos() {
             let character = text
                 .get(glyph.cluster as usize..)
                 .and_then(|tail| tail.chars().next());
@@ -637,13 +622,11 @@ impl Fonts {
     }
 
     pub(crate) async fn families(&self) -> Result<Vec<FontFamily>> {
-        let system = self.ensure_system().await?;
+        let system = self.ensure_system().await;
         let catalog = self.catalog().await?;
         let mut families = BTreeMap::<String, FontFamily>::new();
 
-        let faces = tokio::task::spawn_blocking(move || system.lock().system_faces())
-            .await
-            .context("system font discovery worker stopped unexpectedly")?;
+        let faces = tokio_rayon::spawn(move || system.lock().system_faces()).await;
         for face in faces {
             let key = normalize(&face.family_name);
             let family = families.entry(key).or_insert_with(|| FontFamily {
@@ -771,7 +754,7 @@ impl Fonts {
     }
 
     pub(crate) async fn preview(&self, family_name: &str) -> Result<FontPreview> {
-        let system = self.ensure_system().await?;
+        let system = self.ensure_system().await;
         let catalog = self.catalog().await?;
         if let Some(face) = catalog.select(family_name, Attributes::default()) {
             let path =
@@ -783,7 +766,7 @@ impl Fonts {
                 .with_context(|| format!("failed to read {}", path.display()))
                 .map(FontPreview::Webp);
         }
-        tokio::task::spawn_blocking({
+        tokio_rayon::spawn({
             let family_name = family_name.to_owned();
             move || {
                 system
@@ -794,14 +777,13 @@ impl Fonts {
             }
         })
         .await
-        .context("font preview worker stopped unexpectedly")?
     }
 
     pub(crate) async fn prepare(&self, requests: &[FontRequest]) -> Result<()> {
         if requests.is_empty() {
             return Ok(());
         }
-        let system = self.ensure_system().await?;
+        let system = self.ensure_system().await;
         let missing = {
             let mut system = system.lock();
             requests
@@ -832,15 +814,11 @@ impl Fonts {
         Ok(())
     }
 
-    async fn ensure_system(&self) -> Result<Arc<Mutex<FontSystem>>> {
+    async fn ensure_system(&self) -> Arc<Mutex<FontSystem>> {
         self.system
-            .get_or_try_init(|| async {
-                tokio::task::spawn_blocking(|| Arc::new(Mutex::new(FontSystem::new())))
-                    .await
-                    .context("font-system worker stopped unexpectedly")
-            })
+            .get_or_init(|| tokio_rayon::spawn(|| Arc::new(Mutex::new(FontSystem::new()))))
             .await
-            .cloned()
+            .clone()
     }
 
     async fn catalog(&self) -> Result<&Arc<FontCatalog>> {
@@ -853,7 +831,7 @@ impl Fonts {
                 let bytes = tokio::fs::read(&path)
                     .await
                     .with_context(|| format!("failed to read {}", path.display()))?;
-                tokio::task::spawn_blocking(move || {
+                tokio_rayon::spawn(move || {
                     let index: CatalogIndex =
                         serde_json::from_slice(&bytes).context("invalid bundled font index")?;
                     if index.schema_version != FONT_INDEX_SCHEMA {
@@ -865,7 +843,6 @@ impl Fonts {
                     Ok(Arc::new(FontCatalog::from_index(index)))
                 })
                 .await
-                .context("font catalog worker stopped unexpectedly")?
             })
             .await
     }
@@ -885,7 +862,7 @@ impl Fonts {
             .await
             .with_context(|| format!("failed to read {}", path.display()))?;
         let face_for_worker = face.clone();
-        let font = tokio::task::spawn_blocking(move || {
+        let font = tokio_rayon::spawn(move || {
             font_from_blob(
                 Blob::from(data),
                 &face_for_worker,
@@ -896,8 +873,7 @@ impl Fonts {
                 },
             )
         })
-        .await
-        .context("font decode worker stopped unexpectedly")??;
+        .await?;
         self.cache
             .lock()
             .insert(face.post_script_name.clone(), font.clone());
