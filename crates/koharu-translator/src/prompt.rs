@@ -22,7 +22,7 @@ pub(crate) fn prompts(request: &TranslationRequest) -> anyhow::Result<(String, S
         - Copy every input ID, page_id, region_id, and source text exactly; translate only `translated_text` and leave notes empty.
         - Every input ID must appear exactly once; order does not matter.
         - Never merge, split, omit, duplicate, or add segments.
-        - The response is imported automatically. A changed ID, page, or source text invalidates the entire response.
+        - The response is imported automatically. An unknown ID or changed source text invalidates the entire response.
     "}.trim_end());
     Ok((system, serde_json::to_string(&input)?))
 }
@@ -179,29 +179,10 @@ pub(crate) fn translations(
                 translation.id
             );
         }
-        if let Some(page_index) = translation.page_index {
-            ensure!(
-                page_index == request.page_number(index),
-                "{provider} returned page index {} for translation ID {}, expected {}",
-                page_index,
-                translation.id,
-                request.page_number(index)
-            );
-        }
-        ensure!(
-            translation.page_id == request.page_id(index),
-            "{provider} returned page {} for translation ID {}, expected {}",
-            translation.page_id,
-            translation.id,
-            request.page_id(index)
-        );
-        ensure!(
-            translation.region_id == request.region_id(index),
-            "{provider} returned region {} for translation ID {}, expected {}",
-            translation.region_id,
-            translation.id,
-            request.region_id(index)
-        );
+        // The ID, or the page/region pair when the ID is mistyped, selects the
+        // segment and the exact source echo confirms it. A stray echoed page or
+        // region on an otherwise matching segment does not change what it means,
+        // so it does not discard the whole chapter.
         ensure!(
             source_echo_matches(&request.segments[index], &translation.source_text),
             "{provider} changed source text for translation ID {}",
@@ -770,8 +751,8 @@ struct TranslationOutput {
 struct TranslationOutputSegment {
     id: String,
     page_id: String,
-    #[serde(default)]
-    page_index: Option<usize>,
+    #[serde(default, rename = "page_index")]
+    _page_index: Option<usize>,
     region_id: String,
     source_text: String,
     translated_text: String,
@@ -1080,37 +1061,28 @@ mod tests {
     }
 
     #[test]
-    fn rejects_changed_page_or_source_text() {
+    fn rejects_changed_source_text_and_unknown_fields() {
         let request = TranslationRequest::new(["one", "two"], Language::English)
             .with_page_numbers([2, 3])
             .unwrap();
-        let wrong_page = r#"{"translations":[{"id":"segment:0","page_id":"page:2","region_id":"region:0","source_text":"one","translated_text":"hello"},{"id":"segment:1","page_id":"page:2","region_id":"region:1","source_text":"two","translated_text":"world"}],"notes":""}"#;
-        assert!(translations("test", wrong_page, &request).is_err());
-
         let changed_source = r#"{"translations":[{"id":"segment:0","page_id":"page:2","region_id":"region:0","source_text":"ONE","translated_text":"hello"},{"id":"segment:1","page_id":"page:3","region_id":"region:1","source_text":"two","translated_text":"world"}],"notes":""}"#;
         assert!(translations("test", changed_source, &request).is_err());
-
-        let changed_region = r#"{"translations":[{"id":"segment:0","page_id":"page:2","region_id":"region:wrong","source_text":"one","translated_text":"hello"},{"id":"segment:1","page_id":"page:3","region_id":"region:1","source_text":"two","translated_text":"world"}],"notes":""}"#;
-        assert!(translations("test", changed_region, &request).is_err());
 
         let unknown_field = r#"{"translations":[{"id":"segment:0","page_id":"page:2","region_id":"region:0","source_text":"one","translated_text":"hello","extra":true},{"id":"segment:1","page_id":"page:3","region_id":"region:1","source_text":"two","translated_text":"world"}],"notes":""}"#;
         assert!(translations("test", unknown_field, &request).is_err());
     }
 
     #[test]
-    fn accepts_matching_echoed_page_index() {
-        let request = TranslationRequest::new(["one"], Language::Russian)
-            .with_page_numbers([17])
+    fn id_and_source_echo_outrank_a_stray_echoed_page() {
+        let request = TranslationRequest::new(["one", "two"], Language::Russian)
+            .with_page_numbers([17, 18])
             .unwrap();
-        let response = r#"{"translations":[{"id":"segment:0","page_id":"page:17","page_index":17,"region_id":"region:0","source_text":"one","translated_text":"один"}]}"#;
+        let response = r#"{"translations":[{"id":"segment:0","page_id":"page:18","page_index":18,"region_id":"region:0","source_text":"one","translated_text":"один"},{"id":"segment:1","page_id":"page:18","region_id":"region:1","source_text":"two","translated_text":"два"}]}"#;
 
         assert_eq!(
             translations("openrouter", response, &request).unwrap(),
-            ["один"]
+            ["один", "два"]
         );
-
-        let wrong = r#"{"translations":[{"id":"segment:0","page_id":"page:17","page_index":18,"region_id":"region:0","source_text":"one","translated_text":"один"}],"notes":""}"#;
-        assert!(translations("openrouter", wrong, &request).is_err());
     }
 
     #[test]
