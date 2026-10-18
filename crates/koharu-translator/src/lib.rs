@@ -11,7 +11,6 @@ mod remote;
 
 use std::{sync::Arc, time::Duration};
 
-use anyhow::Context as _;
 use koharu_ml::Device;
 
 use error::{Error, Result};
@@ -40,15 +39,13 @@ fn chapter_output_budget(request: &TranslationRequest) -> anyhow::Result<u32> {
 
 pub use backend::{
     OcrRequest, TranslationContext, TranslationRequest, TranslationSegmentMetadata, TranslationUnit,
-    TranslationVariants,
 };
 pub use language::Language;
 pub use model::{GenerationConfig, Model, ModelSelection, Quantization};
 pub(crate) use model::{ModelGeneration, QuantizationDefinition, display_name};
-pub use prompt::{
-    parse_translation_response, parse_translation_variants_response, synthesize_compact_variants,
-};
+pub use prompt::translation_material;
 pub use provider::{Provider, ProviderConfig, ProvidersConfig};
+pub use remote::default_qwen_ocr_model;
 
 #[derive(Clone)]
 pub struct Translator {
@@ -71,44 +68,6 @@ impl LoadedLocal {
 }
 
 impl Translator {
-    /// Build the exact OpenRouter chat-completions JSON body without adding an
-    /// authentication header. The resulting value is safe to save and submit
-    /// manually; it contains no credentials.
-    pub fn openrouter_request(
-        selection: &ModelSelection,
-        generation: GenerationConfig,
-        mut request: TranslationRequest,
-    ) -> anyhow::Result<serde_json::Value> {
-        anyhow::ensure!(
-            selection.provider == Provider::OpenRouter,
-            "chapter export requires the OpenRouter translation provider"
-        );
-        let model = selection
-            .model
-            .as_deref()
-            .context("OpenRouter requires a selected translation model")?;
-        let mut generation = generation.for_model(selection);
-        request.remove_image();
-        if request.is_chapter() {
-            let (_, payload) = prompt::prompts(&request)?;
-            let estimated_tokens = payload.len().div_ceil(4);
-            anyhow::ensure!(
-                estimated_tokens <= MAX_ESTIMATED_CHAPTER_INPUT_TOKENS,
-                "chapter translation request is estimated at {estimated_tokens} input tokens, above the conservative limit of {MAX_ESTIMATED_CHAPTER_INPUT_TOKENS}; {}",
-                request.chapter_split_hint()
-            );
-            let output_budget = chapter_output_budget(&request)?;
-            generation.max_tokens = Some(
-                generation
-                    .max_tokens
-                    .unwrap_or(output_budget)
-                    .min(MAX_ESTIMATED_CHAPTER_OUTPUT_TOKENS as u32),
-            );
-        }
-        remote::openrouter_translation_request_body(model, &generation, &request)
-            .map_err(Into::into)
-    }
-
     pub fn from_config(
         device: Device,
         providers: koharu_config::Config<ProvidersConfig>,
@@ -162,15 +121,35 @@ impl Translator {
         Ok(())
     }
 
+    #[tracing::instrument(
+        target = "koharu_metrics",
+        name = "model_run",
+        skip_all,
+        fields(
+            stage = "translation",
+            provider = %selection.provider,
+            model = selection.model.as_deref().unwrap_or("provider_default"),
+            target_language = request.target_language.tag(),
+            outcome = tracing::field::Empty,
+        ),
+    )]
     pub async fn translate(
         &self,
         selection: &ModelSelection,
         generation: GenerationConfig,
         mut request: TranslationRequest,
     ) -> anyhow::Result<(&'static str, Vec<String>)> {
+        let _metric = tracing::info_span!(
+            target: "koharu_metrics",
+            "translation_request",
+            provider = %selection.provider,
+            model = selection.model.as_deref().unwrap_or("provider_default"),
+            target_language = request.target_language.tag(),
+        );
         let provider = selection.provider;
         let provider_id: &'static str = provider.into();
         if request.segments.is_empty() {
+            tracing::Span::current().record("outcome", "skipped");
             return Ok((provider_id, request.segments));
         }
 
@@ -217,30 +196,8 @@ impl Translator {
             }
             .into());
         }
+        tracing::Span::current().record("outcome", "completed");
         Ok((provider_id, translated))
-    }
-
-    pub async fn translate_variants(
-        &self,
-        selection: &ModelSelection,
-        generation: GenerationConfig,
-        request: TranslationRequest,
-    ) -> anyhow::Result<(&'static str, Vec<TranslationVariants>)> {
-        let captured = request.captured_variants.clone();
-        let (provider_id, translated) = self.translate(selection, generation, request).await?;
-        let variants = captured
-            .0
-            .lock()
-            .ok()
-            .and_then(|mut guard| guard.take())
-            .filter(|items| items.len() == translated.len())
-            .unwrap_or_else(|| {
-                translated
-                    .into_iter()
-                    .map(TranslationVariants::from_full)
-                    .collect()
-            });
-        Ok((provider_id, variants))
     }
 
     #[tracing::instrument(
@@ -261,8 +218,9 @@ impl Translator {
         mut request: OcrRequest,
     ) -> anyhow::Result<(&'static str, String)> {
         anyhow::ensure!(
-            selection.provider != Provider::Local,
-            "API OCR requires a remote provider"
+            selection.provider.supports_ocr(),
+            "{} does not support API OCR",
+            selection.provider
         );
         anyhow::ensure!(
             selection.vision,
@@ -386,33 +344,6 @@ mod tests {
             chapter_output_budget(&request).unwrap(),
             MAX_ESTIMATED_CHAPTER_OUTPUT_TOKENS as u32
         );
-    }
-
-    #[test]
-    fn exported_openrouter_request_matches_network_contract_without_credentials() {
-        let request = TranslationRequest::new(["text"; 300], Language::Russian)
-            .with_page_numbers([1; 300])
-            .unwrap();
-        let selection = ModelSelection {
-            provider: Provider::OpenRouter,
-            model: Some("google/gemini-test".to_owned()),
-            quantization: None,
-            vision: false,
-            reasoning: true,
-            reasoning_required: true,
-        };
-
-        let body = Translator::openrouter_request(&selection, GenerationConfig::default(), request)
-            .unwrap();
-
-        assert_eq!(body["model"], "google/gemini-test");
-        assert_eq!(body["max_tokens"], 65_536);
-        assert_eq!(body["reasoning"]["enabled"], true);
-        assert_eq!(body["response_format"]["type"], "json_schema");
-        assert_eq!(body["messages"][0]["role"], "system");
-        assert_eq!(body["messages"][1]["role"], "user");
-        assert!(body.get("authorization").is_none());
-        assert!(!body.to_string().contains("api_key"));
     }
 
     #[tokio::test]

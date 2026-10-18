@@ -18,7 +18,7 @@ import { ColorWell } from '@/components/controls/ColorWell'
 import { usePage } from '@/lib/queries'
 import {
   isBrushTool,
-  maxBrushDiameter,
+  MAX_BRUSH_DIAMETER,
   MIN_BRUSH_DIAMETER,
   useKoharuStore,
   type CanvasTool,
@@ -47,7 +47,7 @@ const tools = [
   ['draw', Brush],
   ['eraser', Eraser],
   ['color_picker', Pipette],
-  ['remove', Sparkles],
+  ['remove', Eraser],
   ['pan', Hand],
 ] as const satisfies ReadonlyArray<readonly [CanvasTool, typeof MousePointer2]>
 
@@ -67,28 +67,78 @@ export function ToolBar() {
         {tools.map(([tool, Icon], index) => (
           <div key={tool} className='contents'>
             {index === tools.length - 1 && <span className='my-1 h-px w-5 bg-border' />}
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Button
-                    type='button'
-                    variant='ghost'
-                    size='icon'
-                    disabled={!page}
-                    aria-label={t(`tools.${tool}`)}
-                    data-active={active === tool}
-                    className='relative text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground disabled:opacity-30 data-[active=true]:bg-accent data-[active=true]:text-accent-foreground'
-                    onClick={() => setTool(tool)}
-                  />
-                }
-              >
-                <Icon className='size-4' />
-              </TooltipTrigger>
-              <TooltipContent side='right'>
-                {t(`tools.${tool}`)}
-                <span className='ml-2 opacity-60'>Ctrl+{shortcuts[tool].toUpperCase()}</span>
-              </TooltipContent>
-            </Tooltip>
+            {tool === 'remove' ? (
+              <div className='relative size-9 overflow-hidden rounded-xl'>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <Button
+                        type='button'
+                        variant='ghost'
+                        size='icon'
+                        disabled={!page}
+                        aria-label={t('tools.remove')}
+                        data-active={active === 'remove'}
+                        className='absolute inset-0 size-9 rounded-xl text-muted-foreground [clip-path:polygon(0_0,0_100%,100%_100%)] hover:bg-foreground/[0.06] hover:text-foreground disabled:opacity-30 data-[active=true]:bg-accent data-[active=true]:text-accent-foreground'
+                        onClick={() => setTool('remove')}
+                      />
+                    }
+                  >
+                    <Eraser className='absolute bottom-1.5 left-1.5 size-3.5' />
+                  </TooltipTrigger>
+                  <TooltipContent side='right'>
+                    {t('tools.remove')}
+                    <span className='ml-2 opacity-60'>Alt+{shortcuts.remove.toUpperCase()}</span>
+                  </TooltipContent>
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <Button
+                        type='button'
+                        variant='ghost'
+                        size='icon'
+                        disabled={!page}
+                        aria-label={t('tools.restore')}
+                        data-active={active === 'restore'}
+                        className='absolute inset-0 size-9 rounded-xl text-muted-foreground [clip-path:polygon(0_0,100%_0,100%_100%)] hover:bg-foreground/[0.06] hover:text-foreground disabled:opacity-30 data-[active=true]:bg-accent data-[active=true]:text-accent-foreground'
+                        onClick={() => setTool('restore')}
+                      />
+                    }
+                  >
+                    <Sparkles className='absolute top-1.5 right-1.5 size-3.5' />
+                  </TooltipTrigger>
+                  <TooltipContent side='right'>
+                    {t('tools.restore')}
+                    <span className='ml-2 opacity-60'>Alt+{shortcuts.restore.toUpperCase()}</span>
+                  </TooltipContent>
+                </Tooltip>
+                <span className='pointer-events-none absolute top-0 left-0 h-px w-13 origin-left rotate-45 bg-border' />
+              </div>
+            ) : (
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      type='button'
+                      variant='ghost'
+                      size='icon'
+                      disabled={!page}
+                      aria-label={t(`tools.${tool}`)}
+                      data-active={active === tool}
+                      className='relative text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground disabled:opacity-30 data-[active=true]:bg-accent data-[active=true]:text-accent-foreground'
+                      onClick={() => setTool(tool)}
+                    />
+                  }
+                >
+                  <Icon className='size-4' />
+                </TooltipTrigger>
+                <TooltipContent side='right'>
+                  {t(`tools.${tool}`)}
+                  <span className='ml-2 opacity-60'>Alt+{shortcuts[tool].toUpperCase()}</span>
+                </TooltipContent>
+              </Tooltip>
+            )}
           </div>
         ))}
       </div>
@@ -111,8 +161,6 @@ export function ToolBar() {
 function BrushSize({ value, onChange }: { value: number; onChange: (value: number) => void }) {
   const { t } = useTranslation()
   const roundedValue = Math.round(value)
-  const page = usePage().data
-  const maxSize = maxBrushDiameter(page?.size ?? { width: 2048, height: 2048 })
 
   return (
     <Popover>
@@ -148,11 +196,12 @@ function BrushSize({ value, onChange }: { value: number; onChange: (value: numbe
           <PopoverTitle className='text-[11px]'>{t('tools.brushSize')}</PopoverTitle>
           <NumberField
             min={MIN_BRUSH_DIAMETER}
+            max={MAX_BRUSH_DIAMETER}
             step={1}
             value={roundedValue}
             className='w-20'
             onValueChange={(next) => {
-              if (next !== null) onChange(Math.max(next, MIN_BRUSH_DIAMETER))
+              if (next !== null) onChange(clamp(next, MIN_BRUSH_DIAMETER, MAX_BRUSH_DIAMETER))
             }}
           >
             <NumberFieldGroup className='h-7'>
@@ -169,7 +218,7 @@ function BrushSize({ value, onChange }: { value: number; onChange: (value: numbe
         <Slider
           aria-label={t('tools.brushSize')}
           min={MIN_BRUSH_DIAMETER}
-          max={maxSize}
+          max={MAX_BRUSH_DIAMETER}
           step={1}
           value={value}
           className='py-1 [&_[data-slot=slider-thumb]]:size-2.5'
@@ -178,4 +227,8 @@ function BrushSize({ value, onChange }: { value: number; onChange: (value: numbe
       </PopoverContent>
     </Popover>
   )
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, Number.isFinite(value) ? value : min))
 }

@@ -1,31 +1,4 @@
-import { defaultTiers, defineConfig, tierPresets } from 'sponsorkit'
-
-const specialTier = {
-  title: 'Special Sponsors',
-  // Non-cash support sorts between backers (0) and past sponsors (-1).
-  monthlyDollars: -0.5,
-  preset: tierPresets.large,
-}
-
-/** @type {import('sponsorkit').Provider} */
-const specialSponsors = {
-  name: 'special-sponsors',
-  async fetchSponsors() {
-    return [
-      { login: 'getsentry', name: 'Sentry', websiteUrl: 'https://sentry.io/' },
-      { login: 'mintlify', name: 'Mintlify', websiteUrl: 'https://www.mintlify.com/' },
-      { login: 'openai', name: 'OpenAI', websiteUrl: 'https://openai.com/' },
-      { login: 'signpath', name: 'SignPath', websiteUrl: 'https://signpath.io/' },
-    ].map((sponsor) => ({
-      sponsor: {
-        ...sponsor,
-        type: 'Organization',
-        avatarUrl: `https://github.com/${sponsor.login}.png`,
-      },
-      monthlyDollars: specialTier.monthlyDollars,
-    }))
-  },
-}
+import { defineConfig } from 'sponsorkit'
 
 export default defineConfig({
   github: {
@@ -34,13 +7,8 @@ export default defineConfig({
   },
   outputDir: '.',
   formats: ['svg'],
-  providers: ['github', 'patreon', specialSponsors],
+  providers: ['github', 'patreon'],
   width: 800,
-  includePastSponsors: true,
-  tiers: [...defaultTiers, specialTier],
-  onSvgGenerated(svg) {
-    return svg.replace(/[\t ]+$/gm, '')
-  },
   onSponsorsAllFetched(sponsors) {
     let anonymousCount = 0
 
@@ -55,7 +23,7 @@ export default defineConfig({
           ...sponsorship.sponsor,
           login: `anonymous-${anonymousCount}`,
           name: 'Anonymous',
-          avatarUrl: '',
+          avatarUrl: undefined,
           websiteUrl: undefined,
           linkUrl: undefined,
         },

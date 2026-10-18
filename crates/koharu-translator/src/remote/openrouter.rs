@@ -26,37 +26,27 @@ pub(super) async fn translate(
 ) -> Result<Vec<String>> {
     let api_key =
         koharu_secrets::get("openrouter")?.context("openrouter API key is not configured")?;
-    let backend = ChatBackend {
-        reasoning: generation.reasoning,
-        ..ChatBackend::new(
-            "openrouter",
-            CHAT_URL,
-            Some(api_key.expose_secret()),
-            model,
-            generation,
-            ResponseMode::JsonSchema,
-        )
-    };
+    let backend = translation_backend(Some(api_key.expose_secret()), model, generation);
     super::openai_compatible::translate(client, backend, request).await
 }
 
-pub(super) fn translation_request_body(
-    model: &str,
+fn translation_backend<'a>(
+    api_key: Option<&'a str>,
+    model: &'a str,
     generation: &GenerationConfig,
-    request: &TranslationRequest,
-) -> Result<serde_json::Value> {
-    let backend = ChatBackend {
+) -> ChatBackend<'a> {
+    ChatBackend {
+        require_parameters: true,
         reasoning: generation.reasoning,
         ..ChatBackend::new(
             "openrouter",
             CHAT_URL,
-            None,
+            api_key,
             model,
             generation,
             ResponseMode::JsonSchema,
         )
-    };
-    super::openai_compatible::translation_request_body(&backend, request)
+    }
 }
 
 pub(super) async fn recognize(
@@ -160,18 +150,16 @@ mod tests {
 
     #[test]
     fn translation_requests_strict_structured_output() {
-        let source = include_str!("openrouter.rs");
-        let translation = source
-            .split_once("pub(super) async fn translate")
-            .unwrap()
-            .1
-            .split_once("pub(super) async fn recognize")
-            .unwrap()
-            .0;
-
-        assert!(
-            translation.contains("ResponseMode::JsonSchema"),
-            "OpenRouter translation currently relies only on prompt wording, so a model may return markdown or prose that the strict importer cannot parse"
+        let request = TranslationRequest::new(["こんにちは"], crate::Language::Russian);
+        let backend = translation_backend(None, "test/model", &GenerationConfig::default());
+        let body =
+            super::super::openai_compatible::translation_request_body(&backend, &request).unwrap();
+        assert_eq!(body["provider"]["require_parameters"], true);
+        assert_eq!(body["response_format"]["type"], "json_schema");
+        assert_eq!(body["response_format"]["json_schema"]["strict"], true);
+        assert_eq!(
+            body["response_format"]["json_schema"]["schema"],
+            crate::prompt::output_schema()
         );
     }
 

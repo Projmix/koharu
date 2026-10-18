@@ -31,6 +31,7 @@ use web_sys::{
 
 use crate::{cache::ResourceUsage, surface::SurfaceBlitter};
 
+const MAX_BRUSH_DIAMETER: f32 = 128.0;
 const RESOURCE_CACHE_BUDGET: u64 = 512 * 1024 * 1024;
 const MAX_CACHED_RESOURCES: usize = 1_024;
 const SAMPLE_ROW_BYTES: u64 = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as u64;
@@ -412,11 +413,7 @@ impl CanvasRenderer {
         };
         let sample = self.sample.take().expect("ready sample exists");
         let result = ready.and_then(|()| {
-            let mapped = sample
-                .buffer
-                .slice(..)
-                .get_mapped_range()
-                .map_err(|error| format!("failed to read mapped color sample: {error}"))?;
+            let mapped = sample.buffer.slice(..).get_mapped_range();
             let color = (mapped.len() >= 4)
                 .then(|| [mapped[0], mapped[1], mapped[2], mapped[3]])
                 .ok_or_else(|| "mapped color sample is truncated".to_owned());
@@ -1005,7 +1002,7 @@ impl BrowserGpu {
         self.blitter
             .copy(&self.device, &mut encoder, source, &target);
         self.queue.submit([encoder.finish()]);
-        self.queue.present(surface_texture);
+        surface_texture.present();
         if suboptimal {
             self.surface.configure(&self.device, &self.config);
         }
@@ -1107,8 +1104,8 @@ pub async fn create_canvas(element: HtmlCanvasElement) -> Result<WebCanvas, JsVa
     let adapter = instance
         .request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
+            force_fallback_adapter: false,
             compatible_surface: Some(&surface),
-            ..Default::default()
         })
         .await
         .map_err(js_error)?;
@@ -1935,10 +1932,12 @@ fn validate_page_point(point: Point, size: (u32, u32)) -> Result<(), JsValue> {
 }
 
 fn validate_brush(diameter: f32) -> Result<(), JsValue> {
-    if diameter.is_finite() && diameter > 0.0 {
+    if diameter.is_finite() && diameter > 0.0 && diameter <= MAX_BRUSH_DIAMETER {
         Ok(())
     } else {
-        Err(js_message(format!("brush diameter must be in (0, INF)")))
+        Err(js_message(format!(
+            "brush diameter must be in (0, {MAX_BRUSH_DIAMETER}]"
+        )))
     }
 }
 

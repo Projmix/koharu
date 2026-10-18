@@ -1,9 +1,9 @@
 mod detection;
 mod fal;
 mod inpainting;
-pub(crate) mod jev;
 mod ocr;
 mod openrouter_image;
+mod replicate;
 mod translation;
 
 use std::{collections::BTreeSet, sync::Arc};
@@ -13,14 +13,16 @@ use async_trait::async_trait;
 use koharu_scene::{Edit, EntityId, Generation, Patch, ProducerId, Snapshot};
 
 pub use detection::{KoharuLayoutRFDetrSeg2XLConfig, text_layer_placement};
+pub(crate) use fal::FalModel;
 pub(crate) use fal::normalize_cleanup_prompt;
 pub use fal::{ImageEditConfig, InpaintingApplyMode};
 pub use inpainting::{Flux2KleinConfig, RoremMixedConfig};
+pub(crate) use replicate::ReplicateModel;
 pub use translation::ChapterTranslation;
 
 use crate::{
-    Bounds, ImageCache, InpaintingMask, InpaintingModelChoice, InpaintingProvider, PipelineConfig,
-    Stage, StageTarget, StopToken,
+    Bounds, ImageCache, InpaintingIntent, InpaintingMask, InpaintingModelChoice,
+    InpaintingProvider, PipelineConfig, Stage, StageTarget, StopToken,
 };
 
 pub(crate) async fn inpainting_models() -> Result<Vec<InpaintingModelChoice>> {
@@ -43,17 +45,24 @@ pub(crate) async fn inpainting_models() -> Result<Vec<InpaintingModelChoice>> {
 fn merge_inpainting_models(
     discovered: Vec<openrouter_image::OpenRouterImageModelChoice>,
 ) -> Vec<InpaintingModelChoice> {
-    let mut models = vec![
-        InpaintingModelChoice {
+    let mut models: Vec<_> = FalModel::ALL
+        .into_iter()
+        .map(|model| InpaintingModelChoice {
             provider: InpaintingProvider::Fal,
-            model: "microsoft/mai-image-2.5/edit".to_owned(),
-            name: "Microsoft MAI Image 2.5 Edit".to_owned(),
-        },
-        InpaintingModelChoice {
-            provider: InpaintingProvider::Fal,
-            model: "microsoft/mai-image-2.5-pro/edit".to_owned(),
-            name: "Microsoft MAI Image 2.5 Pro Edit".to_owned(),
-        },
+            model: model.id().to_owned(),
+            name: model.name().to_owned(),
+        })
+        .collect();
+    models.extend(
+        ReplicateModel::ALL
+            .into_iter()
+            .map(|model| InpaintingModelChoice {
+                provider: InpaintingProvider::Replicate,
+                model: model.id().to_owned(),
+                name: model.name().to_owned(),
+            }),
+    );
+    models.extend([
         InpaintingModelChoice {
             provider: InpaintingProvider::OpenRouter,
             model: "microsoft/mai-image-2.5".to_owned(),
@@ -64,7 +73,7 @@ fn merge_inpainting_models(
             model: "microsoft/mai-image-2.5-pro".to_owned(),
             name: "Microsoft MAI Image 2.5 Pro".to_owned(),
         },
-    ];
+    ]);
 
     for model in discovered {
         if !models.iter().any(|choice| {
@@ -89,7 +98,9 @@ pub(crate) struct StageInput {
     region: Option<Bounds>,
     images: Arc<ImageCache>,
     inpainting_mask: Option<InpaintingMask>,
+    image_edit_reviewer: Option<Arc<dyn crate::ImageEditReviewer>>,
     stop: StopToken,
+    ocr_pass: crate::stage::OcrPass,
 }
 
 impl StageInput {
@@ -109,7 +120,9 @@ impl StageInput {
             region,
             images,
             inpainting_mask,
+            image_edit_reviewer: None,
             stop: StopToken::default(),
+            ocr_pass: crate::stage::OcrPass::Final,
         }
     }
 
@@ -122,12 +135,27 @@ impl StageInput {
             region: None,
             images: Arc::new(ImageCache::default()),
             inpainting_mask: None,
+            image_edit_reviewer: None,
             stop: StopToken::default(),
+            ocr_pass: crate::stage::OcrPass::Final,
         }
     }
 
     pub(crate) fn with_stop(mut self, stop: StopToken) -> Self {
         self.stop = stop;
+        self
+    }
+
+    pub(crate) fn with_image_edit_reviewer(
+        mut self,
+        reviewer: Option<Arc<dyn crate::ImageEditReviewer>>,
+    ) -> Self {
+        self.image_edit_reviewer = reviewer;
+        self
+    }
+
+    pub(crate) fn with_ocr_pass(mut self, pass: crate::stage::OcrPass) -> Self {
+        self.ocr_pass = pass;
         self
     }
 
@@ -145,8 +173,8 @@ impl StageInput {
         &self.pages
     }
 
-    fn uses_manual_inpainting(&self) -> bool {
-        self.inpainting_mask.is_some()
+    fn inpainting_intent(&self) -> Option<InpaintingIntent> {
+        self.inpainting_mask.as_ref().map(|mask| mask.intent)
     }
 
     fn contains_entity(&self, entity: EntityId) -> Result<bool> {
@@ -180,6 +208,7 @@ pub(crate) struct Stages {
     translation: translation::Processor,
     inpainting: inpainting::Processor,
     manual_inpainting: Option<inpainting::Processor>,
+    restoration_inpainting: inpainting::Processor,
 }
 
 impl Stages {
@@ -190,6 +219,7 @@ impl Stages {
     ) -> Result<Self> {
         let automatic_inpainting = config.inpainting()?;
         let manual_inpainting = config.manual_inpainting()?;
+        let restoration_inpainting = config.restoration_inpainting()?;
         let manual_inpainting = (manual_inpainting != automatic_inpainting)
             .then(|| inpainting::Processor::new(manual_inpainting, device.clone()))
             .transpose()?;
@@ -208,6 +238,10 @@ impl Stages {
             translation: translation::Processor::new(config.translation.clone(), translator),
             inpainting: inpainting::Processor::new(automatic_inpainting, device.clone())?,
             manual_inpainting,
+            restoration_inpainting: inpainting::Processor::new(
+                restoration_inpainting,
+                device.clone(),
+            )?,
         })
     }
 
@@ -216,8 +250,11 @@ impl Stages {
             Stage::Detection => &self.detection,
             Stage::Ocr => &self.ocr,
             Stage::Translation => &self.translation,
-            Stage::Inpainting if input.uses_manual_inpainting() => {
+            Stage::Inpainting if input.inpainting_intent() == Some(InpaintingIntent::Remove) => {
                 self.manual_inpainting.as_ref().unwrap_or(&self.inpainting)
+            }
+            Stage::Inpainting if input.inpainting_intent() == Some(InpaintingIntent::Restore) => {
+                &self.restoration_inpainting
             }
             Stage::Inpainting => &self.inpainting,
         }
@@ -254,6 +291,7 @@ impl Stages {
                 self.manual_inpainting
                     .as_ref()
                     .is_some_and(StageProcessor::unload)
+                    || self.restoration_inpainting.unload()
                     || automatic
             }
         }
@@ -286,6 +324,63 @@ mod tests {
             [
                 (InpaintingProvider::Fal, "microsoft/mai-image-2.5/edit"),
                 (InpaintingProvider::Fal, "microsoft/mai-image-2.5-pro/edit"),
+                (InpaintingProvider::Fal, "fal-ai/flux-kontext/dev"),
+                (InpaintingProvider::Fal, "fal-ai/flux-pro/kontext"),
+                (InpaintingProvider::Fal, "fal-ai/flux-pro/kontext/max"),
+                (InpaintingProvider::Fal, "fal-ai/flux-2/edit"),
+                (InpaintingProvider::Fal, "fal-ai/flux-2-pro/edit"),
+                (InpaintingProvider::Fal, "fal-ai/flux-2-flex/edit"),
+                (InpaintingProvider::Fal, "fal-ai/flux-2/klein/4b/edit"),
+                (InpaintingProvider::Fal, "fal-ai/flux-2/klein/9b/edit"),
+                (InpaintingProvider::Fal, "fal-ai/qwen-image-edit-2511"),
+                (
+                    InpaintingProvider::Fal,
+                    "fal-ai/bytedance/seedream/v4.5/edit"
+                ),
+                (
+                    InpaintingProvider::Replicate,
+                    "black-forest-labs/flux-2-dev"
+                ),
+                (
+                    InpaintingProvider::Replicate,
+                    "black-forest-labs/flux-2-pro"
+                ),
+                (
+                    InpaintingProvider::Replicate,
+                    "black-forest-labs/flux-2-max"
+                ),
+                (
+                    InpaintingProvider::Replicate,
+                    "black-forest-labs/flux-2-flex"
+                ),
+                (
+                    InpaintingProvider::Replicate,
+                    "black-forest-labs/flux-2-klein-4b"
+                ),
+                (
+                    InpaintingProvider::Replicate,
+                    "black-forest-labs/flux-2-klein-9b"
+                ),
+                (
+                    InpaintingProvider::Replicate,
+                    "black-forest-labs/flux-2-klein-4b-base"
+                ),
+                (
+                    InpaintingProvider::Replicate,
+                    "black-forest-labs/flux-2-klein-9b-base"
+                ),
+                (
+                    InpaintingProvider::Replicate,
+                    "black-forest-labs/flux-kontext-dev"
+                ),
+                (
+                    InpaintingProvider::Replicate,
+                    "black-forest-labs/flux-kontext-pro"
+                ),
+                (
+                    InpaintingProvider::Replicate,
+                    "black-forest-labs/flux-kontext-max"
+                ),
                 (InpaintingProvider::OpenRouter, "microsoft/mai-image-2.5"),
                 (
                     InpaintingProvider::OpenRouter,
@@ -368,7 +463,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn transient_remove_mask_selects_the_manual_lama_processor() {
+    async fn inpainting_intents_select_independent_automatic_remove_and_restore_processors() {
         let translator = koharu_translator::Translator::from_config(
             koharu_ml::Device::cpu(),
             koharu_config::Config::memory(koharu_translator::ProvidersConfig::default()),
@@ -376,6 +471,7 @@ mod tests {
         .unwrap();
         let mut config = PipelineConfig::default();
         config.inpainting.method = crate::InpaintingMethod::Api;
+        config.inpainting.api.model = "microsoft/mai-image-2.5-pro/edit".to_owned();
         let stages = Stages::new(&config, translator, &koharu_ml::Device::cpu()).unwrap();
         let session = koharu_scene::Session::memory().await.unwrap();
         let page = EntityId::new();
@@ -396,14 +492,31 @@ mod tests {
             Some(crate::InpaintingMask {
                 page,
                 png: Arc::from([]),
+                intent: crate::InpaintingIntent::Remove,
+            }),
+        );
+        let restore = StageInput::new(
+            session.snapshot(),
+            page,
+            None,
+            None,
+            Arc::new(ImageCache::default()),
+            Some(crate::InpaintingMask {
+                page,
+                png: Arc::from([]),
+                intent: crate::InpaintingIntent::Restore,
             }),
         );
 
         assert_eq!(
             stages.model(Stage::Inpainting, &automatic),
-            "microsoft/mai-image-2.5/edit"
+            "microsoft/mai-image-2.5-pro/edit"
         );
         assert_eq!(stages.model(Stage::Inpainting, &manual), "lama");
+        assert_eq!(
+            stages.model(Stage::Inpainting, &restore),
+            "microsoft/mai-image-2.5/edit"
+        );
     }
 
     #[tokio::test]

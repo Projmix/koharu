@@ -131,13 +131,15 @@
     "compactMode": "처리 컨트롤 축소",
     "entireProject": "전체 프로젝트",
     "entireProjectDescription": "이 프로젝트의 모든 페이지를 처리합니다.",
-    "exportChapter": "Export chapter translation request",
+    "exportChapter": "수동 번역용으로 내보내기 (ZIP)",
     "expandedMode": "처리 컨트롤 확장",
     "model": "모델",
     "noModel": "모델 없음",
     "notSet": "설정되지 않음",
     "output": "출력",
-    "importChapter": "Import chapter translation response",
+    "importChapter": "번역된 JSON 가져오기",
+    "exportChapterHelp": "압축을 풀고 prompt.txt를 원하는 채팅에 붙여 넣은 뒤 chapter.json을 첨부하세요. 응답을 translation.json으로 저장해 가져오세요.",
+    "importChapterDone": "번역을 가져왔습니다",
     "pageProfile": "페이지 프로필",
     "pipelineStages": "파이프라인 단계",
     "providerDefault": "제공자 기본값",
@@ -165,6 +167,10 @@
     "typing": "식자"
   },
   "inspector": {
+    "transformTarget": "편집 대상",
+    "transformText": "텍스트",
+    "transformRegion": "OCR 영역",
+    "transformHint": "블록을 끌어 이동하고 핸들로 크기를 조절하세요. 자동 모드는 글꼴 크기를 프레임에 맞춥니다.",
     "alignBottom": "아래 정렬",
     "alignCenter": "가운데 정렬",
     "alignLeft": "왼쪽 정렬",
@@ -181,6 +187,7 @@
     "color": "색상",
     "customFrame": "사용자 지정 프레임",
     "decreaseBorderWidth": "테두리 너비 줄이기",
+    "decreaseFontSize": "글꼴 크기 1pt 줄이기",
     "direction": "방향",
     "font": "글꼴",
     "fontSize": "글꼴 크기",
@@ -193,6 +200,7 @@
     "fontWeight": "글꼴 굵기",
     "horizontal": "가로쓰기",
     "increaseBorderWidth": "테두리 너비 늘리기",
+    "increaseFontSize": "글꼴 크기 1pt 늘리기",
     "opacity": "불투명도",
     "placement": "배치",
     "resetAutoFit": "자동 맞춤으로 초기화",
@@ -217,14 +225,15 @@
     "pt-BR": "Português brasileiro",
     "ru-RU": "Русский",
     "tr-TR": "Türkçe",
-    "wuu": "吴语",
     "zh-CN": "简体中文",
     "zh-TW": "繁體中文"
   },
   "layers": {
+    "collapse": "{{name}} 접기",
     "delete": "{{name}} 삭제",
     "edit": "{{name}} 편집",
     "empty": "이 페이지에는 레이어가 없습니다.",
+    "expand": "{{name}} 펼치기",
     "hide": "{{name}} 숨기기",
     "imageName": "이미지 {{index}}",
     "kinds": {
@@ -268,7 +277,7 @@
     "processLayers": "선택한 레이어 처리",
     "processPages": "선택한 페이지 처리",
     "processProject": "프로젝트 처리",
-    "projectVersions": "Project Versions…",
+    "projectVersions": "프로젝트 버전…",
     "redo": "다시 실행",
     "runPhase": "{{phase}} 실행",
     "selectAllLayers": "모든 레이어 선택",
@@ -277,22 +286,22 @@
     "view": "보기"
   },
   "versions": {
-    "delete": "Delete",
-    "deleteDescription": "Version “{{name}}” will be permanently deleted. The current project state will not change.",
-    "deleteLabel": "Delete version {{name}}",
-    "deleteTitle": "Delete this version?",
-    "description": "Save named snapshots of the complete project and return to them later.",
-    "emptyDescription": "Save a version before a large edit or processing run.",
-    "emptyTitle": "No saved versions",
-    "nameLabel": "Version name",
-    "namePlaceholder": "For example: OCR complete",
-    "restore": "Restore",
-    "restoreDescription": "The project will return to version “{{name}}” as a new revision. Save the current state as a version first if you need it.",
-    "restoreLabel": "Restore version {{name}}",
-    "restoreTitle": "Restore this version?",
-    "revision": "revision {{revision}}",
-    "save": "Save",
-    "title": "Project Versions"
+    "delete": "삭제",
+    "deleteDescription": "버전 “{{name}}”이(가) 영구적으로 삭제됩니다. 현재 프로젝트 상태는 바뀌지 않습니다.",
+    "deleteLabel": "버전 {{name}} 삭제",
+    "deleteTitle": "이 버전을 삭제할까요?",
+    "description": "프로젝트 전체의 이름 있는 스냅샷을 저장하고 나중에 돌아갈 수 있습니다.",
+    "emptyDescription": "큰 편집이나 처리 전에 버전을 저장하세요.",
+    "emptyTitle": "저장된 버전이 없습니다",
+    "nameLabel": "버전 이름",
+    "namePlaceholder": "예: OCR 완료",
+    "restore": "복원",
+    "restoreDescription": "프로젝트가 새 리비전으로 버전 “{{name}}”에 돌아갑니다. 현재 상태가 필요하면 먼저 버전으로 저장하세요.",
+    "restoreLabel": "버전 {{name}} 복원",
+    "restoreTitle": "이 버전을 복원할까요?",
+    "revision": "리비전 {{revision}}",
+    "save": "저장",
+    "title": "프로젝트 버전"
   },
   "model": {
     "baseUrl": "기본 URL",
@@ -330,6 +339,7 @@
     "noResults": "필터와 일치하는 페이지가 없습니다.",
     "pageName": "페이지 이름",
     "pages": "페이지",
+    "duplicate": "복제",
     "rename": "이름 바꾸기",
     "renameDescription": "이 페이지의 새 이름을 정하세요.",
     "renameTitle": "페이지 이름 바꾸기",
@@ -372,7 +382,8 @@
     "minimax": "MiniMax 언어 모델입니다.",
     "openai": "OpenAI 언어 모델입니다.",
     "openai-compatible": "OpenAI 호환 API를 제공하는 모든 서버입니다.",
-    "openrouter": "OpenRouter를 통해 라우팅되는 모델입니다."
+    "openrouter": "OpenRouter를 통해 라우팅되는 모델입니다.",
+    "qwen-ocr": "Alibaba Cloud의 전용 Qwen-VL-OCR. 별도의 API 키와 지역별 주소를 사용합니다."
   },
   "resources": {
     "cpu": "CPU",
@@ -441,13 +452,18 @@
         "instructionsPlaceholder": "선택적 OCR 전용 지침",
         "local": "로컬(CPU)",
         "localModel": "로컬 OCR 모델",
-        "method": "OCR 방식"
+        "method": "OCR 방식",
+        "hybrid": "로컬 + API",
+        "hybridDescription": "챕터의 모든 페이지에서 로컬 OCR을 완료한 뒤 각 이미지와 인식 텍스트를 선택한 API로 보냅니다. 결과는 자동 적용됩니다."
       },
       "inpainting": {
         "apiModel": "이미지 편집 모델",
-        "localModel": "로컬 복원 모델",
-        "method": "복원 방법",
-        "options": "API 복원 옵션",
+        "localModel": "로컬 클리닝 모델",
+        "restorationModel": "복원 모델",
+        "restorationProvider": "복원 제공업체",
+        "restorationPrompt": "복원 프롬프트",
+        "method": "클리닝 방식",
+        "options": "API 클리닝 설정",
         "promptPreset": "프롬프트 프리셋",
         "promptPresets": {
           "cleanup-all": "모든 텍스트와 워터마크 제거",
@@ -455,7 +471,11 @@
           "custom": "사용자 지정 프롬프트",
           "translate-russian": "문자를 러시아어로 교체"
         },
-        "provider": "이미지 제공자"
+        "provider": "이미지 제공자",
+        "removeDescription": "제거 브러시용 로컬 모델입니다. 페이지 클리닝 및 사각형 영역 복원과 별개입니다.",
+        "restorationDescription": "사각형 선택 영역을 복원하는 도구의 API 모델입니다. 페이지 클리닝 및 제거 브러시와 별개입니다.",
+        "previewBeforeSend": "API 전송 전 미리보기",
+        "previewBeforeSendDescription": "API 페이지 정리 또는 선택 영역 복원 전에 전송할 이미지를 확인하고 프롬프트를 수정합니다. 로컬 제거에는 영향을 주지 않습니다."
       },
       "processing": "처리 중",
       "stages": {
@@ -464,8 +484,8 @@
           "title": "감지"
         },
         "inpainting": {
-          "description": "제거한 텍스트 아래의 아트워크를 복원합니다.",
-          "title": "인페인팅"
+          "description": "페이지 처리의 클리닝 단계에 사용합니다. 제거 및 복원 도구는 아래에서 별도로 설정합니다.",
+          "title": "복원"
         },
         "ocr": {
           "description": "감지된 영역 안의 원문을 읽습니다.",
@@ -480,6 +500,7 @@
       "connections": "연결",
       "connectionsDescription": "자격 증명은 이 기기에 안전하게 저장됩니다.",
       "falDescription": "Fal.ai 이미지 편집 모델에 사용하는 자격 증명입니다.",
+      "replicateDescription": "FLUX 이미지 편집. Dev와 Klein의 출력 안전 검사는 꺼져 있으며, Pro·Max·Flex에는 모델 제한이 적용됩니다.",
       "credential": "자격 증명",
       "credentialLabel": "{{provider}} 자격 증명",
       "description": "번역 및 언어 모델 제공자를 연결합니다.",
@@ -487,7 +508,7 @@
       "title": "제공자"
     },
     "shortcuts": {
-      "description": "텍스트 필드에 포커스가 없을 때 Ctrl과 설정한 키를 사용합니다.",
+      "description": "텍스트 필드에 포커스가 없을 때 Alt와 설정한 키를 사용합니다.",
       "inputLabel": "{{action}} 단축키",
       "title": "단축키",
       "tools": "도구"
@@ -508,12 +529,12 @@
       "instructionsDescription": "내장 프롬프트가 언어와 JSON 형식을 지정합니다. 비워 두면 그대로 사용하고 입력 내용은 추가 지침이 됩니다.",
       "instructionsLabel": "번역 지침",
       "instructionsPlaceholder": "프로젝트 전체에 적용할 선택적 지침",
-      "promptPreset": "Chapter prompt preset",
-      "promptPresetDescription": "Load a ready-made style and terminology prompt into the chapter profile.",
-      "presetCustom": "Custom instructions",
-      "presetBnhaBakugoMidoriya": "BNHA — Bakugo / Midoriya (Russian)",
-      "presetBnhaDoujinshi": "BNHA — doujinshi (Russian)",
-      "presetMangaAdaptive": "Manga — adaptive chapter (Russian)",
+      "promptPreset": "챕터 프롬프트 프리셋",
+      "promptPresetDescription": "문체와 용어가 정리된 기성 프롬프트를 챕터 프로필에 불러옵니다.",
+      "presetCustom": "사용자 지정 지침",
+      "presetBnhaBakugoMidoriya": "BNHA — 바쿠고 / 미도리야 (러시아어)",
+      "presetBnhaDoujinshi": "BNHA — 동인지 (러시아어)",
+      "presetMangaAdaptive": "만화 — 적응형 챕터 (러시아어)",
       "model": "모델",
       "pageProfile": "페이지",
       "modelDescription": "제공자 레이블은 각 모델의 실행 위치를 나타내며 연결은 별도로 설정합니다.",
@@ -528,10 +549,10 @@
       "title": "번역",
       "translationModel": "번역 모델",
       "translationModelDescription": "텍스트 번역에 사용할 모델을 선택합니다.",
-      "unitPolicy": "Translation grouping",
-      "unitPolicyDescription": "Choose how chapter text is grouped before translation.",
-      "pageOnly": "Page only",
-      "adaptiveV1": "Adaptive v1 (chapter context)"
+      "unitPolicy": "번역 묶음 방식",
+      "unitPolicyDescription": "번역 전에 챕터 텍스트를 어떻게 묶을지 선택합니다.",
+      "pageOnly": "페이지만",
+      "adaptiveV1": "적응형 v1 (챕터 문맥)"
     },
     "typesetting": {
       "addFamily": "글꼴 패밀리 추가",
@@ -590,6 +611,7 @@
     "ocr": "OCR 영역",
     "pan": "이동",
     "remove": "제거",
+    "restore": "복원",
     "select": "선택",
     "text": "텍스트"
   },
@@ -610,12 +632,35 @@
     "later": "나중에",
     "noNotes": "릴리스 노트가 제공되지 않았습니다.",
     "retry": "다시 시도",
-    "update": "업데이트"
+    "update": "업데이트",
+    "upstream": {
+      "title": "원본 Koharu 업데이트가 있습니다",
+      "description": "원본 Koharu {{version}}은 통합된 {{integratedVersion}}보다 최신 버전입니다. 이 포크에 유용한 변경이 있을 수 있습니다. 자동 업데이트는 Projmix/koharu 릴리스만 설치합니다.",
+      "view": "원본 릴리스 보기",
+      "dismiss": "이 버전 숨기기"
+    }
   },
   "window": {
     "close": "닫기",
     "maximize": "최대화",
     "minimize": "최소화",
     "restore": "복원"
+  },
+  "imageEditPreview": {
+    "title": "이미지 편집 요청 미리보기",
+    "description": "전송할 이미지와 프롬프트를 확인하세요. 프롬프트 변경은 이 요청에만 적용되며 설정에 저장되지 않습니다.",
+    "image": "전송할 이미지",
+    "prompt": "이 요청의 프롬프트",
+    "resetPrompt": "프롬프트 초기화",
+    "send": "API로 전송",
+    "cancel": "작업 취소",
+    "close": "닫기",
+    "actualSize": "100%",
+    "fitImage": "이미지 맞추기",
+    "restoration": "선택 영역 복원",
+    "cleanup": "페이지 정리",
+    "failed": "미리보기를 처리하지 못했습니다: {{error}}",
+    "cleanupLayers": "원본 + 표시된 그리기 레이어. PNG 한 장을 전송하며 텍스트 레이어, 마스크, 선택 핸들은 제외됩니다.",
+    "restorationLayers": "원본 + 표시된 정리 및 그리기 레이어를 레이어 순서로 합성한 선택 영역. PNG 한 장을 전송하며 텍스트 레이어, 마스크, 선택 핸들은 제외됩니다."
   }
 }

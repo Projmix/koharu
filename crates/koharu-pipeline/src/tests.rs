@@ -1,6 +1,20 @@
 use super::*;
 
 #[test]
+fn image_edit_preview_setting_survives_config_round_trip() {
+    for enabled in [false, true] {
+        let config = toml::from_str::<PipelineConfig>(&format!(
+            "[inpainting]\npreview_before_send = {enabled}"
+        ))
+        .unwrap();
+        let saved = serde_json::to_value(&config).unwrap();
+        assert_eq!(saved["inpainting"]["preview_before_send"], enabled);
+        let restored: PipelineConfig = serde_json::from_value(saved).unwrap();
+        assert_eq!(restored.inpainting.preview_before_send, enabled);
+    }
+}
+
+#[test]
 fn configuration_ignores_unknown_fields() {
     let config = toml::from_str::<PipelineConfig>("legacy_limit = 1").unwrap();
     assert_eq!(config, PipelineConfig::default());
@@ -77,6 +91,7 @@ async fn stop_after_a_page_keeps_completed_progress() {
                     &koharu_scene::TextLayout {
                         origin: koharu_scene::Origin::User,
                         kind: koharu_scene::TextLayoutKind::Paragraph,
+                        angle_degrees: None,
                     },
                 )?;
                 edit.set(

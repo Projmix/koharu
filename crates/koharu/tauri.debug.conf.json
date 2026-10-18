@@ -1,0 +1,5 @@
+{
+  "build": {
+    "beforeBuildCommand": "bun run --filter @koharu/bridge build:dev && bun run --filter @koharu/app build"
+  }
+}

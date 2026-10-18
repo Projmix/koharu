@@ -57,6 +57,17 @@ export function ProviderPreferences({
             onChange={(fal) => onChange({ ...value, fal })}
           />
         </PreferenceRow>
+        <PreferenceRow
+          title='Replicate'
+          description={t('settings.providers.replicateDescription')}
+          align='start'
+        >
+          <CredentialField
+            label='Replicate'
+            value={value.replicate}
+            onChange={(replicate) => onChange({ ...value, replicate })}
+          />
+        </PreferenceRow>
         {value.entries.filter(isConfigurable).map((entry) => (
           <PreferenceRow
             key={entry.config.provider}

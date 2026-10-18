@@ -75,7 +75,6 @@ pub(crate) enum Target {
 }
 
 impl Target {
-    #[allow(unused)]
     pub(super) fn device_type(self) -> crate::DeviceType {
         use strum::EnumProperty;
 

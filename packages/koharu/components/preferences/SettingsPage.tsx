@@ -336,7 +336,7 @@ function ShortcutPreferences() {
         {actions.map((action) => (
           <PreferenceRow key={action} title={t(shortcutKeys[action])}>
             <div className='ml-auto flex items-center gap-1.5 text-[12px] text-muted-foreground'>
-              <span>Ctrl+</span>
+              <span>Alt+</span>
               <Input
                 aria-label={t('settings.shortcuts.inputLabel', { action: t(shortcutKeys[action]) })}
                 maxLength={1}
@@ -365,6 +365,7 @@ const shortcutKeys: Record<ShortcutAction, string> = {
   eraser: 'tools.eraser',
   color_picker: 'tools.color_picker',
   remove: 'tools.remove',
+  restore: 'tools.restore',
   pan: 'tools.pan',
   fit: 'canvas.fit',
 }

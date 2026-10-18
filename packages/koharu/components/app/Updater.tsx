@@ -3,12 +3,13 @@
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { relaunch } from '@tauri-apps/plugin-process'
 import { check, type Update } from '@tauri-apps/plugin-updater'
-import { Download, RefreshCw } from 'lucide-react'
+import { Download, ExternalLink, RefreshCw } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Trans, useTranslation } from 'react-i18next'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
+import { commands, type UpstreamUpdate } from '@koharu/bridge/protocol'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -20,6 +21,7 @@ import {
   AlertDialogMedia,
   AlertDialogTitle,
 } from '@koharu/ui/components/alert-dialog'
+import { Button } from '@koharu/ui/components/button'
 import { Progress } from '@koharu/ui/components/progress'
 import { ScrollArea } from '@koharu/ui/components/scroll-area'
 
@@ -28,19 +30,34 @@ type UpdateState =
   | { kind: 'downloading'; update: Update; downloaded: number; total: number | null }
   | { kind: 'error'; update: Update; message: string }
 
+const dismissedUpstreamKey = 'koharu.upstream-dismissed-version'
+
 export function Updater() {
   const { t } = useTranslation()
   const [state, setState] = useState<UpdateState | null>(null)
+  const [upstream, setUpstream] = useState<UpstreamUpdate | null>(null)
 
   useEffect(() => {
     let active = true
-    void check()
+    void check({ timeout: 8000 })
       .then((update) => {
         if (active && update) {
           setState({ kind: 'available', update })
         } else if (update) {
           void update.close()
         }
+      })
+      .catch(() => undefined)
+    void commands
+      .checkUpstreamUpdate()
+      .then((update) => {
+        if (!active || !update) return
+        try {
+          if (localStorage.getItem(dismissedUpstreamKey) === update.version) return
+        } catch {
+          // Restricted browser storage must not prevent the informational notice.
+        }
+        setUpstream(update)
       })
       .catch(() => undefined)
     return () => {
@@ -72,7 +89,48 @@ export function Updater() {
       })
   }
 
-  if (!state) return null
+  if (!state) {
+    if (!upstream) return null
+    const dismiss = () => {
+      try {
+        localStorage.setItem(dismissedUpstreamKey, upstream.version)
+      } catch {
+        // Dismiss for this session even if browser storage is unavailable.
+      }
+      setUpstream(null)
+    }
+    return (
+      <AlertDialog
+        open
+        onOpenChange={(open) => {
+          if (!open) dismiss()
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t('updater.upstream.title')}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t('updater.upstream.description', {
+                version: upstream.version,
+                integratedVersion: upstream.integratedVersion,
+              })}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t('updater.upstream.dismiss')}</AlertDialogCancel>
+            <Button
+              onClick={() => {
+                void openUrl(upstream.url).catch(() => undefined)
+              }}
+            >
+              <ExternalLink />
+              {t('updater.upstream.view')}
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    )
+  }
 
   const downloading = state.kind === 'downloading'
   const percent =

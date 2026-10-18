@@ -7,13 +7,20 @@ use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
-use crate::{ProgressSink, Scope, Stage};
+use crate::{ImageEditReviewer, ProgressSink, Scope, Stage};
 use koharu_scene::EntityId;
 
 #[derive(Clone, Debug)]
 pub struct InpaintingMask {
     pub page: EntityId,
     pub png: Arc<[u8]>,
+    pub intent: InpaintingIntent,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InpaintingIntent {
+    Remove,
+    Restore,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize, Type)]
@@ -68,6 +75,7 @@ pub struct Request {
     pub stop: StopToken,
     pub progress: Option<ProgressSink>,
     pub inpainting_mask: Option<InpaintingMask>,
+    pub image_edit_reviewer: Option<Arc<dyn ImageEditReviewer>>,
 }
 
 impl Default for Request {
@@ -78,6 +86,7 @@ impl Default for Request {
             stop: StopToken::default(),
             progress: None,
             inpainting_mask: None,
+            image_edit_reviewer: None,
         }
     }
 }

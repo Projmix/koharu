@@ -1,13 +1,11 @@
 use anyhow::{Result, bail};
-use koharu_translator::{
-    GenerationConfig, Language, ModelSelection as TranslationModelSelection, Provider,
-};
+use koharu_translator::{GenerationConfig, Language, ModelSelection as TranslationModelSelection};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, ser::SerializeMap as _};
 use specta::Type;
 
 use crate::stages::{
-    Flux2KleinConfig, ImageEditConfig, KoharuLayoutRFDetrSeg2XLConfig, RoremMixedConfig,
-    normalize_cleanup_prompt,
+    FalModel, Flux2KleinConfig, ImageEditConfig, KoharuLayoutRFDetrSeg2XLConfig, ReplicateModel,
+    RoremMixedConfig, normalize_cleanup_prompt,
 };
 
 #[derive(Clone, Debug, PartialEq, Type)]
@@ -56,10 +54,12 @@ struct ModelSelection {
 #[serde(default)]
 struct InpaintingFile {
     method: InpaintingMethod,
+    preview_before_send: bool,
     local_model: ModelSelection,
     #[serde(default = "lama_selection")]
     manual_model: ModelSelection,
     api: ApiInpaintingConfig,
+    restoration: RestorationConfig,
 }
 
 fn lama_selection() -> ModelSelection {
@@ -72,11 +72,13 @@ impl Default for InpaintingFile {
     fn default() -> Self {
         Self {
             method: InpaintingMethod::Local,
+            preview_before_send: false,
             local_model: ModelSelection {
                 model: "lama".to_owned(),
             },
             manual_model: lama_selection(),
             api: ApiInpaintingConfig::default(),
+            restoration: RestorationConfig::default(),
         }
     }
 }
@@ -121,6 +123,7 @@ impl Serialize for PipelineConfig {
             translation: self.translation.clone(),
             inpainting: InpaintingFile {
                 method: self.inpainting.method,
+                preview_before_send: self.inpainting.preview_before_send,
                 local_model: ModelSelection {
                     model: local_model.to_owned(),
                 },
@@ -128,6 +131,7 @@ impl Serialize for PipelineConfig {
                     model: manual_model.to_owned(),
                 },
                 api: self.inpainting.api.clone(),
+                restoration: self.inpainting.restoration.clone(),
             },
             processor,
         }
@@ -193,9 +197,11 @@ impl<'de> Deserialize<'de> for PipelineConfig {
             translation: file.translation,
             inpainting: InpaintingConfig {
                 method: file.inpainting.method,
+                preview_before_send: file.inpainting.preview_before_send,
                 local_model,
                 manual_model,
                 api,
+                restoration: file.inpainting.restoration,
             },
             processor,
         })
@@ -362,15 +368,16 @@ impl PipelineConfig {
             apply_mode: self.inpainting.api.apply_mode,
         };
         match self.inpainting.api.provider {
-            InpaintingProvider::Fal => match self.inpainting.api.model.as_str() {
-                "microsoft/mai-image-2.5/edit" => Ok(InpaintingModel::MaiImage2_5Edit(config)),
-                "microsoft/mai-image-2.5-pro/edit" => {
-                    Ok(InpaintingModel::MaiImage2_5ProEdit(config))
-                }
-                model => bail!("unsupported Fal.ai inpainting model {model}"),
-            },
+            InpaintingProvider::Fal => Ok(InpaintingModel::FalImageEdit {
+                model: FalModel::from_id(&self.inpainting.api.model)?,
+                config,
+            }),
             InpaintingProvider::OpenRouter => Ok(InpaintingModel::OpenRouterImageEdit {
                 model: self.inpainting.api.model.clone(),
+                config,
+            }),
+            InpaintingProvider::Replicate => Ok(InpaintingModel::ReplicateImageEdit {
+                model: ReplicateModel::from_id(&self.inpainting.api.model)?,
                 config,
             }),
         }
@@ -382,16 +389,39 @@ impl PipelineConfig {
         ))
     }
 
+    pub(crate) fn restoration_inpainting(&self) -> Result<InpaintingModel> {
+        let restoration = &self.inpainting.restoration;
+        if restoration.model.trim().is_empty() {
+            bail!("restoration requires a selected model")
+        }
+        let config = ImageEditConfig {
+            prompt: restoration.prompt.clone(),
+            apply_mode: crate::InpaintingApplyMode::Mask,
+        };
+        match restoration.provider {
+            InpaintingProvider::Fal => Ok(InpaintingModel::FalImageEdit {
+                model: FalModel::from_id(&restoration.model)?,
+                config,
+            }),
+            InpaintingProvider::OpenRouter => Ok(InpaintingModel::OpenRouterImageEdit {
+                model: restoration.model.clone(),
+                config,
+            }),
+            InpaintingProvider::Replicate => Ok(InpaintingModel::ReplicateImageEdit {
+                model: ReplicateModel::from_id(&restoration.model)?,
+                config,
+            }),
+        }
+    }
+
     pub fn validate(&self) -> Result<()> {
         let _ = self.detection()?;
         let _ = self.inpainting()?;
         let _ = self.manual_inpainting()?;
-        if self.ocr.method == OcrMethod::Api {
-            if !matches!(
-                self.ocr.api.model.provider,
-                Provider::OpenAi | Provider::OpenAiCompatible | Provider::OpenRouter
-            ) {
-                bail!("API OCR supports only OpenAI, OpenAI-compatible, and OpenRouter providers")
+        let _ = self.restoration_inpainting()?;
+        if self.ocr.method != OcrMethod::Local {
+            if !self.ocr.api.model.provider.supports_ocr() {
+                bail!("{} does not support API OCR", self.ocr.api.model.provider)
             }
             if !self.ocr.api.model.vision {
                 bail!("API OCR requires a vision model")
@@ -407,6 +437,11 @@ impl PipelineConfig {
                 bail!("API OCR requires a selected model")
             }
         }
+        for profile in [&self.translation.page, &self.translation.chapter] {
+            if !profile.model.provider.supports_translation() {
+                bail!("{} does not support translation", profile.model.provider)
+            }
+        }
         if self.inpainting.method == InpaintingMethod::Api {
             if self.inpainting.api.model.trim().is_empty() {
                 bail!("API inpainting requires a selected model")
@@ -414,6 +449,9 @@ impl PipelineConfig {
             if self.inpainting.api.prompt.contains('\0') {
                 bail!("API inpainting prompt contains NUL")
             }
+        }
+        if self.inpainting.restoration.prompt.contains('\0') {
+            bail!("restoration prompt contains NUL")
         }
         Ok(())
     }
@@ -493,6 +531,7 @@ pub enum OcrMethod {
     #[default]
     Local,
     Api,
+    LocalApi,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Type)]
@@ -522,14 +561,7 @@ pub struct ApiOcrConfig {
 impl Default for ApiOcrConfig {
     fn default() -> Self {
         Self {
-            model: TranslationModelSelection {
-                provider: Provider::OpenRouter,
-                model: Some("qwen/qwen3-vl-32b-instruct".to_owned()),
-                quantization: None,
-                vision: true,
-                reasoning: true,
-                reasoning_required: false,
-            },
+            model: koharu_translator::default_qwen_ocr_model(),
             generation: GenerationConfig {
                 temperature: Some(0.0),
                 max_tokens: Some(1024),
@@ -557,6 +589,8 @@ pub enum InpaintingProvider {
     Fal,
     #[serde(rename = "openrouter")]
     OpenRouter,
+    #[serde(rename = "replicate")]
+    Replicate,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Type)]
@@ -569,9 +603,11 @@ pub struct InpaintingModelChoice {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Type)]
 pub struct InpaintingConfig {
     pub method: InpaintingMethod,
+    pub preview_before_send: bool,
     pub local_model: LocalInpaintingModel,
     pub manual_model: LocalInpaintingModel,
     pub api: ApiInpaintingConfig,
+    pub restoration: RestorationConfig,
 }
 
 fn default_manual_inpainting_model() -> LocalInpaintingModel {
@@ -582,9 +618,30 @@ impl Default for InpaintingConfig {
     fn default() -> Self {
         Self {
             method: InpaintingMethod::Local,
+            preview_before_send: false,
             local_model: LocalInpaintingModel::LaMa {},
             manual_model: default_manual_inpainting_model(),
             api: ApiInpaintingConfig::default(),
+            restoration: RestorationConfig::default(),
+        }
+    }
+}
+
+pub const DEFAULT_RESTORATION_PROMPT: &str = "Restore and reconstruct the selected image area. Preserve the existing art style, linework, colors, lighting, anatomy, perspective, and panel geometry. Do not add text, logos, watermarks, or new objects.";
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Type)]
+pub struct RestorationConfig {
+    pub provider: InpaintingProvider,
+    pub model: String,
+    pub prompt: String,
+}
+
+impl Default for RestorationConfig {
+    fn default() -> Self {
+        Self {
+            provider: InpaintingProvider::Fal,
+            model: "microsoft/mai-image-2.5/edit".to_owned(),
+            prompt: DEFAULT_RESTORATION_PROMPT.to_owned(),
         }
     }
 }
@@ -677,10 +734,16 @@ pub(crate) enum InpaintingModel {
     AotInpainting {},
     Flux2Klein(Flux2KleinConfig),
     RoremMixed(RoremMixedConfig),
-    MaiImage2_5Edit(ImageEditConfig),
-    MaiImage2_5ProEdit(ImageEditConfig),
+    FalImageEdit {
+        model: FalModel,
+        config: ImageEditConfig,
+    },
     OpenRouterImageEdit {
         model: String,
+        config: ImageEditConfig,
+    },
+    ReplicateImageEdit {
+        model: ReplicateModel,
         config: ImageEditConfig,
     },
 }
@@ -688,6 +751,115 @@ pub(crate) enum InpaintingModel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use koharu_translator::Provider;
+
+    #[test]
+    fn replicate_is_supported_by_both_image_edit_paths() {
+        for model in [
+            "black-forest-labs/flux-2-dev",
+            "black-forest-labs/flux-2-pro",
+            "black-forest-labs/flux-2-max",
+            "black-forest-labs/flux-2-flex",
+            "black-forest-labs/flux-2-klein-4b",
+            "black-forest-labs/flux-2-klein-9b",
+            "black-forest-labs/flux-2-klein-4b-base",
+            "black-forest-labs/flux-2-klein-9b-base",
+            "black-forest-labs/flux-kontext-dev",
+            "black-forest-labs/flux-kontext-pro",
+            "black-forest-labs/flux-kontext-max",
+        ] {
+            let mut config = PipelineConfig::default();
+            config.inpainting.method = InpaintingMethod::Api;
+            config.inpainting.api = serde_json::from_value(serde_json::json!({
+                "provider": "replicate", "model": model,
+                "prompt": "  Remove text.  ", "apply_mode": "full-page",
+            }))
+            .unwrap();
+            config.inpainting.restoration = serde_json::from_value(serde_json::json!({
+                "provider": "replicate", "model": model,
+                "prompt": "  Restore artwork.  ",
+            }))
+            .unwrap();
+            config.validate().unwrap();
+            let restored: PipelineConfig =
+                toml::from_str(&toml::to_string(&config).unwrap()).unwrap();
+            assert_eq!(restored.inpainting, config.inpainting);
+            assert_eq!(restored.inpainting().unwrap(), config.inpainting().unwrap());
+            assert_eq!(
+                restored.restoration_inpainting().unwrap(),
+                config.restoration_inpainting().unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn fal_edit_catalog_models_work_in_both_processing_paths() {
+        for model in [
+            "fal-ai/flux-kontext/dev",
+            "fal-ai/flux-pro/kontext",
+            "fal-ai/flux-pro/kontext/max",
+            "fal-ai/flux-2/edit",
+            "fal-ai/flux-2-pro/edit",
+            "fal-ai/flux-2-flex/edit",
+            "fal-ai/flux-2/klein/4b/edit",
+            "fal-ai/flux-2/klein/9b/edit",
+            "fal-ai/qwen-image-edit-2511",
+            "fal-ai/bytedance/seedream/v4.5/edit",
+        ] {
+            let mut config = PipelineConfig::default();
+            config.inpainting.method = InpaintingMethod::Api;
+            config.inpainting.api.model = model.to_owned();
+            config.inpainting.api.prompt = "Remove lettering.".to_owned();
+            config.inpainting.restoration.model = model.to_owned();
+            config.inpainting.restoration.prompt = "Restore the artwork.".to_owned();
+            config
+                .validate()
+                .unwrap_or_else(|error| panic!("{model}: {error}"));
+
+            let restored: PipelineConfig =
+                toml::from_str(&toml::to_string(&config).unwrap()).unwrap();
+            assert_eq!(restored.inpainting.api, config.inpainting.api);
+            assert_eq!(
+                restored.inpainting.restoration,
+                config.inpainting.restoration
+            );
+            assert_eq!(restored.inpainting().unwrap(), config.inpainting().unwrap());
+            assert_eq!(
+                restored.restoration_inpainting().unwrap(),
+                config.restoration_inpainting().unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn qwen_ocr_is_selectable_for_ocr_and_rejected_for_both_translation_profiles() {
+        let mut config = PipelineConfig::default();
+        assert_eq!(config.ocr.api.model.provider, Provider::QwenOcr);
+        assert_eq!(
+            config.ocr.api.model.model.as_deref(),
+            Some("qwen-vl-ocr-2025-11-20")
+        );
+        for method in [OcrMethod::Api, OcrMethod::LocalApi] {
+            config.ocr.method = method;
+            config.validate().unwrap();
+        }
+        for chapter in [false, true] {
+            let mut invalid = config.clone();
+            let profile = if chapter {
+                &mut invalid.translation.chapter
+            } else {
+                &mut invalid.translation.page
+            };
+            profile.model = config.ocr.api.model.clone();
+            assert!(
+                invalid
+                    .validate()
+                    .unwrap_err()
+                    .to_string()
+                    .contains("does not support translation")
+            );
+        }
+    }
 
     #[test]
     fn defaults_select_one_processor_for_each_phase() {
@@ -709,6 +881,7 @@ mod tests {
             config.inpainting.manual_model,
             LocalInpaintingModel::LaMa {}
         ));
+        assert_eq!(config.inpainting.restoration, RestorationConfig::default());
     }
 
     #[test]
@@ -718,12 +891,87 @@ mod tests {
 
         assert!(matches!(
             config.inpainting().unwrap(),
-            InpaintingModel::MaiImage2_5Edit(_)
+            InpaintingModel::FalImageEdit {
+                model: FalModel::MaiImage2_5Edit,
+                ..
+            }
         ));
         assert!(matches!(
             config.manual_inpainting().unwrap(),
             InpaintingModel::LaMa {}
         ));
+    }
+
+    #[test]
+    fn automatic_remove_and_restoration_settings_round_trip_independently() {
+        let mut config = PipelineConfig::default();
+        config.inpainting.method = InpaintingMethod::Api;
+        config.inpainting.api.prompt = "Automatic cleanup".to_owned();
+        config.inpainting.manual_model = LocalInpaintingModel::AotInpainting {};
+        config.inpainting.restoration = RestorationConfig {
+            provider: InpaintingProvider::Fal,
+            model: "microsoft/mai-image-2.5-pro/edit".to_owned(),
+            prompt: "Exact restoration prompt".to_owned(),
+        };
+
+        let restored =
+            toml::from_str::<PipelineConfig>(&toml::to_string(&config).unwrap()).unwrap();
+
+        assert_eq!(restored.inpainting.api.prompt, "Automatic cleanup");
+        assert!(matches!(
+            restored.manual_inpainting().unwrap(),
+            InpaintingModel::AotInpainting {}
+        ));
+        assert!(matches!(
+            restored.restoration_inpainting().unwrap(),
+            InpaintingModel::FalImageEdit { model: FalModel::MaiImage2_5ProEdit, config: settings }
+                if settings.prompt == "Exact restoration prompt"
+        ));
+        restored.validate().unwrap();
+    }
+
+    #[test]
+    fn restoration_supports_openrouter_independently_and_preserves_the_exact_prompt() {
+        let mut serialized = serde_json::to_value(PipelineConfig::default()).unwrap();
+        serialized["inpainting"]["restoration"] = serde_json::json!({
+            "provider": "openrouter",
+            "model": "microsoft/mai-image-2.6",
+            "prompt": "  Restore exactly this crop.  "
+        });
+        let config: PipelineConfig = serde_json::from_value(serialized).unwrap();
+        config.validate().unwrap();
+        let restored =
+            toml::from_str::<PipelineConfig>(&toml::to_string(&config).unwrap()).unwrap();
+
+        assert!(matches!(
+            restored.inpainting().unwrap(),
+            InpaintingModel::LaMa {}
+        ));
+        assert!(matches!(
+            restored.manual_inpainting().unwrap(),
+            InpaintingModel::LaMa {}
+        ));
+        assert!(matches!(
+            restored.restoration_inpainting().unwrap(),
+            InpaintingModel::OpenRouterImageEdit { model, config }
+                if model == "microsoft/mai-image-2.6"
+                    && config.prompt == "  Restore exactly this crop.  "
+                    && config.apply_mode == crate::InpaintingApplyMode::Mask
+        ));
+    }
+
+    #[test]
+    fn restoration_rejects_models_outside_the_fal_catalog() {
+        let mut config = PipelineConfig::default();
+        config.inpainting.restoration.model = "openrouter/unsupported".to_owned();
+
+        assert!(
+            config
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("unsupported Fal.ai image editing model")
+        );
     }
 
     #[test]
@@ -882,6 +1130,22 @@ mod tests {
     }
 
     #[test]
+    fn local_api_ocr_validates_the_vision_backend() {
+        let mut config = serde_json::to_value(PipelineConfig::default()).unwrap();
+        config["ocr"]["method"] = serde_json::json!("local-api");
+        let mut config: PipelineConfig = serde_json::from_value(config).unwrap();
+        assert!(config.validate().is_ok());
+        config.ocr.api.model.vision = false;
+        assert!(
+            config
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("vision model")
+        );
+    }
+
+    #[test]
     fn api_ocr_rejects_providers_without_a_vision_ocr_backend() {
         let mut config = PipelineConfig::default();
         config.ocr.method = OcrMethod::Api;
@@ -895,11 +1159,7 @@ mod tests {
         };
 
         let error = config.validate().unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("OpenAI, OpenAI-compatible, and OpenRouter")
-        );
+        assert!(error.to_string().contains("does not support API OCR"));
     }
 
     #[test]
@@ -1155,7 +1415,7 @@ mod tests {
 
         assert!(matches!(
             config.inpainting().unwrap(),
-            InpaintingModel::MaiImage2_5Edit(settings)
+            InpaintingModel::FalImageEdit { model: FalModel::MaiImage2_5Edit, config: settings }
                 if settings.prompt == "Clean the page."
                     && settings.apply_mode == crate::InpaintingApplyMode::Mask
         ));
@@ -1189,12 +1449,18 @@ mod tests {
         config.inpainting.api.model = "microsoft/mai-image-2.5/edit".to_owned();
         assert!(matches!(
             config.inpainting().unwrap(),
-            InpaintingModel::MaiImage2_5Edit(_)
+            InpaintingModel::FalImageEdit {
+                model: FalModel::MaiImage2_5Edit,
+                ..
+            }
         ));
         config.inpainting.api.model = "microsoft/mai-image-2.5-pro/edit".to_owned();
         assert!(matches!(
             config.inpainting().unwrap(),
-            InpaintingModel::MaiImage2_5ProEdit(_)
+            InpaintingModel::FalImageEdit {
+                model: FalModel::MaiImage2_5ProEdit,
+                ..
+            }
         ));
 
         config.inpainting.api.provider = InpaintingProvider::OpenRouter;

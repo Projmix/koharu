@@ -4,8 +4,7 @@ This file describes how the fork differs from upstream
 [koharu-rs/koharu](https://github.com/koharu-rs/koharu), what state `main` is
 in, and where JEV fits in the pipeline. Read it together with the root
 `AGENTS.md`, whose rules still apply. Update this file when fork behavior or
-the plan changes; it was last checked on 2026-10-18 against `main` at
-`755ecb4`.
+the plan changes; it was last checked on 2026-10-18 against the rebuilt `main`.
 
 ## Product direction
 
@@ -20,172 +19,64 @@ the plan changes; it was last checked on 2026-10-18 against `main` at
 
 ## Branch and upstream state
 
-| | `main` | `codex/upstream-editor-ocr` |
-| --- | --- | --- |
-| Upstream base | Files copied from about 0.83.5, **not a git merge** (commit `755ecb4`) | Real merge of upstream 0.82.1 (`b07ef1e`) |
-| Fork features | Chapter export/import, named versions, JEV, cloud inpainting rework | Hybrid local+API OCR, Qwen OCR, Replicate image edit, image-edit preview, manual translation, fork updater, editor improvements (`3f254b7`) |
-| Shared base | `a7714ce` | `a7714ce` |
+On 2026-10-18 `main` was rebuilt (PR #1) from `codex/upstream-editor-ocr`
+plus a real `git merge` of upstream tag `0.83.5`. Git now tracks the upstream
+base, so the next sync is `git fetch upstream tag <x>` then `git merge`.
 
-Consequences for anyone touching sync work:
+The previous `main` commit `d1ebfef` (JEV, Japanese OCR validation, copyfit
+variants, cloud inpainting fallback chain) never compiled and is not in the
+tree. It stays in history; bring its ideas back in separate changes, JEV
+first, following the plan below. `git show d1ebfef -- <path>` shows the old
+code.
 
-- Git does not know that `main` contains upstream 0.83.x, because the sync
-  was a file copy. A plain `git merge` of upstream or of the codex branch
-  replays the same upstream changes from both sides (about 60 conflicts).
-  Cherry-picking only the fork commit `3f254b7` onto `main` leaves 21
-  conflicted files, concentrated in `stages/ocr.rs` and
-  `stages/inpainting.rs`, where the two branches implement OCR and cloud
-  inpainting differently.
-- The copy is also partial. Root `Cargo.toml` pins Tauri to git rev
-  `1991873f…` while `packages/bridge` uses `@tauri-apps/api` 3.0.0-alpha and
-  `packages/koharu` still uses 2.x, so the TypeScript build reports
-  `Channel` type mismatches between the two copies.
-- To make future upstream syncs cheap, record the next sync as a real merge
-  of an upstream tag (`git fetch upstream tag <x>` then `git merge`), so git
-  tracks the base.
+Known gaps after the rebuild:
 
-## Known problems on `main`
+- `packages/bridge/src/protocol.ts` was merged by hand because the cloud
+  environment cannot download CEF to run the generator. Regenerate it with
+  `cargo run -p koharu-app --bin generate` on a desktop machine and commit
+  any difference.
+- `koharu-app` (the Tauri crate) was not compiled in that environment; the
+  rest of the workspace was checked, linted and tested.
 
-These were observed, not inferred:
+## Fork features
 
-- `cargo check -p koharu-pipeline` fails in `koharu-storage`
-  (`session.rs` passes a `String` to `Error::Task`, which now wraps
-  `anyhow::Error`). The fork's named-versions code was not adapted to the
-  upstream error type.
-- `stages/translation.rs` calls `JevClient::from_config()` and
-  `JevClient::deterministic_copyfit_verdict`, reads `verdict.choice` and
-  writes `judge_input.region_index`. None of these exist in `stages/jev.rs`
-  (the verdict field is `selected_variant`; the copyfit fallback is a free
-  function). The JEV commit has not compiled since it landed.
-- `Cargo.lock` and `bun.lock` are stale: `cargo check` adds dependencies to
-  the lock, and `bun install --frozen-lockfile` (what CI runs) fails.
-- Three tests in `packages/koharu/tests/components/editor-components.test.tsx`
-  fail on `main` (layers panel, expanded processing controls, settings
-  shortcuts).
-- `JevClient::api_key` falls back to the `TYPESAFE_API_KEY` / `JEV_API_KEY`
-  environment variables. `AGENTS.md` forbids environment fallbacks for
-  desktop API keys; keys must come only from the OS credential store
-  (`koharu_secrets`).
-
-## Fork features on `main`
-
-### Chapter translation export and import
-
-Commands `export_chapter_translation` / `import_chapter_translation`
-(`koharu-app/src/commands/processing.rs`). Export writes the exact chapter
-translation request as JSON so it can be run in any external chat or batch
-tool. Import accepts either the fork's `{"translations": …}` result or a raw
-OpenAI-style `{"choices": …}` response, tolerates the model echoing the
-request, and commits the result as a normal pipeline patch. Both refuse to
-run while processing is active.
-
-### Named project versions
-
-Commands `save_project_version`, `list_project_versions`,
-`restore_project_version`, `delete_project_version`
-(`commands/versions.rs`, storage in `koharu-storage/src/session.rs`, UI in
-`ProjectVersionsDialog.tsx`). A version is a named snapshot of the scene
-document.
-
-### OCR: local or API, with deterministic validation
-
-`OcrConfig { method: Local | Api, local_model, api }` in
-`koharu-pipeline/src/config.rs`.
-
-- `Local` runs the selected local model (manga-ocr, baberu, hayai,
-  PaddleOCR-VL). `Api` sends each crop to a vision LLM through the
-  translator provider layer.
-- For Japanese, every result goes through `validate_and_recover_targets`
-  (`stages/ocr.rs`):
-  1. `inspect_japanese_ocr` scores the text deterministically (valid-script
-     ratio, kinsoku line-start rules, cross-column grammar to detect
-     inverted column order, furigana noise).
-  2. JEV (`judge_ocr_batch`) picks a reading order (RTL / LTR / corrupted),
-     gives a probability that the text is valid Japanese, and picks a retry
-     strategy.
-  3. If recovery is needed: retry on a padded crop with furigana
-     suppressed, then column re-slicing and an optional orientation flip,
-     then the alternate local OCR model (`alternate_local_ocr_model`). Each
-     step replaces the text only if the inspector score improves.
-  4. `reconcile_bubble_sibling_reading_order` fixes the order of sibling
-     vertical regions inside one bubble.
-- The final inspector score is stored as the OCR result `confidence`.
-  Nothing marks a region as "needs human review" yet.
-
-### Translation: copyfit variants
-
-The translation prompt asks for `full`, `compact` and `ultra_short`
-variants (`TranslationVariants` in `koharu-translator/src/backend.rs`). The
-renderer measures each one in its bubble (`CopyfitDiagnostics`,
-`koharu-renderer`; `bubble.rs` adds multi-lobe bubble splitting), and JEV
-`judge_copyfitting_batch` picks the variant or asks for regeneration. This
-path does not compile today (see above).
-
-### Inpainting: cloud first, with a fallback chain
-
-`InpaintingConfig { method: Local | Api, api: { provider: Fal | OpenRouter,
-model, prompt, apply_mode } }`. `run_cloud_inpaint_with_fallback`
-(`stages/inpainting.rs`) runs:
-
-1. a full-page cloud edit; residual ink or border damage
-   (`inspect_inpaint_diff`) or a content-policy/422 rejection sends it to
-2. tiled crop edits on the remaining mask, then
-3. the other cloud provider if it has a stored credential, then
-4. local LaMa on what is still left, then
-5. a deterministic harmonic fill.
-
-Keys come from `koharu_secrets` (`fal`, `openrouter`).
-
-## Unmerged work on `codex/upstream-editor-ocr`
-
-Commit `3f254b7` carries fork work that `main` does not have:
-
-- Hybrid OCR method `local-api`: an internal `OcrPass { Local, Final }`; the
-  scheduler runs the local pass on every page of the chapter, then the API
-  pass, and only then chapter translation. Text the user edited is never
-  overwritten.
-- A dedicated Qwen-VL-OCR provider (`remote/qwen_ocr.rs`, DashScope) with its
-  own endpoint and credential.
-- Replicate image-edit inpainting, an image-edit preview/approval dialog
-  (`review.rs`, `ImageEditPreviewDialog.tsx`), manual translation, paste of
+- Chapter translation export/import (`export_chapter_translation`,
+  `import_chapter_translation`): the exact chapter request as JSON for an
+  external chat, and import of its answer as a normal pipeline patch.
+- Named project versions (`save_project_version` and friends).
+- OCR method `local`, `api` or hybrid `local-api`. The hybrid method uses an
+  internal `OcrPass { Local, Final }`: the scheduler runs the local pass on
+  every page of the chapter, then the API pass, and only then chapter
+  translation. Text the user edited is never overwritten.
+- Qwen-VL-OCR provider (`remote/qwen_ocr.rs`, DashScope) with its own
+  endpoint and credential.
+- Image-edit inpainting through Fal, OpenRouter and Replicate, with a
+  preview and approval dialog before the result is committed.
+- Manual translation, chapter translation presets and unit policy, paste of
   text blocks, page duplication.
-- Fork updater against `Projmix/koharu` releases, plus an informational
-  notice about newer upstream releases (`docs/fork-releases.md` on that
-  branch).
-- Research notes in Russian: `docs/research/2026-09-12-fork-review.md`,
-  `docs/research/2026-09-12-japanese-ocr.md`.
-
-Its upstream part (0.82.1) is older than what `main` already copied, so the
-only thing worth bringing over is `3f254b7`. Its OCR pass ordering and
-`main`'s JEV validation are the two halves of the planned OCR flow below,
-which is why they need a deliberate merge rather than a mechanical one.
+- Fork updater against `Projmix/koharu` releases (`docs/fork-releases.md`).
+- Research notes in `docs/research/` and plans in `docs/superpowers/plans/`.
 
 ## JEV
 
-### What it is in code
+### What it was
 
-`koharu-pipeline/src/stages/jev.rs`. `JevClient` posts batches to a
-"TypeSafe System One" evaluation endpoint (default
-`https://api.typesafe.ai/v1/system-one/evaluate`, override
-`TYPESAFE_API_URL`, 6 s timeout, bearer key from secret `typesafe` or
-`jev`). The answers use three typed primitives instead of free text:
+`d1ebfef` added `koharu-pipeline/src/stages/jev.rs`: a `JevClient` posting
+batches to a "TypeSafe System One" endpoint
+(`https://api.typesafe.ai/v1/system-one/evaluate`) with three typed answer
+primitives instead of free text:
 
 - `Noul`: a probability for a yes/no question.
 - `Choice<T>`: exactly one option from a closed list, with confidence.
 - `Score`: a rubric score in `[0, 1]`.
 
-Every call has a deterministic offline fallback
-(`deterministic_ocr_verdict`, `deterministic_copyfit_verdict`). With no key,
-a network error or a wrong-length answer, the fallback result is used
-silently. The real service's API contract has not been verified against its
-documentation in this repo; treat the request shape as the fork's
-assumption.
-
-### Where JEV is used now
-
-| Stage | Task | Question JEV answers |
-| --- | --- | --- |
-| OCR (Japanese only) | `ocr_validation_v1` | Which reading order is right, is this valid Japanese, which retry to try |
-| Translation | `copyfit_selection_batch_v1` | Which of full/compact/ultra_short/lobe-split fits the bubble, is meaning preserved, readability score |
+It judged Japanese OCR reading order and retries (`ocr_validation_v1`) and
+picked a copyfit translation variant (`copyfit_selection_batch_v1`), with a
+deterministic offline fallback. The service's API contract was never
+verified, and the client read keys from environment variables, which
+`AGENTS.md` forbids for the desktop app. When reimplementing, keep the typed
+primitives, take the key only from `koharu_secrets`, and verify the API
+against its documentation.
 
 ### Planned OCR flow: local, then LLM, then JEV decides
 
@@ -193,8 +84,8 @@ Goal: better text than either OCR alone, and an explicit list of regions a
 human must check (handwriting, stylized SFX, text neither model read).
 
 1. **Local pass.** Local OCR on every region of every page in the chapter
-   (fast, free). Keep the text and the inspector score. Reuse the codex
-   branch's `OcrPass::Local` and chapter barrier.
+   (fast, free). This is the existing `OcrPass::Local` and chapter
+   barrier; add a deterministic quality score per region.
 2. **LLM pass.** Send each crop to a vision LLM (OpenRouter, Qwen-VL-OCR,
    and so on). Send the image as the source of truth and the local draft as
    data, so the model corrects rather than invents. Start with every region
@@ -207,8 +98,8 @@ human must check (handwriting, stylized SFX, text neither model read).
    - `Noul` for "the kept text matches the image";
    - `Choice` of reason when review is needed: `handwritten`,
      `models_disagree`, `low_confidence`, `empty`.
-   The existing reading-order and retry logic still runs on the kept
-   candidate.
+   Japanese reading-order and retry checks from `d1ebfef` can return here
+   as deterministic inputs to the judge.
 4. **Flag for manual review.** When the verdict is `needs_review` or the
    probability is below the threshold, keep the best candidate as the text
    but record a review flag on the region in the scene (a component owned
@@ -232,7 +123,7 @@ Rules to follow while building it:
 
 - Translation QA: `Noul` "meaning, gender and tone preserved" for a block,
   so suspicious translations are flagged the same way as OCR.
-- Inpainting QA: a judge on top of `inspect_inpaint_diff` to decide when a
+- Inpainting QA: a judge on the image-edit preview to decide when a
   cloud result needs a retry or human review.
 
 ## Removed

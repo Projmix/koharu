@@ -1,7 +1,7 @@
 //! HarfRust shaping and grapheme-safe font fallback.
 
-use anyhow::{Context, Result};
-use harfrust::{Buffer, Direction, Feature, Script, ShapeOptions, ShaperFont};
+use anyhow::Result;
+use harfrust::{Direction, Feature, Script, ShapeOptions, UnicodeBuffer};
 use icu_properties::{CodePointMapData, props::Script as IcuScript};
 use icu_segmenter::GraphemeClusterSegmenter;
 use skrifa::raw::TableProvider;
@@ -64,30 +64,41 @@ impl TextShaper {
         font: &'a Font,
         options: &ShapingOptions,
     ) -> Result<ShapedRun<'a>> {
-        let mut buffer = Buffer::new();
+        let font_ref = font.harfrust_ref()?;
+
+        let mut buffer = UnicodeBuffer::new();
         buffer.push_str(text);
         buffer.guess_segment_properties();
         buffer.set_direction(options.direction);
         if let Some(script) = options.script {
-            buffer.set_script(Some(script));
+            buffer.set_script(script);
         }
 
         let direction = buffer.direction();
-        let script = buffer.script();
+        let script = Some(buffer.script());
         let language = buffer.language();
-        let plan = font.shape_plan(direction, script, language, options.features);
-        harfrust::shape(
-            &ShaperFont::new(font.shaper_font()),
-            &mut buffer,
+        let plan = font.shape_plan(
+            &font_ref,
+            direction,
+            script,
+            language.as_ref(),
+            options.features,
+        );
+        let shaper = font
+            .shaper_data()
+            .shaper(&font_ref)
+            .instance(Some(font.shaper_instance()))
+            .build();
+        let output = shaper.shape(
+            buffer,
             ShapeOptions::new()
                 .plan(Some(&plan))
                 .features(options.features)
                 .point_size(Some(options.font_size)),
-        )
-        .context("failed to shape text with HarfRust")?;
+        );
 
-        let glyph_positions = buffer.glyph_positions();
-        let glyph_infos = buffer.glyph_infos();
+        let glyph_positions = output.glyph_positions();
+        let glyph_infos = output.glyph_infos();
 
         // Scale factor to convert font units to pixels
         let upem = font.skrifa_ref()?.head()?.units_per_em() as f32;

@@ -265,6 +265,7 @@ export function TitleBar() {
             <MenubarContent>
               <MenubarItem disabled={!page} onClick={requestCanvasFit}>
                 {t('menu.fit')}
+                <MenubarShortcut>Alt+F</MenubarShortcut>
               </MenubarItem>
             </MenubarContent>
           </MenubarMenu>

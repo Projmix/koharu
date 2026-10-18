@@ -45,11 +45,14 @@ impl Preferences {
 pub struct ProviderPreferences {
     pub entries: Vec<ProviderPreference>,
     pub fal: CredentialInput,
+    pub replicate: CredentialInput,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, Type)]
 pub struct ProviderPreference {
     pub name: String,
+    pub supports_ocr: bool,
+    pub supports_translation: bool,
     pub config: ProviderConfig,
     pub credential: Option<CredentialInput>,
 }
@@ -69,6 +72,8 @@ impl ProviderPreferences {
                 };
                 Ok(ProviderPreference {
                     name: provider.name().to_owned(),
+                    supports_ocr: provider.supports_ocr(),
+                    supports_translation: provider.supports_translation(),
                     config,
                     credential,
                 })
@@ -77,6 +82,7 @@ impl ProviderPreferences {
         Ok(Self {
             entries,
             fal: CredentialInput::load("fal")?,
+            replicate: CredentialInput::load("replicate")?,
         })
     }
 
@@ -101,6 +107,7 @@ impl ProviderPreferences {
             credential.save(key)?;
         }
         self.fal.save("fal")?;
+        self.replicate.save("replicate")?;
         Ok(config)
     }
 }
@@ -153,6 +160,12 @@ pub struct LanguageChoice {
     pub name: String,
 }
 
+#[tracing::instrument(
+    target = "koharu_metrics",
+    name = "preferences_saved",
+    skip_all,
+    fields(setting = "application")
+)]
 #[tauri::command]
 #[specta::specta]
 pub(crate) async fn save_preferences(
@@ -181,7 +194,13 @@ pub(crate) async fn save_preferences(
         *current = typesetting;
         current.save()?;
     }
-    Ok(Preferences::load()?)
+    let preferences = Preferences::load()?;
+    tracing::info!(
+        target: "koharu_metrics",
+        metric = "preference_changed",
+        setting = "application",
+    );
+    Ok(preferences)
 }
 
 fn remember_pipeline_profiles(config: &mut PipelineConfig) {

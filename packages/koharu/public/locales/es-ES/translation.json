@@ -131,13 +131,15 @@
     "compactMode": "Usar controles de procesamiento compactos",
     "entireProject": "Proyecto completo",
     "entireProjectDescription": "Procesa todas las páginas de este proyecto.",
-    "exportChapter": "Export chapter translation request",
+    "exportChapter": "Exportar para traducción manual (ZIP)",
     "expandedMode": "Usar controles de procesamiento ampliados",
     "model": "Modelo",
     "noModel": "Sin modelo",
     "notSet": "Sin definir",
     "output": "Salida",
-    "importChapter": "Import chapter translation response",
+    "importChapter": "Importar JSON traducido",
+    "exportChapterHelp": "Descomprime el archivo. Pega prompt.txt en el chat que elijas y adjunta chapter.json. Guarda la respuesta como translation.json e impórtala.",
+    "importChapterDone": "Traducciones importadas",
     "pageProfile": "Perfil de página",
     "pipelineStages": "Etapas del flujo",
     "providerDefault": "Predeterminado del proveedor",
@@ -165,6 +167,10 @@
     "typing": "Rotulación"
   },
   "inspector": {
+    "transformTarget": "Transformar",
+    "transformText": "Texto",
+    "transformRegion": "Región OCR",
+    "transformHint": "Arrastra el bloque para moverlo o sus controles para cambiar el tamaño. El modo automático ajusta la fuente al marco.",
     "alignBottom": "Alinear abajo",
     "alignCenter": "Centrar",
     "alignLeft": "Alinear a la izquierda",
@@ -181,6 +187,7 @@
     "color": "Color",
     "customFrame": "Marco personalizado",
     "decreaseBorderWidth": "Reducir ancho del contorno",
+    "decreaseFontSize": "Reducir el tamaño de fuente en 1 pt",
     "direction": "Dirección",
     "font": "Fuente",
     "fontSize": "Tamaño de fuente",
@@ -193,6 +200,7 @@
     "fontWeight": "Grosor de fuente",
     "horizontal": "Horizontal",
     "increaseBorderWidth": "Aumentar ancho del contorno",
+    "increaseFontSize": "Aumentar el tamaño de fuente en 1 pt",
     "opacity": "Opacidad",
     "placement": "Colocación",
     "resetAutoFit": "Restablecer ajuste automático",
@@ -217,14 +225,15 @@
     "pt-BR": "Português brasileiro",
     "ru-RU": "Русский",
     "tr-TR": "Türkçe",
-    "wuu": "吴语",
     "zh-CN": "简体中文",
     "zh-TW": "繁體中文"
   },
   "layers": {
+    "collapse": "Contraer {{name}}",
     "delete": "Eliminar {{name}}",
     "edit": "Editar {{name}}",
     "empty": "No hay capas en esta página.",
+    "expand": "Expandir {{name}}",
     "hide": "Ocultar {{name}}",
     "imageName": "Imagen {{index}}",
     "kinds": {
@@ -268,7 +277,7 @@
     "processLayers": "Procesar capas seleccionadas",
     "processPages": "Procesar páginas seleccionadas",
     "processProject": "Procesar proyecto",
-    "projectVersions": "Project Versions…",
+    "projectVersions": "Versiones del proyecto…",
     "redo": "Rehacer",
     "runPhase": "Ejecutar {{phase}}",
     "selectAllLayers": "Seleccionar todas las capas",
@@ -277,22 +286,22 @@
     "view": "Ver"
   },
   "versions": {
-    "delete": "Delete",
-    "deleteDescription": "Version “{{name}}” will be permanently deleted. The current project state will not change.",
-    "deleteLabel": "Delete version {{name}}",
-    "deleteTitle": "Delete this version?",
-    "description": "Save named snapshots of the complete project and return to them later.",
-    "emptyDescription": "Save a version before a large edit or processing run.",
-    "emptyTitle": "No saved versions",
-    "nameLabel": "Version name",
-    "namePlaceholder": "For example: OCR complete",
-    "restore": "Restore",
-    "restoreDescription": "The project will return to version “{{name}}” as a new revision. Save the current state as a version first if you need it.",
-    "restoreLabel": "Restore version {{name}}",
-    "restoreTitle": "Restore this version?",
-    "revision": "revision {{revision}}",
-    "save": "Save",
-    "title": "Project Versions"
+    "delete": "Eliminar",
+    "deleteDescription": "La versión «{{name}}» se eliminará de forma permanente. El estado actual del proyecto no cambiará.",
+    "deleteLabel": "Eliminar la versión {{name}}",
+    "deleteTitle": "¿Eliminar esta versión?",
+    "description": "Guarda instantáneas con nombre del proyecto completo y vuelve a ellas más tarde.",
+    "emptyDescription": "Guarda una versión antes de una edición grande o de un procesamiento.",
+    "emptyTitle": "No hay versiones guardadas",
+    "nameLabel": "Nombre de la versión",
+    "namePlaceholder": "Por ejemplo: OCR terminado",
+    "restore": "Restaurar",
+    "restoreDescription": "El proyecto volverá a la versión «{{name}}» como una nueva revisión. Si necesitas el estado actual, guárdalo antes como versión.",
+    "restoreLabel": "Restaurar la versión {{name}}",
+    "restoreTitle": "¿Restaurar esta versión?",
+    "revision": "revisión {{revision}}",
+    "save": "Guardar",
+    "title": "Versiones del proyecto"
   },
   "model": {
     "baseUrl": "URL base",
@@ -330,6 +339,7 @@
     "noResults": "Ninguna página coincide con este filtro.",
     "pageName": "Nombre de página",
     "pages": "Páginas",
+    "duplicate": "Duplicar",
     "rename": "Cambiar nombre",
     "renameDescription": "Elige un nombre nuevo para esta página.",
     "renameTitle": "Cambiar nombre de página",
@@ -372,7 +382,8 @@
     "minimax": "Modelos de lenguaje de MiniMax.",
     "openai": "Modelos de lenguaje de OpenAI.",
     "openai-compatible": "Cualquier servidor que exponga una API compatible con OpenAI.",
-    "openrouter": "Modelos enrutados a través de OpenRouter."
+    "openrouter": "Modelos enrutados a través de OpenRouter.",
+    "qwen-ocr": "Qwen-VL-OCR especializado mediante Alibaba Cloud, con clave y dirección regional independientes."
   },
   "resources": {
     "cpu": "CPU",
@@ -441,13 +452,18 @@
         "instructionsPlaceholder": "Indicaciones opcionales para OCR",
         "local": "Local (CPU)",
         "localModel": "Modelo OCR local",
-        "method": "Método de OCR"
+        "method": "Método de OCR",
+        "hybrid": "Local + API",
+        "hybridDescription": "Primero se ejecuta el OCR local en todas las páginas del capítulo; después se envían los recortes y sus textos a la API seleccionada. Los resultados se aplican automáticamente."
       },
       "inpainting": {
         "apiModel": "Modelo de edición de imagen",
-        "localModel": "Modelo local de restauración",
-        "method": "Método de restauración",
-        "options": "Opciones de restauración por API",
+        "localModel": "Modelo de limpieza local",
+        "restorationModel": "Modelo de restauración",
+        "restorationProvider": "Proveedor de restauración",
+        "restorationPrompt": "Prompt de restauración",
+        "method": "Método de limpieza",
+        "options": "Opciones de limpieza por API",
         "promptPreset": "Preajuste del prompt",
         "promptPresets": {
           "cleanup-all": "Eliminar todo el texto y las marcas de agua",
@@ -455,7 +471,11 @@
           "custom": "Prompt personalizado",
           "translate-russian": "Sustituir los textos por ruso"
         },
-        "provider": "Proveedor de imágenes"
+        "provider": "Proveedor de imágenes",
+        "removeDescription": "Modelo local para el pincel de eliminación, independiente de la limpieza de páginas y de la restauración rectangular.",
+        "restorationDescription": "Modelo API para restaurar una selección rectangular, independiente de la limpieza de páginas y del pincel de eliminación.",
+        "previewBeforeSend": "Vista previa antes de enviar a la API",
+        "previewBeforeSendDescription": "Muestra la imagen y permite editar el prompt antes de limpiar páginas por API o restaurar una selección. La eliminación local no cambia."
       },
       "processing": "Procesando",
       "stages": {
@@ -464,8 +484,8 @@
           "title": "Detección"
         },
         "inpainting": {
-          "description": "Reconstruye la ilustración bajo el texto eliminado.",
-          "title": "Relleno"
+          "description": "Se usa en la etapa de limpieza de páginas. Las herramientas de eliminación y restauración se configuran por separado a continuación.",
+          "title": "Limpiar"
         },
         "ocr": {
           "description": "Lee el texto original dentro de las regiones detectadas.",
@@ -480,6 +500,7 @@
       "connections": "Conexiones",
       "connectionsDescription": "Las credenciales se almacenan de forma segura en este dispositivo.",
       "falDescription": "Credencial para los modelos de edición de imágenes de Fal.ai.",
+      "replicateDescription": "Edición de imágenes con FLUX. Dev y Klein desactivan la revisión del resultado; Pro, Max y Flex mantienen las restricciones del modelo.",
       "credential": "Credencial",
       "credentialLabel": "Credencial de {{provider}}",
       "description": "Conecta proveedores de traducción y modelos de lenguaje.",
@@ -487,7 +508,7 @@
       "title": "Proveedores"
     },
     "shortcuts": {
-      "description": "Usa Ctrl más la tecla configurada cuando ningún campo de texto tenga el foco.",
+      "description": "Usa Alt más la tecla configurada cuando ningún campo de texto tenga el foco.",
       "inputLabel": "Atajo de {{action}}",
       "title": "Atajos",
       "tools": "Herramientas"
@@ -508,12 +529,12 @@
       "instructionsDescription": "El prompt integrado fija los idiomas y el formato JSON. Déjalo vacío para usarlo; el texto se añade como orientación.",
       "instructionsLabel": "Instrucciones de traducción",
       "instructionsPlaceholder": "Indicaciones opcionales para todo el proyecto",
-      "promptPreset": "Chapter prompt preset",
-      "promptPresetDescription": "Load a ready-made style and terminology prompt into the chapter profile.",
-      "presetCustom": "Custom instructions",
-      "presetBnhaBakugoMidoriya": "BNHA — Bakugo / Midoriya (Russian)",
-      "presetBnhaDoujinshi": "BNHA — doujinshi (Russian)",
-      "presetMangaAdaptive": "Manga — adaptive chapter (Russian)",
+      "promptPreset": "Plantilla de prompt del capítulo",
+      "promptPresetDescription": "Carga en el perfil del capítulo un prompt listo con estilo y terminología.",
+      "presetCustom": "Instrucciones personalizadas",
+      "presetBnhaBakugoMidoriya": "BNHA — Bakugo / Midoriya (ruso)",
+      "presetBnhaDoujinshi": "BNHA — doujinshi (ruso)",
+      "presetMangaAdaptive": "Manga — capítulo adaptativo (ruso)",
       "model": "Modelo",
       "pageProfile": "Página",
       "modelDescription": "Las etiquetas de proveedor indican dónde se ejecuta cada modelo; las conexiones se configuran por separado.",
@@ -528,10 +549,10 @@
       "title": "Traducción",
       "translationModel": "Modelo de traducción",
       "translationModelDescription": "Elige el modelo utilizado para traducir texto.",
-      "unitPolicy": "Translation grouping",
-      "unitPolicyDescription": "Choose how chapter text is grouped before translation.",
-      "pageOnly": "Page only",
-      "adaptiveV1": "Adaptive v1 (chapter context)"
+      "unitPolicy": "Agrupación de la traducción",
+      "unitPolicyDescription": "Elige cómo se agrupa el texto del capítulo antes de traducirlo.",
+      "pageOnly": "Solo página",
+      "adaptiveV1": "Adaptativo v1 (contexto del capítulo)"
     },
     "typesetting": {
       "addFamily": "Añadir familia tipográfica",
@@ -590,6 +611,7 @@
     "ocr": "Región OCR",
     "pan": "Desplazar",
     "remove": "Eliminar",
+    "restore": "Restaurar",
     "select": "Seleccionar",
     "text": "Texto"
   },
@@ -610,12 +632,35 @@
     "later": "Más tarde",
     "noNotes": "No se proporcionaron notas de versión.",
     "retry": "Reintentar",
-    "update": "Actualizar"
+    "update": "Actualizar",
+    "upstream": {
+      "title": "Hay una actualización de Koharu original",
+      "description": "Koharu original {{version}} es posterior a la versión integrada {{integratedVersion}}. Sus cambios pueden ser útiles para este fork. Las actualizaciones automáticas solo instalan versiones de Projmix/koharu.",
+      "view": "Ver versión original",
+      "dismiss": "Ocultar esta versión"
+    }
   },
   "window": {
     "close": "Cerrar",
     "maximize": "Maximizar",
     "minimize": "Minimizar",
     "restore": "Restaurar"
+  },
+  "imageEditPreview": {
+    "title": "Vista previa de la solicitud de edición",
+    "description": "Revisa la imagen y el prompt que se enviarán. Los cambios del prompt solo se aplican a esta solicitud y no se guardan en los ajustes.",
+    "image": "Imagen que se enviará",
+    "prompt": "Prompt de esta solicitud",
+    "resetPrompt": "Restablecer prompt",
+    "send": "Enviar a la API",
+    "cancel": "Cancelar tarea",
+    "close": "Cerrar",
+    "actualSize": "100%",
+    "fitImage": "Ajustar imagen",
+    "restoration": "Restaurar selección",
+    "cleanup": "Limpieza de página",
+    "failed": "No se pudo resolver la vista previa: {{error}}",
+    "cleanupLayers": "Original + capas de pintura visibles. Un PNG; se excluyen las capas de texto, máscaras y controles de selección.",
+    "restorationLayers": "Área seleccionada del original + capas visibles de limpieza y pintura, en orden de capas. Un PNG; se excluyen las capas de texto, máscaras y controles de selección."
   }
 }

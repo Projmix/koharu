@@ -10,57 +10,6 @@ use crate::Language;
 const MAX_IMAGE_DIMENSION: u32 = 2048;
 const JPEG_QUALITY: u8 = 88;
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct TranslationVariants {
-    pub full: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub compact: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ultra_short: Option<String>,
-}
-
-impl TranslationVariants {
-    pub fn from_full(full: impl Into<String>) -> Self {
-        let full = full.into();
-        let (compact, ultra_short) = crate::prompt::synthesize_compact_variants(&full);
-        Self {
-            full,
-            compact,
-            ultra_short,
-        }
-    }
-
-    pub fn with_synthesized_fallbacks(mut self) -> Self {
-        let (synth_compact, synth_ultra) = crate::prompt::synthesize_compact_variants(&self.full);
-        if self
-            .compact
-            .as_deref()
-            .is_none_or(|s| s.trim().is_empty() || s.trim() == self.full.trim())
-        {
-            self.compact = synth_compact;
-        }
-        if self
-            .ultra_short
-            .as_deref()
-            .is_none_or(|s| s.trim().is_empty() || s.trim() == self.full.trim())
-        {
-            self.ultra_short = synth_ultra.or_else(|| self.compact.clone());
-        }
-        self
-    }
-}
-
-#[derive(Debug, Clone, Default)]
-pub(crate) struct CapturedVariants(
-    pub(crate) Arc<std::sync::Mutex<Option<Vec<TranslationVariants>>>>,
-);
-
-impl PartialEq for CapturedVariants {
-    fn eq(&self, _other: &Self) -> bool {
-        true
-    }
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct TranslationRequest {
     pub segments: Vec<String>,
@@ -74,7 +23,6 @@ pub struct TranslationRequest {
     pub(crate) segment_ids: Vec<String>,
     pub(crate) units: Vec<TranslationUnit>,
     pub(crate) unit_policy: Option<String>,
-    pub(crate) captured_variants: CapturedVariants,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -82,6 +30,7 @@ pub struct OcrRequest {
     pub image: Arc<DynamicImage>,
     pub source_language: Option<Language>,
     pub instructions: Option<String>,
+    pub draft: Option<String>,
 }
 
 impl TranslationRequest {
@@ -105,18 +54,7 @@ impl TranslationRequest {
             page_numbers: None,
             units: Vec::new(),
             unit_policy: None,
-            captured_variants: CapturedVariants::default(),
         }
-    }
-
-    #[must_use]
-    pub fn has_copyfit_constraints(&self) -> bool {
-        self.segment_metadata.iter().any(|meta| {
-            meta.bubble_width_px.is_some()
-                || meta.bubble_height_px.is_some()
-                || meta.max_chars_hint.is_some()
-                || meta.max_word_len_hint.is_some()
-        })
     }
 
     #[must_use]
@@ -240,7 +178,7 @@ impl TranslationRequest {
             .expect("translation metadata is aligned with segments")
     }
 
-    pub(crate) fn segment_id(&self, id: usize) -> &str {
+    pub fn segment_id(&self, id: usize) -> &str {
         self.segment_ids
             .get(id)
             .map(String::as_str)
@@ -362,14 +300,6 @@ pub struct TranslationSegmentMetadata {
     pub unit_type: Option<String>,
     #[serde(default)]
     pub is_sound_effect: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub bubble_width_px: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub bubble_height_px: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_chars_hint: Option<usize>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_word_len_hint: Option<usize>,
 }
 
 impl TranslationSegmentMetadata {

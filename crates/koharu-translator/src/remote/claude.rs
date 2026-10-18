@@ -71,7 +71,7 @@ pub(super) async fn translate(
         output_config: OutputConfig {
             format: JsonOutputFormat {
                 kind: "json_schema",
-                schema: prompt::output_schema(request.segments.len()),
+                schema: prompt::output_schema(),
             },
         },
     };
@@ -106,12 +106,6 @@ struct Request<'a> {
 }
 
 #[derive(Serialize)]
-struct ThinkingConfig {
-    #[serde(rename = "type")]
-    kind: &'static str,
-}
-
-#[derive(Serialize)]
 struct OutputConfig {
     format: JsonOutputFormat,
 }
@@ -121,6 +115,12 @@ struct JsonOutputFormat {
     #[serde(rename = "type")]
     kind: &'static str,
     schema: serde_json::Value,
+}
+
+#[derive(Serialize)]
+struct ThinkingConfig {
+    #[serde(rename = "type")]
+    kind: &'static str,
 }
 
 #[derive(Serialize)]
@@ -221,32 +221,6 @@ mod tests {
         assert_eq!(value["content"][1]["type"], "image");
         assert_eq!(value["content"][1]["source"]["type"], "base64");
         assert_eq!(value["content"][1]["source"]["media_type"], "image/jpeg");
-    }
-
-    #[test]
-    fn serializes_structured_output_with_thinking() {
-        let body = Request {
-            model: "claude-opus-4-8",
-            max_tokens: 1024,
-            system: "system",
-            messages: [Message::user("translate", None).unwrap()],
-            temperature: None,
-            thinking: Some(ThinkingConfig { kind: "adaptive" }),
-            output_config: OutputConfig {
-                format: JsonOutputFormat {
-                    kind: "json_schema",
-                    schema: prompt::output_schema(2),
-                },
-            },
-        };
-        let value = serde_json::to_value(body).unwrap();
-
-        assert_eq!(value["thinking"]["type"], "adaptive");
-        assert_eq!(value["output_config"]["format"]["type"], "json_schema");
-        assert_eq!(
-            value["output_config"]["format"]["schema"]["properties"]["translations"]["maxItems"],
-            2
-        );
     }
 
     #[test]

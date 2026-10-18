@@ -10,6 +10,7 @@ mod minimax;
 mod openai;
 mod openai_compatible;
 mod openrouter;
+mod qwen_ocr;
 
 use anyhow::Context;
 use futures::{FutureExt, future::BoxFuture, future::join_all};
@@ -28,14 +29,8 @@ pub use minimax::MiniMaxConfig;
 pub use openai::OpenAiConfig;
 pub use openai_compatible::OpenAiCompatibleConfig;
 pub use openrouter::OpenRouterConfig;
-
-pub(crate) fn openrouter_translation_request_body(
-    model: &str,
-    generation: &GenerationConfig,
-    request: &TranslationRequest,
-) -> Result<serde_json::Value> {
-    openrouter::translation_request_body(model, generation, request)
-}
+pub use qwen_ocr::QwenOcrConfig;
+pub use qwen_ocr::default_model as default_qwen_ocr_model;
 
 use crate::{
     Error, GenerationConfig, Model, ModelSelection, OcrRequest, Provider, ProvidersConfig, Result,
@@ -103,6 +98,7 @@ pub(crate) async fn translate(
             google_cloud::translate(client, &providers.google_cloud_translation, request).await
         }
         Provider::Caiyun => caiyun::translate(client, &providers.caiyun, request).await,
+        Provider::QwenOcr => Err(anyhow::anyhow!("Qwen OCR supports recognition only").into()),
         Provider::Local => unreachable!("local translation has its own backend"),
     }
 }
@@ -133,7 +129,7 @@ mod tests {
 fn supports_structured_chapter(provider: Provider) -> bool {
     !matches!(
         provider,
-        Provider::DeepL | Provider::GoogleCloudTranslation | Provider::Caiyun
+        Provider::DeepL | Provider::GoogleCloudTranslation | Provider::Caiyun | Provider::QwenOcr
     )
 }
 
@@ -146,6 +142,9 @@ pub(crate) async fn recognize(
     request: &OcrRequest,
 ) -> Result<String> {
     match provider {
+        Provider::QwenOcr => {
+            qwen_ocr::recognize(client, &providers.qwen_ocr, model, generation, request).await
+        }
         Provider::OpenRouter => {
             openrouter::recognize(client, &providers.openrouter, model, generation, request).await
         }
@@ -162,15 +161,12 @@ pub(crate) async fn recognize(
             )
             .await
         }
-        _ => Err(anyhow::anyhow!(
-            "{provider} is not supported for API OCR; use OpenRouter, OpenAI, or OpenAI-compatible"
-        )
-        .into()),
+        _ => Err(anyhow::anyhow!("{provider} does not support API OCR").into()),
     }
 }
 
 pub(crate) async fn models(client: &Client, providers: &ProvidersConfig) -> Vec<Model> {
-    let mut models = Vec::new();
+    let mut models = qwen_ocr::models();
     let pending: Vec<BoxFuture<'_, Result<Vec<Model>>>> = vec![
         openai::models(client).boxed(),
         gemini::models(client).boxed(),

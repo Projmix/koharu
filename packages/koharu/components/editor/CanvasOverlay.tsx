@@ -30,6 +30,7 @@ import type {
 
 interface CanvasOverlayProps {
   page: Page
+  camera: Camera
   selected: EntityId[]
   hovered: EntityId | null
   frames: Readonly<Record<EntityId, Frame>>
@@ -46,6 +47,7 @@ interface CanvasOverlayProps {
 
 export function CanvasOverlay({
   page,
+  camera,
   selected,
   hovered,
   frames,
@@ -60,8 +62,7 @@ export function CanvasOverlay({
   onTransformEnd,
 }: CanvasOverlayProps) {
   const root = useRef<HTMLDivElement>(null)
-  // Subscribed here so a camera change re-renders the overlay alone, not the whole workspace.
-  const camera = useKoharuStore((state) => state.camera)
+  const textTransformTarget = useKoharuStore((state) => state.textTransformTarget)
   const expandedSelection = useMemo(
     () => expandLayerSelection(page.layers, selected),
     [page.layers, selected],
@@ -95,7 +96,7 @@ export function CanvasOverlay({
     : undefined
   const selectionControl = multipleSelected
     ? undefined
-    : sourceRegion && sourceRegionFrame
+    : textTransformTarget === 'region' && sourceRegion && sourceRegionFrame
       ? { element: sourceRegion.id, frame: sourceRegionFrame }
       : layers
           .filter(({ layer }) => selectedIds.has(layer.id) && selectableLayer(layer))
@@ -166,7 +167,7 @@ export function CanvasOverlay({
           element={selectionControl.element}
           frame={selectionControl.frame}
           camera={camera}
-          edgesOnly={Boolean(selectedTextLayer && !sourceRegion)}
+          edgesOnly={false}
           onTransformStart={onTransformStart}
           onTransformFrame={onTransformFrame}
           onTransformEnd={onTransformEnd}
@@ -298,6 +299,7 @@ function DraftOverlay({ frame, camera }: { frame: Frame; camera: Camera }) {
   const position = cssFrame(frame, camera)
   return (
     <div
+      data-testid='rectangle-preview'
       className='absolute border border-dashed border-primary bg-primary/5'
       style={{
         left: position.left,

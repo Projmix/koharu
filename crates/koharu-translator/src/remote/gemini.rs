@@ -83,7 +83,7 @@ pub(super) async fn translate(
 ) -> Result<Vec<String>> {
     let api_key = koharu_secrets::get("gemini")?.context("gemini API key is not configured")?;
     let (system, user) = prompt::prompts(request)?;
-    let schema = prompt::output_schema_for(request);
+    let schema = prompt::output_schema();
     let mut url =
         Url::parse(&format!("{ROOT}/{model}:generateContent")).expect("Gemini API root is valid");
     url.query_pairs_mut()
