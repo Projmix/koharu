@@ -8,8 +8,9 @@ or more). Nothing here is implemented yet; the owner picks items, and each
 lands as its own PR. Upstream removed `koharu_metrics` telemetry, so the
 measurements below must be offline, not metrics events.
 
-Read together with [README.md](README.md) (fork state and the JEV OCR flow)
-and the root `AGENTS.md`. Line references are to `main` at the commit above.
+Read together with [README.md](README.md) (fork state and the JEV OCR flow),
+[models.md](models.md) (every detector, OCR and cleaning model and its
+status) and the root `AGENTS.md`. Line references are to `main` at the commit above.
 
 ## Priorities
 
@@ -156,6 +157,15 @@ in one request with adaptive units (`stages/translation.rs:86`), capped at an
 estimated 100k input tokens (`koharu-translator/src/lib.rs:19`). Schemas go
 through each provider's structured output.
 
+- **The owner's usual path is manual chapter translation.** A whole chapter
+  is exported as JSON (`export_chapter_translation`), translated in an
+  external chat and imported back (`import_chapter_translation`) as a normal
+  pipeline patch. So every translation-side item must work on imported text,
+  not only on provider responses: profanity marking, overflow, translation
+  QA and the final check run on whatever translation is in the scene,
+  whoever produced it. The glossary goes into the exported JSON, and the
+  export can write the page images next to it so they can be attached to the
+  chat (item 7 for the manual path).
 - **Overflow is computed and dropped (item 4).** The renderer reports
   `TextOverflow` and `TextBelowReadableSize` per text node
   (`koharu-renderer/src/text_renderer.rs:276`), but nothing outside the
@@ -174,7 +184,8 @@ through each provider's structured output.
 - **Chapter mode is blind (item 7).** `ChapterTranslation::from_input` never
   attaches images, while page mode does. For vision models, attach downscaled
   page images within the existing token budget, and fall back to text only
-  when the estimate is over it.
+  when the estimate is over it. For the manual path, write the same
+  downscaled images next to the exported JSON.
 - **Profanity and register (item 3a).** The system prompt asks to preserve
   "emotional tone" (`koharu-translator/src/prompt.rs:277`) but never says to
   keep swearing, insults and slang at the same strength, and hosted LLMs
@@ -189,6 +200,7 @@ through each provider's structured output.
      `てめえ`, `死ね`, `殺す`, `ぶっ`), a translation much shorter than its
      source relative to the language pair, an empty or refused output, or a
      content-filter finish.
+  The marking runs after an import as well as after a provider response.
   3. For marked segments only, translate the same segment through DeepL or
      Google Cloud Translation, which are already providers here with keys in
      the keychain. Hosted machine translation fails immediately, per
