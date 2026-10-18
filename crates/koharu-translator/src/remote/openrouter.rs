@@ -58,7 +58,10 @@ pub(super) async fn recognize(
 ) -> Result<String> {
     let api_key =
         koharu_secrets::get("openrouter")?.context("openrouter API key is not configured")?;
+    // Enforce the OCR schema natively, as translation does; without it some
+    // models (Gemini Flash among them) wrap the JSON in a Markdown fence.
     let backend = ChatBackend {
+        require_parameters: true,
         reasoning: generation.reasoning,
         ..ChatBackend::new(
             "openrouter",
@@ -66,7 +69,7 @@ pub(super) async fn recognize(
             Some(api_key.expose_secret()),
             model,
             generation,
-            ResponseMode::PromptOnly,
+            ResponseMode::JsonSchema,
         )
     };
     super::openai_compatible::recognize(client, backend, request).await

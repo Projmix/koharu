@@ -190,6 +190,10 @@ pub(super) async fn recognize(
             .response_mode
             .response_format("manga_ocr", prompt::ocr_output_schema()),
     };
+    let mut body = serde_json::to_value(body).map_err(anyhow::Error::from)?;
+    if backend.require_parameters {
+        body["provider"] = serde_json::json!({ "require_parameters": true });
+    }
     let http = client.post(backend.endpoint).json(&body);
     let http = match backend.api_key {
         Some(api_key) => http.bearer_auth(api_key),
