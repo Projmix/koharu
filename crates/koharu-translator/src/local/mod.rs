@@ -78,7 +78,7 @@ impl LocalTranslator {
             &request,
             generation.reasoning.unwrap_or(false) && self.descriptor.reasoning,
         )?;
-        let schema = prompt::output_schema_for(&request);
+        let schema = prompt::output_schema();
         let llm = Arc::clone(&self.llm);
         let generation = self.descriptor.generation.options(generation);
         let output = tokio_rayon::spawn(move || {

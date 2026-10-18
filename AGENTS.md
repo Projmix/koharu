@@ -97,3 +97,4 @@ Document only durable, repository-specific constraints here. Do not record curre
 
 - Comments should explain ownership, invariants, upstream mapping, or deliberate divergence; do not narrate straightforward code.
 - Keep this file focused on long-lived decision rules rather than the current implementation.
+- Fork-specific behavior, its divergence from upstream, and the JEV plan live in `docs/fork/`. Read it before fork work and update it when that behavior changes.

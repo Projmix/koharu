@@ -3,7 +3,7 @@
 
 [remote.github]
 # Canonical repository owner used for generated changelog links.
-owner = "koharu-rs"
+owner = "Projmix"
 repo = "koharu"
 
 [changelog]

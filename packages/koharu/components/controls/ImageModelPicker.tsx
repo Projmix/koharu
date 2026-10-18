@@ -4,6 +4,7 @@ import { Check, LoaderCircle, Search, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import { inpaintingProviderName } from '@/lib/inpaintingProviders'
 import type { InpaintingModelChoice } from '@koharu/bridge/protocol'
 import { Button } from '@koharu/ui/components/button'
 import {
@@ -13,13 +14,6 @@ import {
   InputGroupInput,
 } from '@koharu/ui/components/input-group'
 import { ScrollArea } from '@koharu/ui/components/scroll-area'
-
-const providerNames: Record<string, string> = {
-  fal: 'Fal.ai',
-  openrouter: 'OpenRouter',
-}
-
-const providerName = (provider: string) => providerNames[provider] ?? provider
 
 export function ImageModelPicker({
   value,
@@ -42,7 +36,7 @@ export function ImageModelPicker({
     () =>
       models.filter((model) => {
         if (!normalizedQuery) return true
-        return [model.name, model.model, providerName(model.provider)].some((candidate) =>
+        return [model.name, model.model, inpaintingProviderName(model.provider)].some((candidate) =>
           candidate.toLocaleLowerCase().includes(normalizedQuery),
         )
       }),
@@ -99,7 +93,7 @@ export function ImageModelPicker({
                 variant='ghost'
                 aria-label={t('modelPicker.useModel', {
                   model: model.name,
-                  provider: providerName(model.provider),
+                  provider: inpaintingProviderName(model.provider),
                 })}
                 aria-pressed={selected}
                 disabled={disabled}
@@ -109,7 +103,7 @@ export function ImageModelPicker({
                 <span className='min-w-0 flex-1 overflow-hidden'>
                   <span className='block truncate text-[11px] text-foreground'>{model.name}</span>
                   <span className='block truncate text-[9px] text-muted-foreground'>
-                    {providerName(model.provider)}
+                    {inpaintingProviderName(model.provider)}
                   </span>
                 </span>
                 {selected && <Check className='size-3.5 shrink-0 text-primary' />}

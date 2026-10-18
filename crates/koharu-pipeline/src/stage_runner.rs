@@ -17,6 +17,8 @@ use crate::{
 pub(crate) struct StageRunner {
     stages: Stages,
     accelerator: AcceleratorGate,
+    parallel_inpainting: bool,
+    hybrid_ocr: bool,
 }
 
 impl StageRunner {
@@ -29,7 +31,17 @@ impl StageRunner {
         Ok(Self {
             stages: Stages::new(config, translator, device)?,
             accelerator: AcceleratorGate::new(device, resources),
+            parallel_inpainting: config.inpainting.method == crate::InpaintingMethod::Api,
+            hybrid_ocr: config.ocr.method == crate::OcrMethod::LocalApi,
         })
+    }
+
+    pub(crate) const fn parallel_inpainting(&self) -> bool {
+        self.parallel_inpainting
+    }
+
+    pub(crate) const fn hybrid_ocr(&self) -> bool {
+        self.hybrid_ocr
     }
 
     #[tracing::instrument(skip_all)]
@@ -90,6 +102,8 @@ impl StageRunner {
 
         drop(permit);
         tracing::warn!(stage = %job.stage, target = %job.input.target(), error = %failure.error, "retrying stage after memory pressure");
+        let _metric =
+            tracing::info_span!(target: "koharu_metrics", "stage_retry", stage = %job.stage, model);
         let _permit = self.accelerator.recover(job.stage, &self.stages).await;
         if job.stop.stopped() {
             return Ok(StageOutcome::Stopped);

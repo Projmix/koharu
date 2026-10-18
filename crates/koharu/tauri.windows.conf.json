@@ -1,10 +1,4 @@
 {
-  "bundle": {
-    "windows": {
-      "signCommand": {
-        "cmd": "bun",
-        "args": ["../../.github/signpath.ts", "%1"]
-      }
-    }
-  }
+  "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/tauri-v3.0.0-alpha.1/crates/tauri-schema-generator/schemas/config.schema.json",
+  "identifier": "Koharu"
 }

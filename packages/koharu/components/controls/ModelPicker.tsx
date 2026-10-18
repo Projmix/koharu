@@ -14,7 +14,6 @@ import {
   InputGroupInput,
 } from '@koharu/ui/components/input-group'
 import { ScrollArea } from '@koharu/ui/components/scroll-area'
-import { cn } from '@koharu/ui/lib/utils'
 
 export function ModelPicker({
   value,
@@ -33,13 +32,13 @@ export function ModelPicker({
   disabled?: boolean
   busyModel?: string | null
   onBack?: () => void
-  onSelect: (model: Model & ModelSelection) => void
+  onSelect: (model: ModelSelection) => void
 }) {
   const { t } = useTranslation()
   const [query, setQuery] = useState('')
   const [pendingKey, setPendingKey] = useState<string | null>(null)
-  const selectedModel = useRef<HTMLButtonElement>(null)
   const pendingModel = models.find((model) => modelKey(model) === pendingKey)
+  const selectedModel = useRef<HTMLButtonElement>(null)
   const selectedKey = value ? modelKey(value) : null
   const saving = Boolean(busyModel)
   const normalizedQuery = query.trim().toLocaleLowerCase()
@@ -56,12 +55,12 @@ export function ModelPicker({
 
   useEffect(() => {
     selectedModel.current?.scrollIntoView?.({ block: 'center' })
-  }, [options.length, selectedKey])
+  }, [pendingKey, selectedKey])
 
   return (
     <div className='min-w-0 overflow-hidden'>
       <div className='mb-1 flex h-7 items-center border-b border-border/60 px-0.5 pb-1'>
-        {(pendingModel || onBack) && (
+        {(onBack || pendingModel) && (
           <Button
             type='button'
             variant='ghost'
@@ -74,12 +73,7 @@ export function ModelPicker({
             <ChevronLeft className='size-3.5' />
           </Button>
         )}
-        <span
-          className={cn(
-            (pendingModel || onBack) && 'ml-1',
-            'min-w-0 flex-1 truncate text-[11px] font-medium',
-          )}
-        >
+        <span className='ml-1 min-w-0 flex-1 truncate text-[11px] font-medium'>
           {pendingModel?.name ?? t('modelPicker.title')}
         </span>
         {pendingModel && busyModel === pendingKey && (
@@ -150,11 +144,7 @@ export function ModelPicker({
                 className='h-auto min-h-9 w-full max-w-full min-w-0 justify-start gap-2 overflow-hidden rounded-lg px-2 py-1 text-left font-normal hover:bg-primary/10'
                 onClick={() => {
                   if (expandable) setPendingKey(key)
-                  else
-                    onSelect({
-                      ...model,
-                      ...modelSelection(model, quantization?.id ?? null),
-                    })
+                  else onSelect(modelSelection(model, quantization?.id ?? null))
                 }}
               >
                 <span className='min-w-0 flex-1 overflow-hidden'>

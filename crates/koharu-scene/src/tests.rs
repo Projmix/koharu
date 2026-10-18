@@ -1,4 +1,7 @@
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, HashSet},
+    sync::Arc,
+};
 
 use revision::revisioned;
 
@@ -69,6 +72,184 @@ async fn fresh_scene_has_an_empty_project_hierarchy() {
     let snapshot = session.snapshot();
     assert_eq!(snapshot.revision(), Revision::ZERO);
     assert_eq!(snapshot.pages().len(), 0);
+}
+
+#[tokio::test]
+async fn duplicate_pages_clone_complete_subtrees_and_internal_relations_atomically() {
+    let mut session = Session::memory().await.unwrap();
+    let source_role = AssetRole::new("source").unwrap();
+    let mut source_page = None;
+    let mut second_page = None;
+    let mut source_raster = None;
+    let setup = session
+        .snapshot()
+        .patch(|edit| {
+            let first = edit.add_page(PageDraft::new("Page", 120.0, 180.0), At::End)?;
+            let second = edit.add_page(PageDraft::new("Other", 120.0, 180.0), At::End)?;
+            let raster = edit.add_entity(first, At::End)?;
+            edit.set(
+                raster,
+                &RasterLayer {
+                    origin: Origin::User,
+                    name: "Cleanup".to_owned(),
+                    kind: RasterLayerKind::Cleanup,
+                },
+            )?;
+            edit.set_asset(
+                raster,
+                &source_role,
+                AssetInput::new(
+                    vec![1, 2, 3, 4],
+                    "application/octet-stream",
+                    AssetMetadata {
+                        width: None,
+                        height: None,
+                        attributes: BTreeMap::new(),
+                    },
+                ),
+            )?;
+            let content = edit.add_text_content(first, At::End)?;
+            edit.set(content, &source("hello"))?;
+            edit.add_text_layer(
+                first,
+                At::End,
+                content,
+                &TextLayout {
+                    origin: Origin::User,
+                    kind: TextLayoutKind::Paragraph,
+                    angle_degrees: None,
+                },
+            )?;
+            edit.add_relation(
+                RelationKind::new("dev.koharu.test.external").unwrap(),
+                raster,
+                second,
+            )?;
+            source_page = Some(first);
+            second_page = Some(second);
+            source_raster = Some(raster);
+            Ok(())
+        })
+        .unwrap();
+    session.commit(setup).await.unwrap();
+    let source_page = source_page.unwrap();
+    let second_page = second_page.unwrap();
+    let source_raster = source_raster.unwrap();
+
+    let mut duplicated = Vec::new();
+    let patch = session
+        .snapshot()
+        .patch(|edit| {
+            duplicated = edit.duplicate_pages(&[source_page, second_page])?;
+            Ok(())
+        })
+        .unwrap();
+    let commit = session.commit(patch).await.unwrap();
+    let snapshot = &commit.snapshot;
+
+    assert_eq!(
+        snapshot.pages().map(|page| page.id()).collect::<Vec<_>>(),
+        [source_page, duplicated[0], second_page, duplicated[1]]
+    );
+    assert_eq!(
+        snapshot.page(duplicated[0]).unwrap().page().unwrap().label,
+        "Page (2)"
+    );
+    assert_eq!(
+        snapshot.page(duplicated[1]).unwrap().page().unwrap().label,
+        "Other (2)"
+    );
+    let copied_ids = snapshot
+        .subtree(duplicated[0])
+        .unwrap()
+        .map(|entity| entity.id())
+        .collect::<HashSet<_>>();
+    assert!(!copied_ids.contains(&source_raster));
+    let copied_raster = copied_ids
+        .iter()
+        .copied()
+        .find(|entity| {
+            snapshot
+                .component::<RasterLayer>(*entity)
+                .unwrap()
+                .is_some()
+        })
+        .unwrap();
+    assert_eq!(
+        snapshot
+            .asset(source_raster, &source_role)
+            .unwrap()
+            .unwrap()
+            .blob,
+        snapshot
+            .asset(copied_raster, &source_role)
+            .unwrap()
+            .unwrap()
+            .blob
+    );
+    assert_eq!(snapshot.relations_from(copied_raster, None).count(), 0);
+    let copied_layer = copied_ids
+        .iter()
+        .copied()
+        .find(|entity| snapshot.component::<TextLayout>(*entity).unwrap().is_some())
+        .unwrap();
+    let copied_content = snapshot
+        .relation_from::<Presents>(copied_layer)
+        .unwrap()
+        .unwrap()
+        .value()
+        .target;
+    assert!(copied_ids.contains(&copied_content));
+    assert_eq!(
+        snapshot
+            .component::<SourceText>(copied_content)
+            .unwrap()
+            .unwrap()
+            .text
+            .value,
+        "hello"
+    );
+
+    let undone = session.undo(commit.revision).await.unwrap().snapshot;
+    assert_eq!(
+        undone.pages().map(|page| page.id()).collect::<Vec<_>>(),
+        [source_page, second_page]
+    );
+}
+
+#[tokio::test]
+async fn duplicate_pages_reject_cross_page_text_dependencies_before_commit() {
+    let mut session = Session::memory().await.unwrap();
+    let mut source_page = None;
+    let setup = session
+        .snapshot()
+        .patch(|edit| {
+            let source = edit.add_page(PageDraft::new("source", 100.0, 100.0), At::End)?;
+            let other = edit.add_page(PageDraft::new("other", 100.0, 100.0), At::End)?;
+            let content = edit.add_text_content(other, At::End)?;
+            edit.add_text_layer(
+                source,
+                At::End,
+                content,
+                &TextLayout {
+                    origin: Origin::User,
+                    kind: TextLayoutKind::Paragraph,
+                    angle_degrees: None,
+                },
+            )?;
+            source_page = Some(source);
+            Ok(())
+        })
+        .unwrap();
+    session.commit(setup).await.unwrap();
+
+    assert!(
+        session
+            .snapshot()
+            .patch(|edit| edit.duplicate_pages(&[source_page.unwrap()]).map(|_| ()))
+            .is_err()
+    );
+    assert_eq!(session.snapshot().pages().len(), 2);
 }
 
 #[tokio::test]

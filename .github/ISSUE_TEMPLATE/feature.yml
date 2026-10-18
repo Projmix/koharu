@@ -10,6 +10,8 @@ body:
 
         Please discuss substantial changes with maintainers before starting implementation.
 
+        If AI helped substantially with this request, briefly mention how.
+
   - type: textarea
     id: description
     attributes:

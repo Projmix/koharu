@@ -16,7 +16,7 @@ export function modelKey(model: Model | ModelSelection): string {
   return `${model.provider}:${model.model ?? ''}`
 }
 
-export function modelSelection(model: Model, quantization: string | null = null): ModelSelection {
+export function modelSelection(model: Model, quantization: string | null): ModelSelection {
   return {
     provider: model.provider,
     model: model.model,
@@ -29,22 +29,11 @@ export function modelSelection(model: Model, quantization: string | null = null)
 
 export function translationProfileSelection(
   profile: TranslationProfile,
-  model: Model | ModelSelection,
+  model: ModelSelection,
 ): TranslationProfile {
-  const selection: ModelSelection =
-    'quantizations' in model ? modelSelection(model, model.quantizations[0]?.id ?? null) : model
   return {
     ...profile,
-    model:
-      modelKey(profile.model) === modelKey(model)
-        ? {
-            ...selection,
-            quantization:
-              'quantizations' in model
-                ? (profile.model.quantization ?? selection.quantization)
-                : selection.quantization,
-          }
-        : selection,
+    model,
     generation: model.reasoning_required
       ? { ...profile.generation, reasoning: true }
       : profile.generation,
@@ -60,7 +49,10 @@ export function reconcileTranslationProfiles(
     const profile = translation[profileName]
     const model = models.find((candidate) => modelKey(candidate) === modelKey(profile.model))
     if (!model) continue
-    const reconciled = translationProfileSelection(profile, model)
+    const reconciled = translationProfileSelection(
+      profile,
+      modelSelection(model, profile.model.quantization ?? null),
+    )
     if (JSON.stringify(reconciled) === JSON.stringify(profile)) continue
     if (next === translation) next = { ...translation }
     next[profileName] = reconciled

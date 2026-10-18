@@ -2,16 +2,13 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use async_trait::async_trait;
-use koharu_renderer::{
-    CopyfitFontConfig, contour, geometry_frame, measure_text_fit, split_text_for_lobes,
-};
 use koharu_scene::{
     Authored, BubbleRegion, EntityId, Geometry, LanguageTag, Origin, PanelRegion, Region,
-    RegionSpec, SourceText, Translation, Typography,
+    RegionSpec, SourceText, Translation,
 };
 use koharu_translator::{
-    GenerationConfig, Language, ModelSelection, Provider, TranslationContext, TranslationRequest,
-    TranslationSegmentMetadata, TranslationUnit, TranslationVariants, Translator,
+    Language, Provider, TranslationContext, TranslationRequest, TranslationSegmentMetadata,
+    TranslationUnit, Translator,
 };
 
 use crate::{StageTarget, TranslationConfig, TranslationProfile, TranslationUnitPolicy};
@@ -20,12 +17,11 @@ use super::{
     StageInput, StageProcessor,
     detection::{LayoutItem, LayoutKind, reading_order},
     finish, generation,
-    jev::{
-        CopyfitCandidateMetrics, CopyfitJudgeInput, CopyfitVariantChoice, JevClient,
-    },
 };
 
 const PRODUCER: &str = "dev.koharu.pipeline.translation";
+
+mod manual;
 
 pub(super) struct Processor {
     config: TranslationConfig,
@@ -45,15 +41,11 @@ impl Processor {
     }
 }
 
-#[derive(Clone)]
 struct Target {
     entity: EntityId,
     source: String,
     page: usize,
     metadata: TranslationSegmentMetadata,
-    bubble_polygon: Option<Arc<[[f32; 2]]>>,
-    preferred_font: Option<String>,
-    explicit_font_size: Option<f32>,
 }
 
 enum TranslationEntry {
@@ -68,13 +60,11 @@ struct OrderedEntry {
 
 /// The complete, ordered chapter translation input and its target entities.
 /// Keeping request construction and patch construction together ensures that
-/// network responses and manually imported files use exactly the same contract.
+/// network responses and manually imported files target the same scene entities.
 pub struct ChapterTranslation {
     snapshot: koharu_scene::Snapshot,
-    targets: Vec<Target>,
+    targets: Vec<(EntityId, String)>,
     request: TranslationRequest,
-    model: ModelSelection,
-    generation: GenerationConfig,
     target_language: Language,
 }
 
@@ -134,35 +124,13 @@ impl ChapterTranslation {
         }
         Ok(Self {
             snapshot: input.scene.clone(),
-            targets,
+            targets: targets
+                .into_iter()
+                .map(|target| (target.entity, target.source))
+                .collect(),
             request,
-            model: profile.model.clone(),
-            generation: profile.generation,
             target_language,
         })
-    }
-
-    #[must_use]
-    pub fn model(&self) -> &ModelSelection {
-        &self.model
-    }
-
-    pub fn openrouter_request(&self) -> Result<serde_json::Value> {
-        anyhow::ensure!(
-            !self.request.segments.is_empty(),
-            "chapter translation found no untranslated OCR text"
-        );
-        Translator::openrouter_request(&self.model, self.generation, self.request.clone())
-    }
-
-    pub fn patch_from_response(&self, response: &str) -> Result<koharu_scene::Patch> {
-        let variants = koharu_translator::parse_translation_variants_response(
-            "openrouter",
-            response,
-            &self.request,
-        )?;
-        let selected = select_best_copyfit_variants_sync(&self.targets, variants);
-        self.patch_from_translations(selected, "openrouter-manual-import")
     }
 
     fn patch_from_translations(
@@ -179,18 +147,18 @@ impl ChapterTranslation {
         let language = koharu_scene::LanguageTag::new(self.target_language.tag())?;
         let generated = generation(PRODUCER, provider)?;
         let mut edit = self.snapshot.edit_as(generated.clone());
-        for target in &self.targets {
-            edit.observe::<SourceText>(target.entity)?;
-            edit.observe::<Translation>(target.entity)?;
+        for (entity, _) in &self.targets {
+            edit.observe::<SourceText>(*entity)?;
+            edit.observe::<Translation>(*entity)?;
         }
-        for (target, text) in self.targets.iter().zip(translated) {
-            let text = if target.source.trim() == "\u{2026}" {
+        for ((entity, source), text) in self.targets.iter().zip(translated) {
+            let text = if source.trim() == "\u{2026}" {
                 "\u{2026}".to_owned()
             } else {
                 text
             };
             edit.set(
-                target.entity,
+                *entity,
                 &Translation {
                     text: Authored::generated(text, generated.clone()),
                     language: Some(language.clone()),
@@ -250,20 +218,11 @@ impl StageProcessor for Processor {
                 self.config.source_language,
                 self.config.target_language,
             )?;
-            let (provider, variants) = self
+            let (provider, translated) = self
                 .translator
-                .translate_variants(&profile.model, profile.generation, chapter.request.clone())
+                .translate(&profile.model, profile.generation, chapter.request.clone())
                 .await?;
-            let resolved = resolve_copyfit_translations(
-                &self.translator,
-                &profile,
-                self.config.source_language,
-                self.config.target_language,
-                &chapter.targets,
-                variants,
-            )
-            .await;
-            return chapter.patch_from_translations(resolved, provider);
+            return chapter.patch_from_translations(translated, provider);
         }
         let (targets, context) = collect_inputs(&input, self.config.source_language)?;
         anyhow::ensure!(
@@ -297,19 +256,10 @@ impl StageProcessor for Processor {
         {
             request = request.with_image(image);
         }
-        let (provider, variants) = self
+        let (provider, translated) = self
             .translator
-            .translate_variants(&profile.model, profile.generation, request)
+            .translate(&profile.model, profile.generation, request)
             .await?;
-        let translated = resolve_copyfit_translations(
-            &self.translator,
-            &profile,
-            self.config.source_language,
-            self.config.target_language,
-            &targets,
-            variants,
-        )
-        .await;
         let language = LanguageTag::new(self.config.target_language.tag())?;
         let generated = generation(PRODUCER, provider)?;
         let mut edit = input.scene.edit_as(generated.clone());
@@ -333,285 +283,6 @@ impl StageProcessor for Processor {
         }
         finish(edit)
     }
-}
-
-fn target_font_config(target: &Target) -> CopyfitFontConfig {
-    let mut cfg = CopyfitFontConfig {
-        preferred_font: target.preferred_font.clone(),
-        font_size: target.explicit_font_size,
-        ..CopyfitFontConfig::default()
-    };
-    if let (Some(w), Some(h)) = (
-        target.metadata.bubble_width_px,
-        target.metadata.bubble_height_px,
-    ) {
-        let area = (w as f32) * (h as f32);
-        cfg.target_font_size = if area < 4500.0 {
-            12.5
-        } else if area < 12000.0 {
-            13.0
-        } else {
-            14.0
-        };
-    }
-    cfg
-}
-
-fn evaluate_target_copyfit(
-    target: &Target,
-    variants: &TranslationVariants,
-) -> Option<(CopyfitJudgeInput, Option<String>)> {
-    if target.explicit_font_size.is_some() || target.metadata.is_sound_effect {
-        return None;
-    }
-    let polygon = target.bubble_polygon.as_deref()?;
-    if polygon.len() < 3 {
-        return None;
-    }
-
-    let font_cfg = target_font_config(target);
-    let full_diag = measure_text_fit(&variants.full, polygon, &font_cfg);
-
-    // Fast path: if `full` fits cleanly at or above target_font_size with no ugly wrap
-    // and is not in a multi-lobe figure-eight balloon that benefits from splitting, accept immediately.
-    if !full_diag.overflow
-        && full_diag.resulting_font_size >= full_diag.target_font_size
-        && !full_diag.has_ugly_single_char_wrap
-        && full_diag.lobe_count < 2
-    {
-        return None;
-    }
-
-    let compact_metrics = variants
-        .compact
-        .as_deref()
-        .filter(|s| !s.trim().is_empty())
-        .map(|text| {
-            let diag = measure_text_fit(text, polygon, &font_cfg);
-            CopyfitCandidateMetrics::from_diagnostics(text, &diag)
-        });
-
-    let ultra_short_metrics = variants
-        .ultra_short
-        .as_deref()
-        .filter(|s| !s.trim().is_empty())
-        .map(|text| {
-            let diag = measure_text_fit(text, polygon, &font_cfg);
-            CopyfitCandidateMetrics::from_diagnostics(text, &diag)
-        });
-
-    let (lobe_split_metrics, lobe_split_text) = if full_diag.lobe_count >= 2 {
-        if let Some((part1, part2)) = split_text_for_lobes(&variants.full) {
-            let joined = format!("{part1}\n\n{part2}");
-            let diag = measure_text_fit(&joined, polygon, &font_cfg);
-            (
-                Some(CopyfitCandidateMetrics::from_diagnostics(&joined, &diag)),
-                Some(joined),
-            )
-        } else {
-            (None, None)
-        }
-    } else {
-        (None, None)
-    };
-
-    let region_index = target
-        .metadata
-        .order_index
-        .unwrap_or(0);
-    let input = CopyfitJudgeInput {
-        region_index,
-        source_text: target.source.clone(),
-        bubble_width_px: target.metadata.bubble_width_px.unwrap_or(120) as f32,
-        bubble_height_px: target.metadata.bubble_height_px.unwrap_or(120) as f32,
-        lobe_count: full_diag.lobe_count,
-        full: CopyfitCandidateMetrics::from_diagnostics(&variants.full, &full_diag),
-        compact: compact_metrics,
-        ultra_short: ultra_short_metrics,
-        lobe_split: lobe_split_metrics,
-    };
-    Some((input, lobe_split_text))
-}
-
-fn apply_verdict_choice(
-    choice: CopyfitVariantChoice,
-    variants: &TranslationVariants,
-    lobe_split_text: Option<&str>,
-) -> String {
-    match choice {
-        CopyfitVariantChoice::Full | CopyfitVariantChoice::NeedsRegeneration => {
-            variants.full.clone()
-        }
-        CopyfitVariantChoice::Compact => variants
-            .compact
-            .clone()
-            .unwrap_or_else(|| variants.full.clone()),
-        CopyfitVariantChoice::UltraShort => variants
-            .ultra_short
-            .clone()
-            .or_else(|| variants.compact.clone())
-            .unwrap_or_else(|| variants.full.clone()),
-        CopyfitVariantChoice::LobeSplit => lobe_split_text
-            .map(str::to_owned)
-            .unwrap_or_else(|| variants.full.clone()),
-    }
-}
-
-fn select_best_copyfit_variants_sync(
-    targets: &[Target],
-    variants: Vec<TranslationVariants>,
-) -> Vec<String> {
-    targets
-        .iter()
-        .zip(variants)
-        .map(|(target, variant)| {
-            let Some((judge_input, lobe_split_text)) = evaluate_target_copyfit(target, &variant)
-            else {
-                return variant.full;
-            };
-            let verdict = JevClient::deterministic_copyfit_verdict(&judge_input);
-            if verdict.choice == CopyfitVariantChoice::NeedsRegeneration {
-                // In offline/manual import mode without an LLM retry, pick the shortest available variant.
-                variant
-                    .ultra_short
-                    .or(variant.compact)
-                    .unwrap_or(variant.full)
-            } else {
-                apply_verdict_choice(verdict.choice, &variant, lobe_split_text.as_deref())
-            }
-        })
-        .collect()
-}
-
-async fn resolve_copyfit_translations(
-    translator: &Translator,
-    profile: &TranslationProfile,
-    source_language: Language,
-    target_language: Language,
-    targets: &[Target],
-    variants: Vec<TranslationVariants>,
-) -> Vec<String> {
-    let mut selected: Vec<String> = variants.iter().map(|v| v.full.clone()).collect();
-    let mut batch_inputs: Vec<CopyfitJudgeInput> = Vec::new();
-    let mut evaluated_map: Vec<(usize, Option<String>)> = Vec::new();
-
-    for (idx, (target, variant)) in targets.iter().zip(variants.iter()).enumerate() {
-        if let Some((mut judge_input, lobe_split_text)) = evaluate_target_copyfit(target, variant) {
-            judge_input.region_index = idx;
-            batch_inputs.push(judge_input);
-            evaluated_map.push((idx, lobe_split_text));
-        }
-    }
-
-    if batch_inputs.is_empty() {
-        return selected;
-    }
-
-    let jev = JevClient::from_config();
-    let verdicts = jev.judge_copyfitting_batch(&batch_inputs).await;
-    let mut regen_indices: Vec<usize> = Vec::new();
-
-    for ((target_idx, lobe_split_text), verdict) in evaluated_map.into_iter().zip(verdicts) {
-        let variant = &variants[target_idx];
-        if verdict.choice == CopyfitVariantChoice::NeedsRegeneration {
-            // Provisionally pick the most compact non-empty candidate in case retry is skipped or fails.
-            selected[target_idx] = variant
-                .ultra_short
-                .clone()
-                .or_else(|| variant.compact.clone())
-                .unwrap_or_else(|| variant.full.clone());
-            regen_indices.push(target_idx);
-        } else {
-            selected[target_idx] =
-                apply_verdict_choice(verdict.choice, variant, lobe_split_text.as_deref());
-        }
-    }
-
-    // Targeted 1-pass LLM copyfitting retry for segments that still overflowed or had <11.5pt font size.
-    if !regen_indices.is_empty() {
-        let retry_sources: Vec<String> = regen_indices
-            .iter()
-            .map(|&idx| targets[idx].source.clone())
-            .collect();
-        let retry_metadata: Vec<TranslationSegmentMetadata> = regen_indices
-            .iter()
-            .map(|&idx| {
-                let mut meta = targets[idx].metadata.clone();
-                let current_len = selected[idx].chars().count();
-                let strict_max_chars = ((current_len as f32) * 0.65).round().max(8.0) as usize;
-                meta.max_chars_hint = Some(
-                    meta.max_chars_hint
-                        .map_or(strict_max_chars, |h| h.min(strict_max_chars)),
-                );
-                let width_px = meta.bubble_width_px.unwrap_or(80) as f32;
-                let strict_word_len = ((width_px / 10.5).floor() as usize).clamp(4, 8);
-                meta.max_word_len_hint = Some(
-                    meta.max_word_len_hint
-                        .map_or(strict_word_len, |w| w.min(strict_word_len)),
-                );
-                meta
-            })
-            .collect();
-        let retry_ids: Vec<String> = retry_metadata
-            .iter()
-            .map(stable_segment_id)
-            .collect();
-
-        let retry_instructions = format!(
-            "{}\nCRITICAL COPYFITTING RETRY: The previous translation overflowed a narrow speech bubble or resulted in an unreadable tiny font (<11.5pt). Rewrite each segment into an ultra-compact, natural manga phrase strictly within `max_chars_hint` characters and using short words within `max_word_len_hint` letters.",
-            profile.instructions.as_deref().unwrap_or("")
-        );
-
-        if let Ok(req) = TranslationRequest::new(retry_sources, target_language)
-            .with_source_language(source_language)
-            .with_segment_metadata(retry_metadata)
-            .and_then(|r| r.with_segment_ids(retry_ids))
-        {
-            let req = req.with_instructions(retry_instructions.trim());
-            if let Ok((_, retry_variants)) = translator
-                .translate_variants(&profile.model, profile.generation, req)
-                .await
-            {
-                for (&target_idx, retry_var) in regen_indices.iter().zip(retry_variants) {
-                    let target = &targets[target_idx];
-                    if let Some(polygon) = target.bubble_polygon.as_deref() {
-                        let font_cfg = target_font_config(target);
-                        let mut best_text = selected[target_idx].clone();
-                        let mut best_diag = measure_text_fit(&best_text, polygon, &font_cfg);
-
-                        for candidate in [
-                            Some(retry_var.full.as_str()),
-                            retry_var.compact.as_deref(),
-                            retry_var.ultra_short.as_deref(),
-                        ]
-                        .into_iter()
-                        .flatten()
-                        {
-                            let candidate = candidate.trim();
-                            if candidate.is_empty() {
-                                continue;
-                            }
-                            let diag = measure_text_fit(candidate, polygon, &font_cfg);
-                            let better_overflow = best_diag.overflow && !diag.overflow;
-                            let same_overflow_bigger_font = best_diag.overflow == diag.overflow
-                                && (diag.resulting_font_size > best_diag.resulting_font_size + 0.25
-                                    || (diag.resulting_font_size
-                                        >= best_diag.resulting_font_size - 0.1
-                                        && best_diag.has_ugly_single_char_wrap
-                                        && !diag.has_ugly_single_char_wrap));
-                            if better_overflow || same_overflow_bigger_font {
-                                best_text = candidate.to_owned();
-                                best_diag = diag;
-                            }
-                        }
-                        selected[target_idx] = best_text;
-                    }
-                }
-            }
-        }
-    }
-
-    selected
 }
 
 fn collect_inputs(
@@ -654,9 +325,8 @@ fn collect_inputs(
                 .map(|region| region.id().to_string())
                 .or_else(|| (!chapter).then(|| content.id().to_string()));
             let role = content.role()?.map(|role| role.role);
-            let balloon_target = layer.balloon_target()?;
-            let bubble_id = balloon_target
-                .as_ref()
+            let bubble_id = layer
+                .balloon_target()?
                 .map(|bubble| bubble.id().to_string());
             let is_sound_effect = role
                 .as_deref()
@@ -673,41 +343,6 @@ fn collect_inputs(
                 });
                 continue;
             }
-
-            let typography = input.scene.component::<Typography>(layer.id())?;
-            let preferred_font = typography
-                .as_ref()
-                .and_then(|t| t.preferred_font.clone());
-            let explicit_font_size = typography.as_ref().and_then(|t| t.size);
-
-            let (
-                bubble_polygon,
-                bubble_width_px,
-                bubble_height_px,
-                max_chars_hint,
-                max_word_len_hint,
-            ) = if let Some(bubble) = balloon_target.as_ref()
-                && let Ok(geom) = bubble.geometry()
-                && let Some(frame) = geometry_frame(&geom)
-            {
-                let poly = contour(&geom, frame);
-                let w = frame.bounds.width.round().max(1.0) as u32;
-                let h = frame.bounds.height.round().max(1.0) as u32;
-                // Only attach copyfit constraints when the bubble is narrow or compact enough
-                // that standard Russian/English expansions risk shrinking below 13pt.
-                let is_constrained = w < 115 || (w * h) < 11_000;
-                let max_chars = is_constrained.then(|| {
-                    let usable_area = (w as f32 * h as f32) * 0.52;
-                    ((usable_area / 145.0).round() as usize).clamp(8, 120)
-                });
-                let max_word = (w < 105).then(|| {
-                    ((w as f32 / 9.5).floor() as usize).clamp(5, 10)
-                });
-                (Some(poly), Some(w), Some(h), max_chars, max_word)
-            } else {
-                (None, None, None, None, None)
-            };
-
             entries.push(OrderedEntry {
                 entry: TranslationEntry::Target(Target {
                     entity: content.id(),
@@ -723,14 +358,7 @@ fn collect_inputs(
                         unit_id: None,
                         unit_type: None,
                         is_sound_effect,
-                        bubble_width_px,
-                        bubble_height_px,
-                        max_chars_hint,
-                        max_word_len_hint,
                     },
-                    bubble_polygon,
-                    preferred_font,
-                    explicit_font_size,
                 }),
                 bounds,
             });
@@ -1218,6 +846,193 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn manual_export_does_not_depend_on_an_api_provider() {
+        let mut session = koharu_scene::Session::memory().await.unwrap();
+        let mut edit = session.snapshot().edit();
+        let page = edit
+            .add_page(PageDraft::new("page", 120.0, 180.0), At::End)
+            .unwrap();
+        add_text(&mut edit, page, "source", (10.0, 10.0, 20.0, 30.0));
+        session.commit(edit.finish().unwrap()).await.unwrap();
+        let mut config = TranslationConfig::default();
+        config.chapter.model.provider = Provider::Local;
+        config.chapter.model.model = None;
+        let chapter = ChapterTranslation::from_snapshot(session.snapshot(), &config).unwrap();
+
+        let export = chapter.manual_export().unwrap();
+        assert!(export.prompt.contains("translation.json"));
+        let segment = &export.document["pages"][0]["units"][0]["segments"][0];
+        assert_eq!(segment["source_text"], "source");
+        assert!(segment.get("page_id").is_none());
+        assert!(segment.get("region_id").is_none());
+        for key in ["provider", "model", "request", "endpoint"] {
+            assert!(export.document.get(key).is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn manual_import_uses_one_stable_id_per_block() {
+        let mut session = koharu_scene::Session::memory().await.unwrap();
+        let mut edit = session.snapshot().edit();
+        let page = edit
+            .add_page(PageDraft::new("page", 120.0, 180.0), At::End)
+            .unwrap();
+        let (target, region, _) = add_text(&mut edit, page, "source", (10.0, 10.0, 20.0, 30.0));
+        session.commit(edit.finish().unwrap()).await.unwrap();
+        let config = TranslationConfig::default();
+        let chapter = ChapterTranslation::from_snapshot(session.snapshot(), &config).unwrap();
+        let response = serde_json::json!({
+            "project_id": session.project_id().to_string(),
+            "target_language": config.target_language,
+            "translations": [{
+                "id": format!("page:{page}::region:{region}"),
+                "source_text": "source",
+                "translated_text": "translation"
+            }]
+        });
+
+        let patch = chapter.patch_from_response(&response.to_string()).unwrap();
+        session.commit(patch).await.unwrap();
+        assert_eq!(
+            session
+                .snapshot()
+                .component::<Translation>(target)
+                .unwrap()
+                .unwrap()
+                .text
+                .value,
+            "translation"
+        );
+    }
+
+    #[tokio::test]
+    async fn manual_import_reorders_by_id_and_rejects_invalid_files_atomically() {
+        let mut session = koharu_scene::Session::memory().await.unwrap();
+        let mut edit = session.snapshot().edit();
+        let page = edit
+            .add_page(PageDraft::new("page", 120.0, 180.0), At::End)
+            .unwrap();
+        let (first, _, _) = add_text(&mut edit, page, "first", (80.0, 10.0, 20.0, 30.0));
+        let (second, _, _) = add_text(&mut edit, page, "second", (10.0, 10.0, 20.0, 30.0));
+        session.commit(edit.finish().unwrap()).await.unwrap();
+        let mut config = TranslationConfig::default();
+        config.target_language = Language::Russian;
+        let chapter = ChapterTranslation::from_snapshot(session.snapshot(), &config).unwrap();
+        let response = serde_json::json!({
+            "project_id": session.project_id().to_string(),
+            "target_language": "ru-RU",
+            "translations": (0..chapter.request.segments.len()).rev().map(|index| serde_json::json!({
+                "id": chapter.request.segment_id(index),
+                "source_text": chapter.request.segments[index],
+                "translated_text": format!("translated {}", chapter.request.segments[index]),
+            })).collect::<Vec<_>>()
+        });
+        for error in [
+            "project",
+            "language",
+            "unknown",
+            "duplicate",
+            "source",
+            "empty",
+            "missing",
+            "extra",
+            "redundant-region",
+        ] {
+            let mut invalid = response.clone();
+            match error {
+                "project" => invalid["project_id"] = serde_json::json!("another-project"),
+                "language" => invalid["target_language"] = serde_json::json!("en-US"),
+                "unknown" => invalid["translations"][0]["id"] = serde_json::json!("unknown"),
+                "duplicate" => invalid["translations"][0] = invalid["translations"][1].clone(),
+                "source" => {
+                    invalid["translations"][0]["source_text"] = serde_json::json!("changed")
+                }
+                "empty" => {
+                    invalid["translations"][0]["translated_text"] = serde_json::json!(" \n ")
+                }
+                "missing" => {
+                    invalid["translations"].as_array_mut().unwrap().pop();
+                }
+                "extra" => {
+                    invalid["translations"]
+                        .as_array_mut()
+                        .unwrap()
+                        .push(response["translations"][0].clone());
+                }
+                "redundant-region" => {
+                    invalid["translations"][0]["region_id"] = serde_json::json!("wrong")
+                }
+                _ => unreachable!(),
+            }
+            assert!(
+                chapter.patch_from_response(&invalid.to_string()).is_err(),
+                "{error}"
+            );
+            assert!(
+                session
+                    .snapshot()
+                    .component::<Translation>(first)
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(
+                session
+                    .snapshot()
+                    .component::<Translation>(second)
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        let patch = chapter.patch_from_response(&response.to_string()).unwrap();
+        session.commit(patch).await.unwrap();
+        for (entity, expected) in [(first, "translated first"), (second, "translated second")] {
+            assert_eq!(
+                session
+                    .snapshot()
+                    .component::<Translation>(entity)
+                    .unwrap()
+                    .unwrap()
+                    .text
+                    .value,
+                expected
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn manual_import_rejects_a_file_missing_a_newly_added_block() {
+        let mut session = koharu_scene::Session::memory().await.unwrap();
+        let mut edit = session.snapshot().edit();
+        let page = edit
+            .add_page(PageDraft::new("page", 120.0, 180.0), At::End)
+            .unwrap();
+        let (first, region, _) = add_text(&mut edit, page, "first", (80.0, 10.0, 20.0, 30.0));
+        session.commit(edit.finish().unwrap()).await.unwrap();
+        let config = TranslationConfig::default();
+        let response = serde_json::json!({
+            "project_id": session.project_id().to_string(),
+            "target_language": config.target_language,
+            "translations": [{"id":format!("page:{page}::region:{region}"), "source_text":"first", "translated_text":"translation"}]
+        });
+        let mut edit = session.snapshot().edit();
+        add_text(&mut edit, page, "new", (10.0, 10.0, 20.0, 30.0));
+        session.commit(edit.finish().unwrap()).await.unwrap();
+        let current = ChapterTranslation::from_snapshot(session.snapshot(), &config).unwrap();
+        let error = current
+            .patch_from_response(&response.to_string())
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("expected 2"), "{error}");
+        assert!(
+            session
+                .snapshot()
+                .component::<Translation>(first)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
     async fn manual_chapter_import_is_strict_and_preserves_user_translations() {
         let mut session = koharu_scene::Session::memory().await.unwrap();
         let mut edit = session.snapshot().edit();
@@ -1241,14 +1056,13 @@ mod tests {
             ChapterTranslation::from_snapshot(session.snapshot(), &TranslationConfig::default())
                 .unwrap();
         let response = serde_json::json!({
+            "project_id": session.project_id().to_string(),
+            "target_language": TranslationConfig::default().target_language,
             "translations": [{
                 "id": format!("page:{page}::region:{region}"),
-                "page_id": page.to_string(),
-                "region_id": region.to_string(),
                 "source_text": "source",
                 "translated_text": "перевод"
-            }],
-            "notes": ""
+            }]
         });
         let patch = chapter.patch_from_response(&response.to_string()).unwrap();
         session.commit(patch).await.unwrap();
@@ -1605,6 +1419,7 @@ mod tests {
                 &TextLayout {
                     origin: Origin::User,
                     kind: TextLayoutKind::Paragraph,
+                    angle_degrees: None,
                 },
             )
             .unwrap();
@@ -1647,9 +1462,6 @@ mod tests {
                 source: source.to_owned(),
                 page: 1,
                 metadata: TranslationSegmentMetadata::default(),
-                bubble_polygon: None,
-                preferred_font: None,
-                explicit_font_size: None,
             }),
             bounds: Some(bounds),
         }
@@ -1674,46 +1486,7 @@ mod tests {
                 is_sound_effect,
                 ..Default::default()
             },
-            bubble_polygon: None,
-            preferred_font: None,
-            explicit_font_size: None,
         }
-    }
-
-    #[test]
-    fn copyfit_selector_chooses_compact_variant_for_narrow_bubble() {
-        let narrow_poly: Arc<[[f32; 2]]> = Arc::from([
-            [0.0, 0.0],
-            [62.0, 0.0],
-            [62.0, 95.0],
-            [0.0, 95.0],
-        ]);
-        let target_item = Target {
-            entity: EntityId::new(),
-            source: "本当に信じられないことだ！".to_owned(),
-            page: 1,
-            metadata: TranslationSegmentMetadata {
-                inside_balloon: true,
-                bubble_width_px: Some(62),
-                bubble_height_px: Some(95),
-                ..Default::default()
-            },
-            bubble_polygon: Some(narrow_poly),
-            preferred_font: None,
-            explicit_font_size: None,
-        };
-        let variants = TranslationVariants {
-            full: "На самом деле это совершенно невероятное происшествие для всех нас!".to_owned(),
-            compact: Some("Это просто невероятно!".to_owned()),
-            ultra_short: Some("Невероятно!".to_owned()),
-        };
-
-        let chosen = select_best_copyfit_variants_sync(&[target_item], vec![variants]);
-        assert!(
-            chosen[0] == "Это просто невероятно!" || chosen[0] == "Невероятно!",
-            "expected compact or ultra_short variant for narrow bubble, got: {}",
-            chosen[0]
-        );
     }
 
     fn sources(entries: &[OrderedEntry]) -> Vec<&str> {

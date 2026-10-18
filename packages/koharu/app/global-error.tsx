@@ -11,7 +11,6 @@ export default function GlobalError({
   reset: () => void
 }) {
   const { t, i18n } = useTranslation()
-
   return (
     <html lang={i18n.resolvedLanguage ?? i18n.language}>
       <body className='grid min-h-screen place-items-center bg-background text-foreground'>

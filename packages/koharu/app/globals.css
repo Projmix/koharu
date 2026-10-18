@@ -78,9 +78,7 @@
     @apply text-foreground select-none;
     background-color: transparent;
     overflow: hidden;
-    font-family:
-      var(--font-noto-sans-cjk), 'Noto Sans JP', 'Noto Sans SC', 'Noto Sans TC', 'Yu Gothic UI',
-      'Microsoft YaHei UI', 'Microsoft JhengHei UI', ui-sans-serif, system-ui, sans-serif;
+    font-family: var(--font-noto-sans-cjk), ui-sans-serif, system-ui, sans-serif;
     font-feature-settings:
       'cv02' 1,
       'cv03' 1,

@@ -250,7 +250,7 @@ impl Session {
                 .collect()
         })
         .await
-        .map_err(|error| Error::Task(error.to_string()))?
+        .context("project version task failed")?
     }
 
     pub async fn save_version(&self, name: impl Into<String>) -> Result<SavedVersion> {
@@ -278,7 +278,7 @@ impl Session {
             format::save_version(&root, &version)
         })
         .await
-        .map_err(|error| Error::Task(error.to_string()))??;
+        .context("project version task failed")??;
         Ok(result)
     }
 
@@ -306,7 +306,7 @@ impl Session {
             })
         })
         .await
-        .map_err(|error| Error::Task(error.to_string()))?
+        .context("project version task failed")?
     }
 
     pub async fn delete_version(&self, id: VersionId) -> Result<()> {
@@ -321,7 +321,7 @@ impl Session {
             Ok(())
         })
         .await
-        .map_err(|error| Error::Task(error.to_string()))?
+        .context("project version task failed")?
     }
 
     #[tracing::instrument(level = "info", skip_all)]

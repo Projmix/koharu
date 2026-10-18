@@ -131,13 +131,15 @@
     "compactMode": "Use compact processing controls",
     "entireProject": "Entire project",
     "entireProjectDescription": "Process every page in this project.",
-    "exportChapter": "Export chapter translation request",
+    "exportChapter": "Export for manual translation (ZIP)",
     "expandedMode": "Use expanded processing controls",
     "model": "Model",
     "noModel": "No model",
     "notSet": "Not set",
     "output": "Output",
-    "importChapter": "Import chapter translation response",
+    "importChapter": "Import translated JSON",
+    "exportChapterHelp": "Extract the archive. Paste prompt.txt into your chosen chat and attach chapter.json. Save the response as translation.json and import it.",
+    "importChapterDone": "Translations imported",
     "pageProfile": "Page profile",
     "pipelineStages": "Pipeline stages",
     "providerDefault": "Provider default",
@@ -165,6 +167,10 @@
     "typing": "Typing"
   },
   "inspector": {
+    "transformTarget": "Transform",
+    "transformText": "Text",
+    "transformRegion": "OCR region",
+    "transformHint": "Drag the block to move it, or its handles to resize. Auto fits the font to the frame.",
     "alignBottom": "Align bottom",
     "alignCenter": "Align center",
     "alignLeft": "Align left",
@@ -181,6 +187,7 @@
     "color": "Color",
     "customFrame": "Custom frame",
     "decreaseBorderWidth": "Decrease border width",
+    "decreaseFontSize": "Decrease font size by 1 pt",
     "direction": "Direction",
     "font": "Font",
     "fontSize": "Font size",
@@ -193,6 +200,7 @@
     "fontWeight": "Font weight",
     "horizontal": "Horizontal",
     "increaseBorderWidth": "Increase border width",
+    "increaseFontSize": "Increase font size by 1 pt",
     "opacity": "Opacity",
     "placement": "Placement",
     "resetAutoFit": "Reset to auto fit",
@@ -217,14 +225,15 @@
     "pt-BR": "Português brasileiro",
     "ru-RU": "Русский",
     "tr-TR": "Türkçe",
-    "wuu": "吴语",
     "zh-CN": "简体中文",
     "zh-TW": "繁體中文"
   },
   "layers": {
+    "collapse": "Collapse {{name}}",
     "delete": "Delete {{name}}",
     "edit": "Edit {{name}}",
     "empty": "No layers on this page.",
+    "expand": "Expand {{name}}",
     "hide": "Hide {{name}}",
     "imageName": "Image {{index}}",
     "kinds": {
@@ -330,6 +339,7 @@
     "noResults": "No pages match this filter.",
     "pageName": "Page name",
     "pages": "Pages",
+    "duplicate": "Duplicate",
     "rename": "Rename",
     "renameDescription": "Choose a new name for this page.",
     "renameTitle": "Rename page",
@@ -372,7 +382,8 @@
     "minimax": "MiniMax language models.",
     "openai": "OpenAI language models.",
     "openai-compatible": "Any server exposing an OpenAI-compatible API.",
-    "openrouter": "Models routed through OpenRouter."
+    "openrouter": "Models routed through OpenRouter.",
+    "qwen-ocr": "Dedicated Qwen-VL-OCR via Alibaba Cloud. Separate API key and regional endpoint."
   },
   "resources": {
     "cpu": "CPU",
@@ -441,13 +452,18 @@
         "instructionsPlaceholder": "Optional OCR-specific guidance",
         "local": "Local (CPU)",
         "localModel": "Local OCR model",
-        "method": "OCR method"
+        "method": "OCR method",
+        "hybrid": "Local + API",
+        "hybridDescription": "Complete local OCR for every page in the chapter, then send each crop and its draft to the selected API model. Results are applied automatically."
       },
       "inpainting": {
         "apiModel": "Image editing model",
-        "localModel": "Local restoration model",
-        "method": "Restoration method",
-        "options": "API restoration options",
+        "localModel": "Local cleanup model",
+        "restorationModel": "Restoration model",
+        "restorationProvider": "Restoration provider",
+        "restorationPrompt": "Restoration prompt",
+        "method": "Cleanup method",
+        "options": "API cleanup options",
         "promptPreset": "Prompt preset",
         "promptPresets": {
           "cleanup-all": "Remove all text and watermarks",
@@ -455,7 +471,11 @@
           "custom": "Custom prompt",
           "translate-russian": "Replace lettering with Russian"
         },
-        "provider": "Image provider"
+        "provider": "Image provider",
+        "removeDescription": "Local model for the Remove brush. Independent of page cleanup and rectangular restoration.",
+        "restorationDescription": "API model for the Restore tool with a rectangular selection. Independent of page cleanup and the Remove brush.",
+        "previewBeforeSend": "Preview before sending to API",
+        "previewBeforeSendDescription": "Show the outgoing image and edit the prompt before API page cleanup or Restore selection. Local Remove is unaffected."
       },
       "processing": "Processing",
       "stages": {
@@ -464,8 +484,8 @@
           "title": "Detection"
         },
         "inpainting": {
-          "description": "Rebuild artwork beneath removed text.",
-          "title": "Inpainting"
+          "description": "Used by the Clean stage when processing pages. The Remove and Restore tools have separate settings below.",
+          "title": "Clean"
         },
         "ocr": {
           "description": "Read the source text inside detected regions.",
@@ -480,6 +500,7 @@
       "connections": "Connections",
       "connectionsDescription": "Credentials are stored securely on this device.",
       "falDescription": "Credential used by Fal.ai image editing models.",
+      "replicateDescription": "FLUX image editing. Output safety checking is disabled for Dev and Klein; Pro, Max and Flex retain model restrictions.",
       "credential": "Credential",
       "credentialLabel": "{{provider}} credential",
       "description": "Connect translation and language-model providers.",
@@ -487,7 +508,7 @@
       "title": "Providers"
     },
     "shortcuts": {
-      "description": "Use Ctrl plus the configured key whenever a text field is not focused.",
+      "description": "Use Alt plus the configured key whenever a text field is not focused.",
       "inputLabel": "{{action}} shortcut",
       "title": "Shortcuts",
       "tools": "Tools"
@@ -590,6 +611,7 @@
     "ocr": "OCR region",
     "pan": "Pan",
     "remove": "Remove",
+    "restore": "Restore",
     "select": "Select",
     "text": "Text"
   },
@@ -610,12 +632,35 @@
     "later": "Later",
     "noNotes": "No release notes provided.",
     "retry": "Retry",
-    "update": "Update"
+    "update": "Update",
+    "upstream": {
+      "title": "Original Koharu has an update",
+      "description": "Original Koharu {{version}} is newer than the integrated version {{integratedVersion}}. Its changes may be useful for this fork. Automatic updates install only Projmix/koharu releases.",
+      "view": "View original release",
+      "dismiss": "Dismiss this version"
+    }
   },
   "window": {
     "close": "Close",
     "maximize": "Maximize",
     "minimize": "Minimize",
     "restore": "Restore"
+  },
+  "imageEditPreview": {
+    "title": "Preview image-edit request",
+    "description": "Review the outgoing image and prompt. Prompt changes apply only to this request and are not saved to settings.",
+    "image": "Outgoing image",
+    "prompt": "Prompt for this request",
+    "resetPrompt": "Reset prompt",
+    "send": "Send to API",
+    "cancel": "Cancel job",
+    "close": "Close",
+    "actualSize": "100%",
+    "fitImage": "Fit image",
+    "restoration": "Restore selection",
+    "cleanup": "Page cleanup",
+    "failed": "Could not resolve preview: {{error}}",
+    "cleanupLayers": "Original + visible Paint layers. One PNG; text layers, masks and handles are excluded.",
+    "restorationLayers": "Selected area of the original + visible Cleanup and Paint layers, in layer order. One PNG; text layers, masks and handles are excluded."
   }
 }

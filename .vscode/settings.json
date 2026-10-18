@@ -3,7 +3,6 @@
   "css.lint.validProperties": ["app-region"],
   "git.addAICoAuthor": "off",
   "json.schemaDownload.trustedDomains": {
-    "https://ui.shadcn.com": true,
-    "https://raw.githubusercontent.com": true
+    "https://ui.shadcn.com/schema.json": true
   }
 }

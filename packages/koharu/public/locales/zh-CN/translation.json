@@ -131,13 +131,15 @@
     "compactMode": "使用紧凑处理控件",
     "entireProject": "整个项目",
     "entireProjectDescription": "处理此项目中的每个页面。",
-    "exportChapter": "Export chapter translation request",
+    "exportChapter": "导出用于手动翻译（ZIP）",
     "expandedMode": "使用扩展处理控件",
     "model": "模型",
     "noModel": "无模型",
     "notSet": "未设置",
     "output": "输出",
-    "importChapter": "Import chapter translation response",
+    "importChapter": "导入已翻译的 JSON",
+    "exportChapterHelp": "解压压缩包。将 prompt.txt 粘贴到所选聊天中并附上 chapter.json。将回复保存为 translation.json 后导入。",
+    "importChapterDone": "已导入译文",
     "pageProfile": "页面配置",
     "pipelineStages": "处理流程阶段",
     "providerDefault": "提供商默认值",
@@ -165,6 +167,10 @@
     "typing": "排版"
   },
   "inspector": {
+    "transformTarget": "编辑对象",
+    "transformText": "文字",
+    "transformRegion": "OCR 区域",
+    "transformHint": "拖动文字块可移动，拖动控制点可调整大小。自动模式会根据边框调整字号。",
     "alignBottom": "底端对齐",
     "alignCenter": "居中对齐",
     "alignLeft": "左对齐",
@@ -181,6 +187,7 @@
     "color": "颜色",
     "customFrame": "自定义框架",
     "decreaseBorderWidth": "减小描边宽度",
+    "decreaseFontSize": "字体大小减小 1 磅",
     "direction": "方向",
     "font": "字体",
     "fontSize": "字体大小",
@@ -193,6 +200,7 @@
     "fontWeight": "字体粗细",
     "horizontal": "横排",
     "increaseBorderWidth": "增大描边宽度",
+    "increaseFontSize": "字体大小增大 1 磅",
     "opacity": "不透明度",
     "placement": "位置",
     "resetAutoFit": "重置为自动适配",
@@ -217,14 +225,15 @@
     "pt-BR": "Português brasileiro",
     "ru-RU": "Русский",
     "tr-TR": "Türkçe",
-    "wuu": "吴语",
     "zh-CN": "简体中文",
     "zh-TW": "繁體中文"
   },
   "layers": {
+    "collapse": "折叠 {{name}}",
     "delete": "删除 {{name}}",
     "edit": "编辑 {{name}}",
     "empty": "此页面上没有图层。",
+    "expand": "展开 {{name}}",
     "hide": "隐藏 {{name}}",
     "imageName": "图像 {{index}}",
     "kinds": {
@@ -268,7 +277,7 @@
     "processLayers": "处理所选图层",
     "processPages": "处理所选页面",
     "processProject": "处理项目",
-    "projectVersions": "Project Versions…",
+    "projectVersions": "项目版本…",
     "redo": "重做",
     "runPhase": "运行{{phase}}",
     "selectAllLayers": "选择所有图层",
@@ -277,22 +286,22 @@
     "view": "视图"
   },
   "versions": {
-    "delete": "Delete",
-    "deleteDescription": "Version “{{name}}” will be permanently deleted. The current project state will not change.",
-    "deleteLabel": "Delete version {{name}}",
-    "deleteTitle": "Delete this version?",
-    "description": "Save named snapshots of the complete project and return to them later.",
-    "emptyDescription": "Save a version before a large edit or processing run.",
-    "emptyTitle": "No saved versions",
-    "nameLabel": "Version name",
-    "namePlaceholder": "For example: OCR complete",
-    "restore": "Restore",
-    "restoreDescription": "The project will return to version “{{name}}” as a new revision. Save the current state as a version first if you need it.",
-    "restoreLabel": "Restore version {{name}}",
-    "restoreTitle": "Restore this version?",
-    "revision": "revision {{revision}}",
-    "save": "Save",
-    "title": "Project Versions"
+    "delete": "删除",
+    "deleteDescription": "版本“{{name}}”将被永久删除。项目的当前状态不会改变。",
+    "deleteLabel": "删除版本 {{name}}",
+    "deleteTitle": "删除此版本？",
+    "description": "保存整个项目的命名快照，以后可以返回。",
+    "emptyDescription": "在大幅编辑或处理之前保存一个版本。",
+    "emptyTitle": "没有已保存的版本",
+    "nameLabel": "版本名称",
+    "namePlaceholder": "例如：OCR 完成",
+    "restore": "恢复",
+    "restoreDescription": "项目将以新修订的形式回到版本“{{name}}”。如需保留当前状态，请先将其保存为版本。",
+    "restoreLabel": "恢复版本 {{name}}",
+    "restoreTitle": "恢复此版本？",
+    "revision": "修订 {{revision}}",
+    "save": "保存",
+    "title": "项目版本"
   },
   "model": {
     "baseUrl": "基础 URL",
@@ -330,6 +339,7 @@
     "noResults": "没有与此筛选条件匹配的页面。",
     "pageName": "页面名称",
     "pages": "页面",
+    "duplicate": "复制",
     "rename": "重命名",
     "renameDescription": "为此页面选择一个新名称。",
     "renameTitle": "重命名页面",
@@ -372,7 +382,8 @@
     "minimax": "MiniMax 语言模型。",
     "openai": "OpenAI 语言模型。",
     "openai-compatible": "任何提供 OpenAI 兼容 API 的服务器。",
-    "openrouter": "通过 OpenRouter 路由的模型。"
+    "openrouter": "通过 OpenRouter 路由的模型。",
+    "qwen-ocr": "通过阿里云调用专用 Qwen-VL-OCR，使用独立的 API 密钥和区域地址。"
   },
   "resources": {
     "cpu": "CPU",
@@ -441,13 +452,18 @@
         "instructionsPlaceholder": "可选的 OCR 专用说明",
         "local": "本地（CPU）",
         "localModel": "本地 OCR 模型",
-        "method": "OCR 方法"
+        "method": "OCR 方法",
+        "hybrid": "本地 + API",
+        "hybridDescription": "先完成整章所有页面的本地 OCR，再将每张裁剪图像及其识别文本发送给所选 API。结果自动应用。"
       },
       "inpainting": {
         "apiModel": "图像编辑模型",
-        "localModel": "本地修复模型",
-        "method": "修复方式",
-        "options": "API 修复选项",
+        "localModel": "本地清理模型",
+        "restorationModel": "修复模型",
+        "restorationProvider": "修复服务提供商",
+        "restorationPrompt": "修复提示词",
+        "method": "清理方式",
+        "options": "API 清理选项",
         "promptPreset": "提示词预设",
         "promptPresets": {
           "cleanup-all": "移除全部文字和水印",
@@ -455,7 +471,11 @@
           "custom": "自定义提示词",
           "translate-russian": "将文字替换为俄语"
         },
-        "provider": "图像提供商"
+        "provider": "图像提供商",
+        "removeDescription": "移除画笔使用的本地模型，独立于页面清理和矩形区域修复。",
+        "restorationDescription": "矩形选区修复工具使用的 API 模型，独立于页面清理和移除画笔。",
+        "previewBeforeSend": "发送到 API 前预览",
+        "previewBeforeSendDescription": "通过 API 清理页面或修复选区前，查看待发送的图像并编辑提示词。不影响本地移除功能。"
       },
       "processing": "正在处理",
       "stages": {
@@ -464,8 +484,8 @@
           "title": "检测"
         },
         "inpainting": {
-          "description": "重建已删除文本下方的图稿。",
-          "title": "修补"
+          "description": "用于页面处理的清理阶段。移除和修复工具在下方单独设置。",
+          "title": "修复"
         },
         "ocr": {
           "description": "读取检测区域内的原文。",
@@ -480,6 +500,7 @@
       "connections": "连接",
       "connectionsDescription": "凭据安全地存储在此设备上。",
       "falDescription": "Fal.ai 图像编辑模型使用的凭据。",
+      "replicateDescription": "使用 FLUX 编辑图像。Dev 和 Klein 已关闭输出安全检查；Pro、Max 和 Flex 仍受模型限制。",
       "credential": "凭据",
       "credentialLabel": "{{provider}} 凭据",
       "description": "连接翻译和语言模型提供商。",
@@ -487,7 +508,7 @@
       "title": "提供商"
     },
     "shortcuts": {
-      "description": "当文本字段未获得焦点时，请使用 Ctrl 加已配置的按键。",
+      "description": "当文本字段未获得焦点时，请使用 Alt 加已配置的按键。",
       "inputLabel": "{{action}} 快捷键",
       "title": "快捷键",
       "tools": "工具"
@@ -508,12 +529,12 @@
       "instructionsDescription": "内置提示指定语言和 JSON 格式。留空即可使用；填写内容会作为额外指导。",
       "instructionsLabel": "翻译说明",
       "instructionsPlaceholder": "可选的项目级说明",
-      "promptPreset": "Chapter prompt preset",
-      "promptPresetDescription": "Load a ready-made style and terminology prompt into the chapter profile.",
-      "presetCustom": "Custom instructions",
-      "presetBnhaBakugoMidoriya": "BNHA — Bakugo / Midoriya (Russian)",
-      "presetBnhaDoujinshi": "BNHA — doujinshi (Russian)",
-      "presetMangaAdaptive": "Manga — adaptive chapter (Russian)",
+      "promptPreset": "章节提示词预设",
+      "promptPresetDescription": "将现成的风格与术语提示词载入章节配置。",
+      "presetCustom": "自定义指令",
+      "presetBnhaBakugoMidoriya": "BNHA — 爆豪 / 绿谷（俄语）",
+      "presetBnhaDoujinshi": "BNHA — 同人志（俄语）",
+      "presetMangaAdaptive": "漫画 — 自适应章节（俄语）",
       "model": "模型",
       "pageProfile": "页面",
       "modelDescription": "提供商标签表示各模型的运行位置；连接需单独配置。",
@@ -528,10 +549,10 @@
       "title": "译文",
       "translationModel": "翻译模型",
       "translationModelDescription": "选择用于翻译文本的模型。",
-      "unitPolicy": "Translation grouping",
-      "unitPolicyDescription": "Choose how chapter text is grouped before translation.",
-      "pageOnly": "Page only",
-      "adaptiveV1": "Adaptive v1 (chapter context)"
+      "unitPolicy": "翻译分组",
+      "unitPolicyDescription": "选择翻译前如何对章节文本分组。",
+      "pageOnly": "仅页面",
+      "adaptiveV1": "自适应 v1（章节上下文）"
     },
     "typesetting": {
       "addFamily": "添加字体系列",
@@ -590,6 +611,7 @@
     "ocr": "OCR 区域",
     "pan": "平移",
     "remove": "移除",
+    "restore": "恢复",
     "select": "选择",
     "text": "文本"
   },
@@ -610,12 +632,35 @@
     "later": "稍后",
     "noNotes": "未提供发行说明。",
     "retry": "重试",
-    "update": "更新"
+    "update": "更新",
+    "upstream": {
+      "title": "原版 Koharu 有新版本",
+      "description": "原版 Koharu {{version}} 比已集成的 {{integratedVersion}} 更新，其中可能有适合此分支的改进。自动更新仅安装 Projmix/koharu 的发行版。",
+      "view": "查看原版发行说明",
+      "dismiss": "忽略此版本"
+    }
   },
   "window": {
     "close": "关闭",
     "maximize": "最大化",
     "minimize": "最小化",
     "restore": "还原"
+  },
+  "imageEditPreview": {
+    "title": "预览图像编辑请求",
+    "description": "检查待发送的图像和提示词。提示词修改仅对本次请求生效，不会保存到设置。",
+    "image": "待发送的图像",
+    "prompt": "本次请求的提示词",
+    "resetPrompt": "重置提示词",
+    "send": "发送到 API",
+    "cancel": "取消任务",
+    "close": "关闭",
+    "actualSize": "100%",
+    "fitImage": "适应窗口",
+    "restoration": "修复选区",
+    "cleanup": "页面清理",
+    "failed": "无法处理预览：{{error}}",
+    "cleanupLayers": "原图 + 可见的绘画图层。发送单张 PNG，不包含文字图层、蒙版和选择控件。",
+    "restorationLayers": "原图 + 按图层顺序合成的可见清理与绘画图层，仅发送选区。发送单张 PNG，不包含文字图层、蒙版和选择控件。"
   }
 }

@@ -54,6 +54,11 @@ export function TranslationPreferences({
   onChange: (value: TranslationSettings) => void
 }) {
   const { t } = useTranslation()
+  modelChoices = modelChoices.filter((model) =>
+    providers.some(
+      (entry) => entry.config.provider === model.provider && entry.supports_translation,
+    ),
+  )
   const [profileName, setProfileName] = useState<ProfileName>('page')
   const [modelOpen, setModelOpen] = useState(false)
   const profile = value[profileName]
@@ -70,7 +75,6 @@ export function TranslationPreferences({
     reasoning_required: profile.model.reasoning_required ?? false,
   }
   const choices = selected ? modelChoices : [current, ...modelChoices]
-  const quantizations = current.quantizations
   const quantization =
     current.quantizations.find((quantization) => quantization.id === profile.model.quantization) ??
     current.quantizations[0]
@@ -137,33 +141,6 @@ export function TranslationPreferences({
               </PopoverContent>
             </Popover>
           </PreferenceRow>
-          {quantizations.length > 0 && (
-            <PreferenceRow
-              title={t('settings.translation.quantization')}
-              description={t('settings.translation.quantizationDescription')}
-            >
-              <Select
-                value={profile.model.quantization ?? ''}
-                onValueChange={(quantization) =>
-                  updateProfile({ ...profile, model: { ...profile.model, quantization } })
-                }
-              >
-                <SelectTrigger
-                  aria-label={t('settings.translation.modelQuantization')}
-                  className='h-8 w-full text-[11px]'
-                >
-                  <SelectValue placeholder={t('settings.translation.selectQuantization')} />
-                </SelectTrigger>
-                <SelectContent>
-                  {quantizations.map((quantization) => (
-                    <SelectItem key={quantization.id} value={quantization.id}>
-                      {quantization.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </PreferenceRow>
-          )}
           <PreferenceRow
             title={t('settings.translation.unitPolicy')}
             description={t('settings.translation.unitPolicyDescription')}

@@ -117,6 +117,7 @@ fn prepare_secret(args: &Args, provider: Provider) -> Result<()> {
         Provider::DeepSeek => Some(("DEEPSEEK_API_KEY", true)),
         Provider::OpenAiCompatible => Some(("OPENAI_COMPATIBLE_API_KEY", false)),
         Provider::OpenRouter => Some(("OPENROUTER_API_KEY", true)),
+        Provider::QwenOcr => Some(("DASHSCOPE_API_KEY", true)),
         Provider::LmStudio => Some(("LM_STUDIO_API_TOKEN", false)),
         Provider::DeepL => Some(("DEEPL_API_KEY", true)),
         Provider::GoogleCloudTranslation => Some(("GOOGLE_CLOUD_API_KEY", true)),

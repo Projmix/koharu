@@ -8,13 +8,13 @@ import { I18nextProvider } from 'react-i18next'
 import { StartupView } from '@/components/app/StartupView'
 import { Updater } from '@/components/app/Updater'
 import ClientOnly from '@/components/ClientOnly'
-import '@/lib/web-tauri-shim'
 import { refreshTranslationModels, savePreferences } from '@/lib/backend'
 import i18n from '@/lib/i18n'
 import { pageKey, pagesKey, projectKey, queryClient, refresh } from '@/lib/queries'
 import {
   receiveCanvas,
   receiveDownload,
+  receiveImageEditPreviews,
   receiveStartupState,
   receiveJob,
   receivePreferences,
@@ -26,6 +26,7 @@ import {
   commands,
   type CanvasState,
   type Download,
+  type ImageEditPreview,
   type Job,
   type ModelResources,
   type ProjectInfo,
@@ -63,6 +64,7 @@ export function Providers({ children }: { children: ReactNode }) {
     if (!lifecycle.bound) {
       lifecycle.bound = true
       const completed = new Map<string, number>()
+      let previewReceived = false
       const channel = <T,>(receive: (value: T) => void) =>
         new Channel<T>((value) => {
           if (lifecycle.active) receive(value)
@@ -99,9 +101,19 @@ export function Providers({ children }: { children: ReactNode }) {
               queryClient.setQueryData(pageKey, null)
             }
           }),
+          channel<ImageEditPreview[]>((previews) => {
+            previewReceived = true
+            receiveImageEditPreviews(previews)
+          }),
         )
         .then((state) => {
-          if (lifecycle.active) receiveStartupState(state)
+          if (!lifecycle.active) return
+          receiveStartupState({
+            ...state,
+            image_edit_previews: previewReceived
+              ? useKoharuStore.getState().imageEditPreviews
+              : state.image_edit_previews,
+          })
         })
         .catch(() => undefined)
     }

@@ -11,6 +11,9 @@ use serde_json::{Value, json};
 
 use crate::StopToken;
 
+#[cfg(test)]
+pub(super) use tests::submit_reviewed_image;
+
 const IMAGES_URL: &str = "https://openrouter.ai/api/v1/images";
 const IMAGE_MODELS_URL: &str = "https://openrouter.ai/api/v1/images/models";
 const MAX_IMAGE_BYTES: usize = 64 * 1024 * 1024;
@@ -19,16 +22,6 @@ const MAX_ERROR_BYTES: usize = 16 * 1024;
 const MAX_ERROR_DETAIL_CHARS: usize = 512;
 const FIRST_PINNED_MODEL: &str = "microsoft/mai-image-2.5";
 const SECOND_PINNED_MODEL: &str = "microsoft/mai-image-2.5-pro";
-pub(super) const DEFAULT_FALLBACK_MODEL: &str = FIRST_PINNED_MODEL;
-
-pub(super) fn is_moderation_or_policy_error(error: &anyhow::Error) -> bool {
-    let message = format!("{error:#}").to_ascii_lowercase();
-    message.contains("moderation")
-        || message.contains("content_policy")
-        || message.contains("safety")
-        || message.contains("flagged")
-        || message.contains("422")
-}
 
 /// A model returned by OpenRouter's dedicated image catalog.
 ///
@@ -675,6 +668,23 @@ mod tests {
             assert!(result.is_none());
             server.release.notify_one();
         }
+    }
+
+    pub(in crate::stages) async fn submit_reviewed_image(
+        model: &str,
+        prompt: &str,
+        image: &DynamicImage,
+        stop: &StopToken,
+    ) -> Value {
+        let server = MockServer::start(MockResponse::Success).await;
+        server
+            .client()
+            .edit_with_key(model, prompt, image, stop, "test-key")
+            .await
+            .unwrap()
+            .unwrap();
+        let request = server.requests.lock().unwrap();
+        serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap()
     }
 
     #[derive(Clone, Copy)]

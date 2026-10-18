@@ -131,13 +131,15 @@
     "compactMode": "処理コントロールをコンパクト表示",
     "entireProject": "プロジェクト全体",
     "entireProjectDescription": "このプロジェクトの全ページを処理します。",
-    "exportChapter": "Export chapter translation request",
+    "exportChapter": "手動翻訳用にエクスポート（ZIP）",
     "expandedMode": "処理コントロールを詳細表示",
     "model": "モデル",
     "noModel": "モデルなし",
     "notSet": "未設定",
     "output": "出力",
-    "importChapter": "Import chapter translation response",
+    "importChapter": "翻訳済み JSON をインポート",
+    "exportChapterHelp": "アーカイブを展開し、prompt.txt を使用するチャットに貼り付けて chapter.json を添付します。応答を translation.json として保存し、インポートしてください。",
+    "importChapterDone": "翻訳をインポートしました",
     "pageProfile": "ページプロファイル",
     "pipelineStages": "パイプラインの工程",
     "providerDefault": "プロバイダーの既定値",
@@ -165,6 +167,10 @@
     "typing": "写植"
   },
   "inspector": {
+    "transformTarget": "編集対象",
+    "transformText": "テキスト",
+    "transformRegion": "OCR領域",
+    "transformHint": "ブロックをドラッグして移動、ハンドルでサイズ変更。自動で枠に合う文字サイズを選びます。",
     "alignBottom": "下揃え",
     "alignCenter": "中央揃え",
     "alignLeft": "左揃え",
@@ -181,6 +187,7 @@
     "color": "色",
     "customFrame": "カスタムフレーム",
     "decreaseBorderWidth": "縁取り幅を縮小",
+    "decreaseFontSize": "フォントサイズを1pt小さくする",
     "direction": "方向",
     "font": "フォント",
     "fontSize": "フォントサイズ",
@@ -193,6 +200,7 @@
     "fontWeight": "フォントの太さ",
     "horizontal": "横書き",
     "increaseBorderWidth": "縁取り幅を拡大",
+    "increaseFontSize": "フォントサイズを1pt大きくする",
     "opacity": "不透明度",
     "placement": "配置",
     "resetAutoFit": "自動調整に戻す",
@@ -217,14 +225,15 @@
     "pt-BR": "Português brasileiro",
     "ru-RU": "Русский",
     "tr-TR": "Türkçe",
-    "wuu": "吴语",
     "zh-CN": "简体中文",
     "zh-TW": "繁體中文"
   },
   "layers": {
+    "collapse": "{{name}}を折りたたむ",
     "delete": "{{name}}を削除",
     "edit": "{{name}}を編集",
     "empty": "このページにはレイヤーがありません。",
+    "expand": "{{name}}を展開",
     "hide": "{{name}}を隠す",
     "imageName": "画像 {{index}}",
     "kinds": {
@@ -268,7 +277,7 @@
     "processLayers": "選択したレイヤーを処理",
     "processPages": "選択ページを処理",
     "processProject": "プロジェクトを処理",
-    "projectVersions": "Project Versions…",
+    "projectVersions": "プロジェクトのバージョン…",
     "redo": "やり直す",
     "runPhase": "{{phase}}を実行",
     "selectAllLayers": "すべてのレイヤーを選択",
@@ -277,22 +286,22 @@
     "view": "表示"
   },
   "versions": {
-    "delete": "Delete",
-    "deleteDescription": "Version “{{name}}” will be permanently deleted. The current project state will not change.",
-    "deleteLabel": "Delete version {{name}}",
-    "deleteTitle": "Delete this version?",
-    "description": "Save named snapshots of the complete project and return to them later.",
-    "emptyDescription": "Save a version before a large edit or processing run.",
-    "emptyTitle": "No saved versions",
-    "nameLabel": "Version name",
-    "namePlaceholder": "For example: OCR complete",
-    "restore": "Restore",
-    "restoreDescription": "The project will return to version “{{name}}” as a new revision. Save the current state as a version first if you need it.",
-    "restoreLabel": "Restore version {{name}}",
-    "restoreTitle": "Restore this version?",
-    "revision": "revision {{revision}}",
-    "save": "Save",
-    "title": "Project Versions"
+    "delete": "削除",
+    "deleteDescription": "バージョン「{{name}}」は完全に削除されます。プロジェクトの現在の状態は変わりません。",
+    "deleteLabel": "バージョン {{name}} を削除",
+    "deleteTitle": "このバージョンを削除しますか？",
+    "description": "プロジェクト全体に名前を付けたスナップショットを保存し、後で戻れます。",
+    "emptyDescription": "大きな編集や処理の前にバージョンを保存してください。",
+    "emptyTitle": "保存済みのバージョンはありません",
+    "nameLabel": "バージョン名",
+    "namePlaceholder": "例：OCR 完了",
+    "restore": "復元",
+    "restoreDescription": "プロジェクトは新しいリビジョンとしてバージョン「{{name}}」に戻ります。現在の状態が必要な場合は、先にバージョンとして保存してください。",
+    "restoreLabel": "バージョン {{name}} を復元",
+    "restoreTitle": "このバージョンを復元しますか？",
+    "revision": "リビジョン {{revision}}",
+    "save": "保存",
+    "title": "プロジェクトのバージョン"
   },
   "model": {
     "baseUrl": "ベース URL",
@@ -330,6 +339,7 @@
     "noResults": "このフィルターに一致するページはありません。",
     "pageName": "ページ名",
     "pages": "ページ",
+    "duplicate": "複製",
     "rename": "名前を変更",
     "renameDescription": "このページの新しい名前を入力します。",
     "renameTitle": "ページ名を変更",
@@ -372,7 +382,8 @@
     "minimax": "MiniMax 言語モデル。",
     "openai": "OpenAI の言語モデル。",
     "openai-compatible": "OpenAI 互換 API を公開する任意のサーバー。",
-    "openrouter": "OpenRouter 経由で提供されるモデル。"
+    "openrouter": "OpenRouter 経由で提供されるモデル。",
+    "qwen-ocr": "Alibaba Cloudの専用Qwen-VL-OCR。個別のAPIキーとリージョン別URLを使用します。"
   },
   "resources": {
     "cpu": "CPU",
@@ -441,13 +452,18 @@
         "instructionsPlaceholder": "OCR固有の指示（任意）",
         "local": "ローカル（CPU）",
         "localModel": "ローカルOCRモデル",
-        "method": "OCR方式"
+        "method": "OCR方式",
+        "hybrid": "ローカル + API",
+        "hybridDescription": "章の全ページでローカルOCRを完了してから、各画像と認識テキストを選択したAPIに送信します。結果は自動適用されます。"
       },
       "inpainting": {
         "apiModel": "画像編集モデル",
-        "localModel": "ローカル修復モデル",
-        "method": "修復方法",
-        "options": "API修復オプション",
+        "localModel": "ローカルクリーニングモデル",
+        "restorationModel": "修復モデル",
+        "restorationProvider": "修復プロバイダー",
+        "restorationPrompt": "修復プロンプト",
+        "method": "クリーニング方法",
+        "options": "APIクリーニング設定",
         "promptPreset": "プロンプトプリセット",
         "promptPresets": {
           "cleanup-all": "すべての文字と透かしを除去",
@@ -455,7 +471,11 @@
           "custom": "カスタムプロンプト",
           "translate-russian": "文字をロシア語に置換"
         },
-        "provider": "画像プロバイダー"
+        "provider": "画像プロバイダー",
+        "removeDescription": "削除ブラシ用のローカルモデルです。ページのクリーニングや矩形領域の復元とは独立しています。",
+        "restorationDescription": "矩形選択の復元ツール用APIモデルです。ページのクリーニングや削除ブラシとは独立しています。",
+        "previewBeforeSend": "API送信前にプレビュー",
+        "previewBeforeSendDescription": "APIによるページのクリーニングや選択範囲の復元の前に、送信画像を確認してプロンプトを編集できます。ローカルの除去には影響しません。"
       },
       "processing": "処理中",
       "stages": {
@@ -464,8 +484,8 @@
           "title": "検出"
         },
         "inpainting": {
-          "description": "削除した文字の下にあるアートワークを再構築します。",
-          "title": "インペイント"
+          "description": "ページ処理のクリーニング工程に使用します。削除ツールと復元ツールは以下で個別に設定します。",
+          "title": "修復"
         },
         "ocr": {
           "description": "検出領域内の原文を読み取ります。",
@@ -480,6 +500,7 @@
       "connections": "接続",
       "connectionsDescription": "認証情報はこのデバイスに安全に保存されます。",
       "falDescription": "Fal.ai 画像編集モデルで使用する認証情報です。",
+      "replicateDescription": "FLUXによる画像編集。DevとKleinは出力の安全性チェックを無効化します。Pro、Max、Flexにはモデルの制限が適用されます。",
       "credential": "認証情報",
       "credentialLabel": "{{provider}}の認証情報",
       "description": "翻訳および言語モデルのプロバイダーに接続します。",
@@ -487,7 +508,7 @@
       "title": "プロバイダー"
     },
     "shortcuts": {
-      "description": "テキスト入力欄にフォーカスがないときは、Ctrl と設定したキーを使用します。",
+      "description": "テキスト入力欄にフォーカスがないときは、Alt と設定したキーを使用します。",
       "inputLabel": "{{action}}のショートカット",
       "title": "ショートカット",
       "tools": "ツール"
@@ -508,12 +529,12 @@
       "instructionsDescription": "組み込みプロンプトが言語とJSON形式を指定します。空欄ならそのまま使い、入力内容は追加指示になります。",
       "instructionsLabel": "翻訳指示",
       "instructionsPlaceholder": "プロジェクト全体への任意の指示",
-      "promptPreset": "Chapter prompt preset",
-      "promptPresetDescription": "Load a ready-made style and terminology prompt into the chapter profile.",
-      "presetCustom": "Custom instructions",
-      "presetBnhaBakugoMidoriya": "BNHA — Bakugo / Midoriya (Russian)",
-      "presetBnhaDoujinshi": "BNHA — doujinshi (Russian)",
-      "presetMangaAdaptive": "Manga — adaptive chapter (Russian)",
+      "promptPreset": "章のプロンプトプリセット",
+      "promptPresetDescription": "文体と用語の既製プロンプトを章のプロファイルに読み込みます。",
+      "presetCustom": "カスタム指示",
+      "presetBnhaBakugoMidoriya": "BNHA — 爆豪 / 緑谷（ロシア語）",
+      "presetBnhaDoujinshi": "BNHA — 同人誌（ロシア語）",
+      "presetMangaAdaptive": "マンガ — アダプティブな章（ロシア語）",
       "model": "モデル",
       "pageProfile": "ページ",
       "modelDescription": "プロバイダー名はモデルの実行場所を示します。接続は別途設定します。",
@@ -528,10 +549,10 @@
       "title": "翻訳",
       "translationModel": "翻訳モデル",
       "translationModelDescription": "テキストの翻訳に使用するモデルを選択します。",
-      "unitPolicy": "Translation grouping",
-      "unitPolicyDescription": "Choose how chapter text is grouped before translation.",
-      "pageOnly": "Page only",
-      "adaptiveV1": "Adaptive v1 (chapter context)"
+      "unitPolicy": "翻訳のまとめ方",
+      "unitPolicyDescription": "翻訳前に章のテキストをどうまとめるかを選びます。",
+      "pageOnly": "ページのみ",
+      "adaptiveV1": "アダプティブ v1（章の文脈）"
     },
     "typesetting": {
       "addFamily": "フォントファミリーを追加",
@@ -590,6 +611,7 @@
     "ocr": "OCR領域",
     "pan": "移動",
     "remove": "削除",
+    "restore": "修復",
     "select": "選択",
     "text": "テキスト"
   },
@@ -610,12 +632,35 @@
     "later": "後で",
     "noNotes": "リリースノートはありません。",
     "retry": "再試行",
-    "update": "更新"
+    "update": "更新",
+    "upstream": {
+      "title": "オリジナルのKoharuに更新があります",
+      "description": "オリジナルのKoharu {{version}}は統合済みの{{integratedVersion}}より新しいバージョンです。このフォークにも有用な変更がある可能性があります。自動更新ではProjmix/koharuのリリースのみをインストールします。",
+      "view": "オリジナルのリリースを見る",
+      "dismiss": "このバージョンを非表示"
+    }
   },
   "window": {
     "close": "閉じる",
     "maximize": "最大化",
     "minimize": "最小化",
     "restore": "元のサイズに戻す"
+  },
+  "imageEditPreview": {
+    "title": "画像編集リクエストのプレビュー",
+    "description": "送信する画像とプロンプトを確認してください。プロンプトの変更はこのリクエストにのみ適用され、設定には保存されません。",
+    "image": "送信する画像",
+    "prompt": "このリクエストのプロンプト",
+    "resetPrompt": "プロンプトをリセット",
+    "send": "APIに送信",
+    "cancel": "ジョブをキャンセル",
+    "close": "閉じる",
+    "actualSize": "100%",
+    "fitImage": "画像を全体表示",
+    "restoration": "選択範囲の復元",
+    "cleanup": "ページのクリーニング",
+    "failed": "プレビューを処理できませんでした：{{error}}",
+    "cleanupLayers": "元画像＋表示中の描画レイヤー。PNG 1枚で送信します。テキストレイヤー、マスク、選択ハンドルは含まれません。",
+    "restorationLayers": "元画像＋表示中のクリーニング・描画レイヤーをレイヤー順に合成した選択範囲。PNG 1枚で送信します。テキストレイヤー、マスク、選択ハンドルは含まれません。"
   }
 }

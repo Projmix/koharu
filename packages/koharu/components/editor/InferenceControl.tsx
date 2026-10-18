@@ -47,14 +47,15 @@ import {
   refreshTranslationModels,
   savePreferences,
 } from '@/lib/backend'
+import {
+  identifyInpaintingPrompt,
+  inpaintingPromptForPreset,
+  inpaintingPromptPresets,
+} from '@/lib/inpaintingPrompts'
+import { inpaintingProviderName, inpaintingProviders } from '@/lib/inpaintingProviders'
 import { useFonts } from '@/lib/queries'
 import { pipelineStages, receivePreferences, useKoharuStore, type PipelineScope } from '@/lib/store'
-import {
-  modelKey,
-  modelSelection,
-  providerName,
-  translationProfileSelection,
-} from '@/lib/translation'
+import { modelKey, providerName, translationProfileSelection } from '@/lib/translation'
 import {
   commands,
   type FontFamily,
@@ -77,6 +78,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@koharu/ui/components/select'
+import { toast } from '@koharu/ui/components/toast'
 import { cn } from '@koharu/ui/lib/utils'
 
 type SelectorView = 'root' | 'model' | 'scope' | 'stages' | 'output'
@@ -105,6 +107,22 @@ export function InferenceControl({
     void call(commands.stopJob, running.id).catch(() => undefined)
   }
 
+  const exportTranslation = async () => {
+    if (await call(commands.exportChapterTranslation)) {
+      toast.add({
+        type: 'success',
+        title: t('inference.exportChapter'),
+        description: t('inference.exportChapterHelp'),
+      })
+    }
+  }
+
+  const importTranslation = async () => {
+    if (await call(commands.importChapterTranslation)) {
+      toast.add({ type: 'success', title: t('inference.importChapterDone') })
+    }
+  }
+
   return (
     <div className='flex w-full max-w-full min-w-0 items-center justify-end gap-1'>
       <RuntimeSelector
@@ -126,7 +144,7 @@ export function InferenceControl({
             disabled={disabled || Boolean(running)}
             aria-label={t('inference.exportChapter')}
             title={t('inference.exportChapter')}
-            onClick={() => void call(commands.exportChapterTranslation).catch(() => undefined)}
+            onClick={() => void exportTranslation().catch(() => undefined)}
           >
             <Download className='size-3.5' />
           </Button>
@@ -138,7 +156,7 @@ export function InferenceControl({
             disabled={disabled || Boolean(running)}
             aria-label={t('inference.importChapter')}
             title={t('inference.importChapter')}
-            onClick={() => void call(commands.importChapterTranslation).catch(() => undefined)}
+            onClick={() => void importTranslation().catch(() => undefined)}
           >
             <Upload className='size-3.5' />
           </Button>
@@ -211,10 +229,12 @@ function RuntimeSelector({
 
   const savePipeline = (next: PipelineConfig, key: string) => {
     if (!preferences || saving) return
+    const previous = preferences
+    receivePreferences({ ...preferences, pipeline: next })
     setSavingStage(key)
     void savePreferences(next, preferences.providers, preferences.typesetting)
       .then((saved) => receivePreferences(saved))
-      .catch(() => undefined)
+      .catch(() => receivePreferences(previous))
       .finally(() => setSavingStage(null))
   }
 
@@ -261,7 +281,7 @@ function RuntimeSelector({
       .finally(() => setLoadingModels(false))
   }
 
-  const chooseModel = (next: Model & ModelSelection) => {
+  const chooseModel = (next: ModelSelection) => {
     if (!preferences || saving) return
     const nextProfile = translationProfileSelection(
       preferences.pipeline.translation[profileName],
@@ -270,7 +290,6 @@ function RuntimeSelector({
     if (
       model &&
       modelKey(model) === modelKey(next) &&
-      model.quantization === next.quantization &&
       JSON.stringify(preferences.pipeline.translation[profileName]) === JSON.stringify(nextProfile)
     ) {
       setView('root')
@@ -596,7 +615,7 @@ function ExpandedRuntimeSelector({
   onScopeChange: (scope: PipelineScope) => void
   onStagesChange: (stages: Stage[]) => void
   onToggleMode: () => void
-  onChooseModel: (model: Model) => void
+  onChooseModel: (model: ModelSelection) => void
   onChooseStageModel: (stage: ModelStage, model: ModelName) => void
   onSaveOcr: (ocr: OcrConfig) => void
   onSaveInpainting: (inpainting: InpaintingConfig) => void
@@ -615,7 +634,7 @@ function ExpandedRuntimeSelector({
   const ocrLabel = ocr
     ? ocr.method === 'local'
       ? localOcrNames[ocr.local_model.model]
-      : apiModelLabel(ocr.api.model, translationModels, providers, t('inference.providerDefault'))
+      : `${ocr.method === 'local-api' ? `${localOcrNames[ocr.local_model.model]} → ` : ''}${apiModelLabel(ocr.api.model, translationModels, providers, t('inference.providerDefault'))}`
     : t('inference.notSet')
   const inpaintingLabel = inpaintingConfig
     ? inpaintingConfig.method === 'local'
@@ -968,9 +987,7 @@ function OcrStagePicker({
   const apiModels = modelChoices.filter(
     (model) =>
       model.vision &&
-      (model.provider === 'openrouter' ||
-        model.provider === 'openai' ||
-        model.provider === 'openai-compatible'),
+      providers.some((entry) => entry.config.provider === model.provider && entry.supports_ocr),
   )
   const selected =
     apiModels.find((candidate) => modelKey(candidate) === modelKey(value.api.model)) ?? null
@@ -1004,9 +1021,10 @@ function OcrStagePicker({
         <SelectContent>
           <SelectItem value='local'>{t('settings.pipeline.ocr.local')}</SelectItem>
           <SelectItem value='api'>{t('settings.pipeline.ocr.api')}</SelectItem>
+          <SelectItem value='local-api'>{t('settings.pipeline.ocr.hybrid')}</SelectItem>
         </SelectContent>
       </Select>
-      {value.method === 'local' ? (
+      {value.method !== 'api' && (
         <Select
           value={value.local_model.model}
           onValueChange={(model) =>
@@ -1028,7 +1046,8 @@ function OcrStagePicker({
             ))}
           </SelectContent>
         </Select>
-      ) : (
+      )}
+      {value.method !== 'local' && (
         <Popover open={modelOpen} onOpenChange={setModelOpen}>
           <PopoverTrigger
             type='button'
@@ -1047,12 +1066,17 @@ function OcrStagePicker({
               disabled={disabled}
               onBack={() => setModelOpen(false)}
               onSelect={(model) => {
-                onChange({ ...value, api: { ...value.api, model: modelSelection(model) } })
+                onChange({ ...value, api: { ...value.api, model } })
                 setModelOpen(false)
               }}
             />
           </PopoverContent>
         </Popover>
+      )}
+      {value.method === 'local-api' && (
+        <p className='px-1 text-[11px] text-muted-foreground'>
+          {t('settings.pipeline.ocr.hybridDescription')}
+        </p>
       )}
     </div>
   )
@@ -1083,6 +1107,7 @@ function InpaintingStagePicker({
     name: value.api.model,
   }
   const choices = selected ? apiModels : [current, ...apiModels]
+  const promptPreset = identifyInpaintingPrompt(value.api.prompt)
 
   return (
     <div className='grid gap-2 p-1'>
@@ -1143,8 +1168,11 @@ function InpaintingStagePicker({
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value='fal'>Fal.ai</SelectItem>
-              <SelectItem value='openrouter'>OpenRouter</SelectItem>
+              {inpaintingProviders.map((provider) => (
+                <SelectItem key={provider} value={provider}>
+                  {inpaintingProviderName(provider)}
+                </SelectItem>
+              ))}
             </SelectContent>
           </Select>
           <Popover open={modelOpen} onOpenChange={setModelOpen}>
@@ -1169,6 +1197,36 @@ function InpaintingStagePicker({
               />
             </PopoverContent>
           </Popover>
+          <Select
+            value={promptPreset}
+            onValueChange={(preset) => {
+              if (!preset) return
+              const prompt = inpaintingPromptForPreset(preset)
+              if (prompt) onChange({ ...value, api: { ...value.api, prompt } })
+            }}
+          >
+            <SelectTrigger
+              aria-label={t('settings.pipeline.inpainting.promptPreset')}
+              className='h-8 w-full text-[11px]'
+              disabled={disabled}
+            >
+              <SelectValue>
+                {t(`settings.pipeline.inpainting.promptPresets.${promptPreset}`)}
+              </SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              {inpaintingPromptPresets.map((preset) => (
+                <SelectItem key={preset.id} value={preset.id}>
+                  {t(`settings.pipeline.inpainting.promptPresets.${preset.id}`)}
+                </SelectItem>
+              ))}
+              {promptPreset === 'custom' && (
+                <SelectItem value='custom'>
+                  {t('settings.pipeline.inpainting.promptPresets.custom')}
+                </SelectItem>
+              )}
+            </SelectContent>
+          </Select>
         </>
       )}
     </div>
@@ -1195,7 +1253,7 @@ function TranslationStagePicker({
   loading: boolean
   disabled: boolean
   busyModel: string | null
-  onSelect: (model: Model) => void
+  onSelect: (model: ModelSelection) => void
   targetLanguage: string | null
 }) {
   const { t } = useTranslation()
@@ -1377,6 +1435,11 @@ function availableModels(
   models: Model[],
   providers: ProviderPreference[],
 ): Model[] {
+  models = models.filter((model) =>
+    providers.some(
+      (entry) => entry.config.provider === model.provider && entry.supports_translation,
+    ),
+  )
   if (!selected || models.some((model) => modelKey(model) === modelKey(selected))) return models
   return [
     {

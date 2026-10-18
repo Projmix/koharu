@@ -1,6 +1,6 @@
 import type { Metadata } from 'next'
-import localFont from 'next/font/local'
 import { ThemeProvider } from 'next-themes'
+import localFont from 'next/font/local'
 
 import './globals.css'
 import Providers from '@/app/providers'
@@ -13,13 +13,6 @@ const notoSansCJK = localFont({
 
 export const metadata: Metadata = {
   title: 'Koharu',
-  description:
-    'Local-first comic and manga translation studio with OCR, inpainting, and typesetting.',
-  openGraph: {
-    title: 'Koharu',
-    description:
-      'Local-first comic and manga translation studio with OCR, inpainting, and typesetting.',
-  },
 }
 
 function RootLayout({
