@@ -1012,11 +1012,11 @@ impl Project {
                         edit.remove_relation(relation)?;
                     }
                     edit.move_entity(block.layer, Some(group), At::End)?;
-                    if offset.x != 0.0 || offset.y != 0.0 {
-                        if let Some(geometry) = &block.geometry {
-                            let geometry = Self::translated_geometry(geometry, offset);
-                            edit.set(block.layer, &Self::scene_geometry(&geometry))?;
-                        }
+                    if (offset.x != 0.0 || offset.y != 0.0)
+                        && let Some(geometry) = &block.geometry
+                    {
+                        let geometry = Self::translated_geometry(geometry, offset);
+                        edit.set(block.layer, &Self::scene_geometry(&geometry))?;
                     }
                     block.layer
                 } else {
