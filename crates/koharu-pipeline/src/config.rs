@@ -369,7 +369,18 @@ impl Default for TranslationConfig {
                 unit_policy: TranslationUnitPolicy::PageOnly,
                 ..TranslationProfile::default()
             },
+            // Chapter translation defaults to the model that matched the
+            // owner's own chapter best and did not censor adult pages
+            // (`docs/fork/models.md`).
             chapter: TranslationProfile {
+                model: TranslationModelSelection {
+                    provider: koharu_translator::Provider::OpenRouter,
+                    model: Some("google/gemini-3.7-flash".to_owned()),
+                    quantization: None,
+                    vision: true,
+                    reasoning: false,
+                    reasoning_required: false,
+                },
                 unit_policy: TranslationUnitPolicy::AdaptiveV1,
                 ..TranslationProfile::default()
             },

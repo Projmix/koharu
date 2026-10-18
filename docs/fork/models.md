@@ -136,3 +136,17 @@ API (Fal, Replicate, OpenRouter image models).
 No cloud cleaning model has been measured on the owner's pages. When the
 evaluation set exists, score residual ink inside the mask, damage outside it,
 policy rejections, cost and time per page, and move losers to `rejected`.
+
+## Translation models (JA→RU chapter)
+
+Measured 2026-10-18 on 6 pages of the owner's chapter, 99 segments. Four of the pages are adult content. The run used Koharu's chapter path (adaptive_v1, OpenRouter, strict output check) and was blind: the references for those pages were stripped. Scores are chrF against the owner's own translation, overall / adult pages / ordinary pages.
+
+| Model | chrF | Cost for 6 pages | Notes |
+| --- | --- | --- | --- |
+| Gemini 3.7 Flash | 44.2 / 43.0 / 45.5 | $0.105 | Default for chapter translation. Won the owner's blind check (9 of 13 decided lines). |
+| Claude Sonnet 5.5 | 35.8 on adult pages only | $0.162 for 4 pages | Keeps male gender for the narrator. |
+| DeepSeek V4.1 Flash | 36.2 / 36.0 / 36.3 | <$0.01 | Gives the male narrator female gender. |
+| Qwen3.7-plus | 30.3 / 25.6 / 35.1 | $0.034 | Same gender errors. |
+| Grok 4.3 | 27.1 / 25.2 / 28.9 | $0.067 | |
+
+None of the models refused, censored, or softened explicit lines. Sending page images with page-mode translation broke Koharu's strict source-echo check: Gemini "corrected" the source text from the image, and Qwen returned invalid JSON. Images therefore go only to scene markup. Gemini 3.5 Flash, Kimi K3 and GPT-6.1 Sol were not run because of the budget.
