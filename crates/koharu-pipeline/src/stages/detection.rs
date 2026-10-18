@@ -35,7 +35,7 @@ use specta::Type;
 use super::{StageInput, StageProcessor, finish, generation};
 use crate::{DetectionModel, ModelCell};
 
-const OUTPUT_MODEL_ID: &str = "mayocream/koharu-layout-rfdetr-seg-2xl-1152#postprocess-2";
+const OUTPUT_MODEL_ID: &str = "mayocream/koharu-layout-rfdetr-seg-2xl-1152#postprocess-3";
 #[cfg(test)]
 const LEGACY_OUTPUT_MODEL_ID: &str = "mayocream/koharu-layout-rfdetr-seg-2xl-1152";
 const MODEL_NAME: &str = "koharu-layout-rfdetr-seg-2xl";
@@ -373,7 +373,9 @@ async fn write_page(
     if let Some(region) = input.region {
         detections.retain(|detection| intersects(detection.bbox, region));
     }
+    clamp_to_image(&mut detections, size);
     non_maximum_suppression(&mut detections, 0.5);
+    remove_onomatopoeia_spanning_text(&mut detections);
     remove_nested_text_detections(&mut detections);
     sort_by_layout(&mut detections, source_language);
 
@@ -1784,6 +1786,54 @@ fn non_maximum_suppression(detections: &mut Vec<KoharuLayoutDetection>, threshol
     *detections = kept;
 }
 
+/// The detector can return boxes that extend past the page. Clip them so that
+/// region geometry, OCR crops and inpainting stay on the image, and drop boxes
+/// that lie entirely outside it.
+fn clamp_to_image(detections: &mut Vec<KoharuLayoutDetection>, size: ImageSize) {
+    let (width, height) = (size.width as f32, size.height as f32);
+    for detection in detections.iter_mut() {
+        let [left, top, right, bottom] = detection.bbox;
+        detection.bbox = [
+            left.clamp(0.0, width),
+            top.clamp(0.0, height),
+            right.clamp(0.0, width),
+            bottom.clamp(0.0, height),
+        ];
+    }
+    detections.retain(|detection| area(detection.bbox) > 0.0);
+}
+
+/// An onomatopoeia box that encloses two or more separate text boxes is a
+/// false positive spanning several lines of dialogue (seen on real pages at
+/// low confidence, up to two thirds of a page). Box containment is used, not
+/// masks: such a box's mask covers its own strokes, not the dialogue it spans.
+/// A real effect that overlaps a single line is kept.
+fn remove_onomatopoeia_spanning_text(detections: &mut Vec<KoharuLayoutDetection>) {
+    let spanning = detections
+        .iter()
+        .map(|candidate| {
+            candidate.label == "onomatopoeia"
+                && detections
+                    .iter()
+                    .filter(|text| {
+                        let text_area = area(text.bbox);
+                        text.label == "text"
+                            && text_area > 0.0
+                            && intersection_area(candidate.bbox, text.bbox) / text_area
+                                >= NESTED_TEXT_CONTAINMENT_THRESHOLD
+                    })
+                    .count()
+                    >= 2
+        })
+        .collect::<Vec<_>>();
+    let mut index = 0usize;
+    detections.retain(|_| {
+        let keep = !spanning[index];
+        index += 1;
+        keep
+    });
+}
+
 fn remove_nested_text_detections(detections: &mut Vec<KoharuLayoutDetection>) {
     let nested = detections
         .iter()
@@ -2347,10 +2397,10 @@ mod tests {
         DIALOGUE_MASK_CONTAINMENT_THRESHOLD, DetectedRegion, DetectedText, DetectionModel,
         FREE_TEXT_ROLE, ImageSize, KoharuLayoutRFDetrSeg2XLConfig, LayoutItem, LayoutKind,
         MaskPixel, ONOMATOPOEIA_ROLE, PageRegions, Processor, RecognizedFrom, RegionOutput,
-        StageInput, StageProcessor, best_container, closed_mask_for, color_palette, generation,
-        infer_typography, layout_order, link_dialogue_regions, mask_containment, mask_for,
-        mask_geometry, non_maximum_suppression, normalize_text_color,
-        remove_nested_text_detections, write_region,
+        StageInput, StageProcessor, best_container, clamp_to_image, closed_mask_for, color_palette,
+        generation, infer_typography, layout_order, link_dialogue_regions, mask_containment,
+        mask_for, mask_geometry, non_maximum_suppression, normalize_text_color,
+        remove_nested_text_detections, remove_onomatopoeia_spanning_text, write_region,
     };
 
     #[test]
@@ -3090,6 +3140,49 @@ mod tests {
         non_maximum_suppression(&mut detections, 0.5);
 
         assert_eq!(detections.len(), 2);
+    }
+
+    #[test]
+    fn boxes_are_clipped_to_the_page_and_outside_boxes_dropped() {
+        let mut detections = vec![
+            detection("onomatopoeia", 0.4, [-40.0, -238.0, 1325.0, 816.0]),
+            detection("text", 0.9, [1300.0, 10.0, 1320.0, 40.0]),
+        ];
+
+        clamp_to_image(
+            &mut detections,
+            ImageSize {
+                width: 1280,
+                height: 1280,
+            },
+        );
+
+        assert_eq!(detections.len(), 1);
+        assert_eq!(detections[0].bbox, [0.0, 0.0, 1280.0, 816.0]);
+    }
+
+    #[test]
+    fn onomatopoeia_spanning_several_dialogue_boxes_is_removed() {
+        // Boxes from a real page: a low-confidence effect over three lines of
+        // dialogue, and a real effect that overlaps one line.
+        let mut detections = vec![
+            detection("onomatopoeia", 0.25, [597.0, 352.0, 878.0, 636.0]),
+            detection("text", 0.9, [828.0, 366.0, 859.0, 426.0]),
+            detection("text", 0.9, [706.0, 416.0, 727.0, 460.0]),
+            detection("text", 0.9, [870.0, 490.0, 886.0, 541.0]),
+            detection("onomatopoeia", 0.81, [133.0, 335.0, 412.0, 567.0]),
+            detection("text", 0.9, [324.0, 309.0, 359.0, 392.0]),
+        ];
+
+        remove_onomatopoeia_spanning_text(&mut detections);
+
+        let scores = detections
+            .iter()
+            .filter(|detection| detection.label == "onomatopoeia")
+            .map(|detection| detection.score)
+            .collect::<Vec<_>>();
+        assert_eq!(scores, [0.81]);
+        assert_eq!(detections.len(), 5);
     }
 
     #[test]
