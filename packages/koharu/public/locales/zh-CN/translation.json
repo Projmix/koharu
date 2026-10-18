@@ -459,7 +459,9 @@
         "localModel": "本地 OCR 模型",
         "method": "OCR 方法",
         "hybrid": "本地 + API",
-        "hybridDescription": "先用本地模型和第二个本地模型识别整章所有页面，只将两者结果不一致的裁剪图像及其识别文本发送给所选 API。结果自动应用。"
+        "hybridDescription": "先完成整章所有页面的本地 OCR，再将裁剪图像及其识别文本发送给所选 API。结果自动应用。",
+        "crossCheck": "用第二个本地模型交叉核对",
+        "crossCheckDescription": "每张裁剪图像也用第二个本地模型识别，只将两者结果不一致的发送给 API。关闭后全部发送：费用约为三倍，手写文字略更准确。"
       },
       "inpainting": {
         "apiModel": "图像编辑模型",

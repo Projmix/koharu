@@ -538,7 +538,16 @@ pub enum OcrMethod {
 pub struct OcrConfig {
     pub method: OcrMethod,
     pub local_model: OcrModel,
+    /// In the hybrid method, read every region with a second local model as
+    /// well and send only regions where the two disagree to the API. When off,
+    /// every region goes to the API.
+    #[serde(default = "cross_check_by_default")]
+    pub cross_check: bool,
     pub api: ApiOcrConfig,
+}
+
+fn cross_check_by_default() -> bool {
+    true
 }
 
 impl Default for OcrConfig {
@@ -546,6 +555,7 @@ impl Default for OcrConfig {
         Self {
             method: OcrMethod::Local,
             local_model: OcrModel::PaddleOcrVl1_6,
+            cross_check: true,
             api: ApiOcrConfig::default(),
         }
     }

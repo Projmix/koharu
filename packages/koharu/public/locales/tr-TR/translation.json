@@ -459,7 +459,9 @@
         "localModel": "Yerel OCR modeli",
         "method": "OCR yöntemi",
         "hybrid": "Yerel + API",
-        "hybridDescription": "Önce bölümdeki tüm sayfalar yerel model ve ikinci bir yerel modelle okunur, ardından yalnızca ikisinin farklı okuduğu görüntüler tanınan metinle birlikte seçilen API modeline gönderilir. Sonuçlar otomatik uygulanır."
+        "hybridDescription": "Önce bölümdeki tüm sayfalarda yerel OCR tamamlanır, ardından görüntüler ve tanınan metinler seçilen API modeline gönderilir. Sonuçlar otomatik uygulanır.",
+        "crossCheck": "İkinci yerel modelle karşılaştır",
+        "crossCheckDescription": "Her görüntü ikinci bir yerel modelle de okunur ve yalnızca ikisinin farklı okuduğu görüntüler API'ye gönderilir. Kapatırsanız tümü gönderilir: yaklaşık üç kat maliyetli, el yazısında biraz daha doğru."
       },
       "inpainting": {
         "apiModel": "Görüntü düzenleme modeli",

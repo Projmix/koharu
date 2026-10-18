@@ -667,6 +667,18 @@ function OcrPreferences({
             )}
           </div>
         </PreferenceRow>
+        {ocr.method === 'local-api' && (
+          <PreferenceRow
+            title={t('settings.pipeline.ocr.crossCheck')}
+            description={t('settings.pipeline.ocr.crossCheckDescription')}
+          >
+            <Switch
+              aria-label={t('settings.pipeline.ocr.crossCheck')}
+              checked={ocr.cross_check}
+              onCheckedChange={(cross_check) => updateOcr({ ...ocr, cross_check })}
+            />
+          </PreferenceRow>
+        )}
       </PreferenceSection>
       {ocr.method !== 'local' && (
         <>

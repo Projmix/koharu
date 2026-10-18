@@ -75,7 +75,7 @@ impl StageProcessor for Processor {
             self.model
                 .ensure(|| Model::load(self.device.clone(), &self.config.local_model))
                 .await?;
-            if self.config.method == OcrMethod::LocalApi {
+            if self.cross_checks() {
                 let check = self.check_model();
                 self.check
                     .ensure(|| Model::load(self.device.clone(), &check))
@@ -134,7 +134,7 @@ impl StageProcessor for Processor {
                 .ok_or_else(|| anyhow!("OCR model is not loaded"))?
                 .recognize(targets.clone(), input.stop.clone())
                 .await?;
-            let results = if self.config.method == OcrMethod::LocalApi {
+            let results = if self.cross_checks() {
                 let checks = self
                     .check
                     .lock()
@@ -188,9 +188,13 @@ impl Processor {
         }
     }
 
+    fn cross_checks(&self) -> bool {
+        self.config.method == OcrMethod::LocalApi && self.config.cross_check
+    }
+
     fn local_name(&self) -> String {
         let primary = local_model_name(&self.config.local_model);
-        if self.config.method == OcrMethod::LocalApi {
+        if self.cross_checks() {
             format!("{primary} + {}", local_model_name(&self.check_model()))
         } else {
             primary.to_owned()
