@@ -8,6 +8,7 @@ mod analysis;
 mod assets;
 mod groups;
 mod layers;
+mod markup;
 mod provenance;
 mod spatial;
 mod structure;
@@ -22,6 +23,10 @@ pub use groups::{Group, TextGroup};
 pub use layers::{
     FontStyle, RasterLayer, RasterLayerKind, TextAlignment, TextLayout, TextLayoutKind, Typography,
     WritingMode,
+};
+pub use markup::{
+    Character, CharacterId, CharacterList, Gender, ObservedText, PageMarkup, PageMarkupMissing,
+    PageMarkupStatus, SpeechKind, SpeechMarkup,
 };
 pub use provenance::{Authored, Generation, Origin};
 pub use spatial::{Geometry, Point, Visibility};

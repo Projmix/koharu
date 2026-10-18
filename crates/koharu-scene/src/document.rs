@@ -1,9 +1,9 @@
 //! Resolved document views and intent-level edits over the generic scene kernel.
 
 use crate::{
-    At, DetectionAnalysis, Edit, EntityId, Geometry, Group, OcrAnalysis, Origin, PageRef, Presents,
-    Region, RegionSpec, Result, Snapshot, SourceText, TextContent, TextGroup, TextLayout, TextRole,
-    Translation, TranslationReview, Typography, Visibility,
+    At, DetectionAnalysis, Edit, EntityId, Geometry, Group, OcrAnalysis, Origin, PageMarkup,
+    PageRef, Presents, Region, RegionSpec, Result, Snapshot, SourceText, SpeechMarkup, TextContent,
+    TextGroup, TextLayout, TextRole, Translation, TranslationReview, Typography, Visibility,
 };
 
 #[derive(Copy, Clone)]
@@ -151,6 +151,18 @@ impl<'a> TextContentRef<'a> {
         self.snapshot.component(self.id)
     }
 
+    pub fn speech_markup(self) -> Result<Option<SpeechMarkup>> {
+        self.snapshot.component(self.id)
+    }
+
+    /// The earlier text content whose sentence this text continues.
+    pub fn continues(self) -> Result<Option<TextContentRef<'a>>> {
+        self.snapshot
+            .relation_from::<crate::Continues>(self.id)?
+            .map(|relation| self.snapshot.text_content(relation.value().target))
+            .transpose()
+    }
+
     pub fn source_region(self) -> Result<Option<AnalysisRegionRef<'a>>> {
         self.snapshot
             .relation_from::<crate::RecognizedFrom>(self.id)?
@@ -220,6 +232,10 @@ impl Snapshot {
 }
 
 impl<'a> PageRef<'a> {
+    pub fn markup(self) -> Result<Option<PageMarkup>> {
+        self.snapshot.component(self.id)
+    }
+
     pub fn text_group(self) -> Result<Option<GroupRef<'a>>> {
         let mut groups = Vec::new();
         for id in self.snapshot.children(self.id)? {

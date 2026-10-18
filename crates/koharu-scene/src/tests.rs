@@ -1787,3 +1787,239 @@ async fn restoring_a_saved_version_creates_a_new_head() {
         saved_label
     );
 }
+
+fn character(id: &str, name: &str, gender: Gender) -> Character {
+    Character {
+        id: CharacterId::new(id).unwrap(),
+        name: name.to_owned(),
+        gender,
+        notes: String::new(),
+    }
+}
+
+fn speech(kind: SpeechKind, speaker: Option<&str>) -> SpeechMarkup {
+    SpeechMarkup {
+        origin: Origin::User,
+        kind,
+        speaker: speaker.map(|id| CharacterId::new(id).unwrap()),
+    }
+}
+
+#[tokio::test]
+async fn scene_markup_components_belong_to_their_owners() {
+    let session = Session::memory().await.unwrap();
+    let result = session.snapshot().patch(|edit| {
+        let page = edit.add_page(page(), At::End)?;
+        let entity = edit.add_entity(page, At::End)?;
+        edit.set(entity, &speech(SpeechKind::Speech, None))
+    });
+    assert!(matches!(result, Err(Error::Invalid(_))));
+
+    let markup = PageMarkup {
+        origin: Origin::User,
+        status: PageMarkupStatus::Complete,
+        observed: Vec::new(),
+    };
+    let result = session.snapshot().patch(|edit| {
+        let page = edit.add_page(page(), At::End)?;
+        let content = edit.add_text_content(page, At::End)?;
+        edit.set(content, &markup)
+    });
+    assert!(matches!(result, Err(Error::Invalid(_))));
+
+    let list = CharacterList {
+        origin: Origin::User,
+        characters: vec![character("narrator", "Narrator", Gender::Male)],
+    };
+    let result = session.snapshot().patch(|edit| {
+        let page = edit.add_page(page(), At::End)?;
+        edit.set(page, &list)
+    });
+    assert!(matches!(result, Err(Error::Invalid(_))));
+
+    let snapshot = session.snapshot();
+    let mut ids = None;
+    let patch = snapshot
+        .patch(|edit| {
+            let page = edit.add_page(page(), At::End)?;
+            let content = edit.add_text_content(page, At::End)?;
+            edit.set(content, &source("僕は行く"))?;
+            edit.set(content, &speech(SpeechKind::Narration, Some("narrator")))?;
+            edit.set(page, &markup)?;
+            edit.set_project(&list)?;
+            ids = Some((page, content));
+            Ok(())
+        })
+        .unwrap();
+    let (page, content) = ids.unwrap();
+    let snapshot = snapshot.preview([&patch]).unwrap();
+    assert_eq!(
+        snapshot
+            .text_content(content)
+            .unwrap()
+            .speech_markup()
+            .unwrap()
+            .unwrap()
+            .kind,
+        SpeechKind::Narration
+    );
+    assert_eq!(snapshot.page(page).unwrap().markup().unwrap(), Some(markup));
+    assert_eq!(
+        snapshot.project_component::<CharacterList>().unwrap(),
+        Some(list)
+    );
+}
+
+#[tokio::test]
+async fn character_list_rejects_ambiguous_or_malformed_characters() {
+    assert!(CharacterId::new("").is_err());
+    assert!(CharacterId::new("has space").is_err());
+    assert!(CharacterId::new("a".repeat(65)).is_err());
+    let session = Session::memory().await.unwrap();
+    for characters in [
+        vec![
+            character("hero", "Hero", Gender::Male),
+            character("hero", "Other", Gender::Female),
+        ],
+        vec![
+            character("hero", "Hero", Gender::Male),
+            character("other", " Hero ", Gender::Female),
+        ],
+        vec![character("hero", "  ", Gender::Male)],
+        vec![character("hero", "He\0ro", Gender::Male)],
+        vec![Character {
+            notes: "x".repeat(4097),
+            ..character("hero", "Hero", Gender::Male)
+        }],
+    ] {
+        let result = session.snapshot().patch(|edit| {
+            edit.set_project(&CharacterList {
+                origin: Origin::User,
+                characters,
+            })
+        });
+        assert!(matches!(result, Err(Error::Invalid(_))));
+    }
+}
+
+#[tokio::test]
+async fn pipeline_cannot_extend_a_user_owned_character_list() {
+    let mut session = Session::memory().await.unwrap();
+    let markup = Generation::new(ProducerId::new("dev.koharu.pipeline.translation").unwrap());
+    let mut edit = session.snapshot().edit_as(markup.clone());
+    edit.set_project(&CharacterList {
+        origin: Origin::User,
+        characters: vec![character("hero", "Hero", Gender::Male)],
+    })
+    .unwrap();
+    let snapshot = session
+        .commit(edit.finish().unwrap())
+        .await
+        .unwrap()
+        .snapshot;
+    let list = snapshot
+        .project_component::<CharacterList>()
+        .unwrap()
+        .unwrap();
+    assert!(matches!(list.origin, Origin::Generated(_)));
+
+    let mut user = snapshot.edit();
+    user.set_project(&CharacterList {
+        origin: Origin::User,
+        characters: vec![character("hero", "Takeshi", Gender::Male)],
+    })
+    .unwrap();
+    let snapshot = session
+        .commit(user.finish().unwrap())
+        .await
+        .unwrap()
+        .snapshot;
+
+    let mut rerun = snapshot.edit_as(markup);
+    assert!(matches!(
+        rerun.set_project(&CharacterList {
+            origin: Origin::User,
+            characters: vec![
+                character("hero", "Takeshi", Gender::Male),
+                character("heroine", "Yui", Gender::Female),
+            ],
+        }),
+        Err(Error::Authorship(_))
+    ));
+}
+
+#[tokio::test]
+async fn continues_links_distinct_text_contents_once() {
+    let mut session = Session::memory().await.unwrap();
+    let mut ids = None;
+    let patch = session
+        .snapshot()
+        .patch(|edit| {
+            let page = edit.add_page(page(), At::End)?;
+            let first = edit.add_text_content(page, At::End)?;
+            let second = edit.add_text_content(page, At::End)?;
+            let third = edit.add_text_content(page, At::End)?;
+            let region = edit.add_analysis_region::<TextRegion>(
+                page,
+                At::End,
+                &Geometry::rectangle(0.0, 0.0, 10.0, 10.0),
+                None,
+            )?;
+            ids = Some((page, first, second, third, region));
+            Ok(())
+        })
+        .unwrap();
+    let snapshot = session.commit(patch).await.unwrap().snapshot;
+    let (page, first, second, third, region) = ids.unwrap();
+
+    let mut edit = snapshot.edit();
+    assert!(matches!(
+        edit.relate::<Continues>(first, first),
+        Err(Error::Invalid(_))
+    ));
+    assert!(matches!(
+        edit.relate::<Continues>(second, region),
+        Err(Error::Invalid(_))
+    ));
+    edit.relate::<Continues>(second, first).unwrap();
+    assert!(matches!(
+        edit.relate::<Continues>(second, third),
+        Err(Error::Invalid(_))
+    ));
+    edit.relate::<Continues>(third, second).unwrap();
+    let snapshot = session
+        .commit(edit.finish().unwrap())
+        .await
+        .unwrap()
+        .snapshot;
+    assert_eq!(
+        snapshot
+            .text_content(third)
+            .unwrap()
+            .continues()
+            .unwrap()
+            .map(|content| content.id()),
+        Some(second)
+    );
+
+    let mut edit = snapshot.edit();
+    assert!(matches!(
+        edit.remove_entity(second, RemovePolicy::RejectNonEmpty),
+        Err(Error::IncidentRelations(_))
+    ));
+    edit.remove_entity(second, RemovePolicy::Cascade).unwrap();
+    let snapshot = session
+        .commit(edit.finish().unwrap())
+        .await
+        .unwrap()
+        .snapshot;
+    assert!(
+        snapshot
+            .text_content(third)
+            .unwrap()
+            .continues()
+            .unwrap()
+            .is_none()
+    );
+    assert!(snapshot.page(page).is_ok());
+}
