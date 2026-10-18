@@ -303,17 +303,7 @@ pub(crate) async fn process_with_mask(
             }
 
             let update = match event {
-                Progress::Started {
-                    pages,
-                    stages,
-                    total,
-                } => {
-                    tracing::info!(
-                        target: "koharu_metrics",
-                        metric = "pipeline_start",
-                        page_count = pages.len(),
-                        stage_count = stages.len(),
-                    );
+                Progress::Started { total, .. } => {
                     let mut progress = progress.lock();
                     *progress = (0, total);
                     Some(JobUpdate::Replace {
@@ -329,12 +319,6 @@ pub(crate) async fn process_with_mask(
                     stage,
                     model,
                 } => {
-                    tracing::info!(
-                        target: "koharu_metrics",
-                        metric = "stage_loading",
-                        stage = %stage,
-                        model,
-                    );
                     let progress = progress.lock();
                     Some(JobUpdate::Replace {
                         completed: progress.0,
@@ -348,17 +332,8 @@ pub(crate) async fn process_with_mask(
                     target,
                     stage,
                     model,
-                    elapsed,
+                    ..
                 } => {
-                    if stage != koharu_pipeline::Stage::Translation {
-                        tracing::info!(
-                            target: "koharu_metrics",
-                            metric = "model_run",
-                            stage = %stage,
-                            model,
-                            duration_ms = elapsed.as_secs_f64() * 1000.0,
-                        );
-                    }
                     if stage == koharu_pipeline::Stage::Inpainting
                         && let Some(page) = target.page()
                     {
@@ -377,11 +352,6 @@ pub(crate) async fn process_with_mask(
                     })
                 }
                 Progress::Skipped { target, stage } => {
-                    tracing::info!(
-                        target: "koharu_metrics",
-                        metric = "stage_skip",
-                        stage = %stage,
-                    );
                     let mut progress = progress.lock();
                     progress.0 = progress.0.saturating_add(1).min(progress.1);
                     if stage == koharu_pipeline::Stage::Inpainting
@@ -431,15 +401,7 @@ pub(crate) async fn process_with_mask(
                         model: Some(model),
                     })
                 }
-                Progress::Running { stage, model, .. } => {
-                    tracing::info!(
-                        target: "koharu_metrics",
-                        metric = "stage_running",
-                        stage = %stage,
-                        model,
-                    );
-                    None
-                }
+                Progress::Running { .. } => None,
             };
             if let Some(update) = update {
                 let job = {
@@ -512,17 +474,6 @@ pub(crate) async fn process_with_mask(
                 (false, Some(format!("{error:#}")))
             }
         };
-        tracing::info!(
-            target: "koharu_metrics",
-            metric = "pipeline_result",
-            outcome = if stopped {
-                "stopped"
-            } else if error.is_some() {
-                "failed"
-            } else {
-                "completed"
-            },
-        );
         task_handle
             .state::<Processing>()
             .finish(retry, stopped || error.is_some());
@@ -828,12 +779,6 @@ mod tests {
     }
 }
 
-#[tracing::instrument(
-    target = "koharu_metrics",
-    name = "pipeline_stop",
-    skip_all,
-    fields(state = "requested")
-)]
 #[tauri::command]
 #[specta::specta]
 pub(crate) async fn stop_job(
