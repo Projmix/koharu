@@ -109,10 +109,10 @@ impl ReplicateModel {
                 input["disable_safety_checker"] = json!(true);
                 let pixels = u64::from(width) * u64::from(height);
                 input["output_megapixels"] = json!(match pixels {
-                    ..=250_000 => "0.25",
-                    ..=500_000 => "0.5",
-                    ..=1_000_000 => "1",
-                    ..=2_000_000 => "2",
+                    0..=250_000 => "0.25",
+                    250_001..=500_000 => "0.5",
+                    500_001..=1_000_000 => "1",
+                    1_000_001..=2_000_000 => "2",
                     _ => "4",
                 });
             }

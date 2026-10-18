@@ -91,6 +91,7 @@ async fn stop_after_a_page_keeps_completed_progress() {
                     &koharu_scene::TextLayout {
                         origin: koharu_scene::Origin::User,
                         kind: koharu_scene::TextLayoutKind::Paragraph,
+                        angle_degrees: None,
                     },
                 )?;
                 edit.set(

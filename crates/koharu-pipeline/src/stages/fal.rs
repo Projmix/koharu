@@ -544,7 +544,7 @@ async fn safe_error_detail(response: Response, key: &str) -> String {
     if detail.is_empty() {
         detail.push_str("response body was empty");
     } else if truncated || detail.chars().count() == MAX_ERROR_DETAIL_CHARS {
-        detail.push_str("…");
+        detail.push('…');
     }
     detail
 }

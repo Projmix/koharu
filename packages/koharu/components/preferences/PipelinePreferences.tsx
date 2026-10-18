@@ -35,7 +35,7 @@ import {
   inpaintingPromptPresets,
 } from '@/lib/inpaintingPrompts'
 import { inpaintingProviderName, inpaintingProviders } from '@/lib/inpaintingProviders'
-import { modelKey, modelSelection, providerName } from '@/lib/translation'
+import { modelKey, providerName } from '@/lib/translation'
 import type {
   InpaintingModelChoice,
   LocalInpaintingModel,
@@ -652,7 +652,7 @@ function OcrPreferences({
                     onSelect={(model) => {
                       updateOcr({
                         ...ocr,
-                        api: { ...ocr.api, model: modelSelection(model) },
+                        api: { ...ocr.api, model },
                       })
                       setModelOpen(false)
                     }}

@@ -486,6 +486,10 @@ mod tests {
             &mut committer,
         )
         .unwrap();
+        assert_eq!(
+            execution.scheduler.start_next(&BTreeSet::new()),
+            Some((StageTarget::Page(page), Stage::Inpainting))
+        );
 
         execution
             .handle_completion(StageCompletion {
@@ -561,6 +565,10 @@ mod tests {
             &mut committer,
         )
         .unwrap();
+        assert_eq!(
+            execution.scheduler.start_next(&BTreeSet::new()),
+            Some((StageTarget::Page(page), Stage::Inpainting))
+        );
 
         execution
             .handle_completion(StageCompletion {

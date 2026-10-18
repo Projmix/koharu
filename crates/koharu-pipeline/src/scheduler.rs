@@ -220,13 +220,13 @@ impl Scheduler {
         busy_stages: &BTreeSet<Stage>,
     ) -> Option<(StageTarget, Stage)> {
         let chapter_ready = self.chapter_ready();
-        if chapter_ready && !busy_stages.contains(&Stage::Translation) {
-            if let Some(chapter) = self.chapter.as_mut()
-                && chapter.state == WorkState::Pending
-            {
-                chapter.state = WorkState::Running;
-                return Some((StageTarget::Chapter, Stage::Translation));
-            }
+        if chapter_ready
+            && !busy_stages.contains(&Stage::Translation)
+            && let Some(chapter) = self.chapter.as_mut()
+            && chapter.state == WorkState::Pending
+        {
+            chapter.state = WorkState::Running;
+            return Some((StageTarget::Chapter, Stage::Translation));
         }
 
         for page_index in 0..self.pages.len() {

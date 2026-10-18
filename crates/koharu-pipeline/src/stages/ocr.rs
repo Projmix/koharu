@@ -288,7 +288,7 @@ async fn run_api(
             _ = input.stop.cancelled() => return finish(input.scene.edit()),
             result = translator.recognize(
                 &config.api.model,
-                config.api.generation.clone(),
+                config.api.generation,
                 request,
             ) => result?,
         };
@@ -442,7 +442,7 @@ async fn infer_text<M: Send + 'static>(
     stop: crate::StopToken,
     inference: impl Fn(&M, &DynamicImage) -> Result<String> + Send + Sync + 'static,
 ) -> Result<Vec<OcrResult>> {
-    tokio::task::spawn_blocking(move || {
+    tokio_rayon::spawn(move || {
         let model = model
             .lock()
             .map_err(|_| anyhow!("OCR model lock is poisoned"))?;
@@ -461,7 +461,6 @@ async fn infer_text<M: Send + 'static>(
         Ok(results)
     })
     .await
-    .context("OCR task panicked")?
 }
 
 // Manga OCR can emit replacement-box glyphs for an isolated Japanese ellipsis.

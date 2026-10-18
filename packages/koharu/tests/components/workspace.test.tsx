@@ -95,6 +95,8 @@ beforeEach(() => {
     return frame
   })
   vi.stubGlobal('cancelAnimationFrame', (frame: number) => animationFrames.delete(frame))
+  // Hoisted canvas mocks outlive restoreMocks, so stateful implementations must not leak.
+  for (const mock of Object.values(canvas)) mock.mockReset()
   canvasState.error = null
   canvasState.generation = 1
   canvasState.hasFrame = true
@@ -275,6 +277,7 @@ describe('canvas interaction adapter', () => {
       id,
       parent: 'text-group',
       geometry: layer.geometry,
+      angle_degrees: null,
       visibility: { visible: true, opacity: 1 },
       content: {
         id: `${id}-content`,
@@ -666,6 +669,7 @@ describe('canvas interaction adapter', () => {
           id: 'element',
           parent: 'page',
           geometry: layer.geometry,
+          angle_degrees: 0,
           visibility: { visible: true, opacity: 1 },
           content: {
             id: 'content',
@@ -730,6 +734,7 @@ describe('canvas interaction adapter', () => {
           id: 'dialogue',
           parent: 'page',
           geometry: null,
+          angle_degrees: null,
           visibility: { visible: true, opacity: 1 },
           content: {
             id: 'content',
@@ -794,6 +799,7 @@ describe('canvas interaction adapter', () => {
       id,
       parent: 'page',
       geometry: null,
+      angle_degrees: null,
       visibility: { visible: true, opacity: 1 },
       content: {
         id: `${id}-content`,
@@ -878,6 +884,7 @@ describe('canvas interaction adapter', () => {
           id: 'ocr-layer',
           parent: 'page',
           geometry: null,
+          angle_degrees: null,
           visibility: { visible: true, opacity: 1 },
           content: {
             id: 'ocr-content',
@@ -960,6 +967,7 @@ describe('canvas interaction adapter', () => {
             id: 'dialogue',
             parent: 'page',
             geometry: region.geometry,
+            angle_degrees: null,
             visibility: { visible: true, opacity: 1 },
             content: {
               id: 'content',
@@ -1038,6 +1046,7 @@ describe('canvas interaction adapter', () => {
           id,
           parent: 'page',
           geometry: null,
+          angle_degrees: null,
           visibility: { visible: true, opacity: 1 },
           content: {
             id: `content-${id}`,
@@ -1136,6 +1145,7 @@ describe('canvas interaction adapter', () => {
           id: 'element',
           parent: 'page',
           geometry: null,
+          angle_degrees: null,
           visibility: { visible: true, opacity: 1 },
           content: {
             id: 'content',

@@ -6,9 +6,9 @@ use strum::{Display, EnumIter, EnumString, IntoStaticStr, VariantArray};
 use crate::{
     local::LocalConfig,
     remote::{
-        AtlasCloudConfig, CaiyunConfig, ClaudeConfig, DeepLConfig, DeepSeekConfig, GeminiConfig,
-        GoogleCloudConfig, GrokConfig, LmStudioConfig, MiniMaxConfig, OpenAiCompatibleConfig,
-        OpenAiConfig, OpenRouterConfig, QwenOcrConfig,
+        CaiyunConfig, ClaudeConfig, DeepLConfig, DeepSeekConfig, GeminiConfig, GoogleCloudConfig,
+        GrokConfig, LmStudioConfig, MiniMaxConfig, OpenAiCompatibleConfig, OpenAiConfig,
+        OpenRouterConfig, QwenOcrConfig,
     },
 };
 
@@ -120,12 +120,6 @@ define_providers! {
         name: "Local",
         field: local,
         config: LocalConfig,
-    }
-    AtlasCloud {
-        id: "atlas-cloud",
-        name: "Atlas Cloud",
-        field: atlas_cloud,
-        config: AtlasCloudConfig,
     }
     OpenAi {
         id: "openai",

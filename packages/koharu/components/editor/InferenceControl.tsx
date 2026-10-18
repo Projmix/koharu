@@ -55,12 +55,7 @@ import {
 import { inpaintingProviderName, inpaintingProviders } from '@/lib/inpaintingProviders'
 import { useFonts } from '@/lib/queries'
 import { pipelineStages, receivePreferences, useKoharuStore, type PipelineScope } from '@/lib/store'
-import {
-  modelKey,
-  modelSelection,
-  providerName,
-  translationProfileSelection,
-} from '@/lib/translation'
+import { modelKey, providerName, translationProfileSelection } from '@/lib/translation'
 import {
   commands,
   type FontFamily,
@@ -286,7 +281,7 @@ function RuntimeSelector({
       .finally(() => setLoadingModels(false))
   }
 
-  const chooseModel = (next: Model) => {
+  const chooseModel = (next: ModelSelection) => {
     if (!preferences || saving) return
     const nextProfile = translationProfileSelection(
       preferences.pipeline.translation[profileName],
@@ -620,7 +615,7 @@ function ExpandedRuntimeSelector({
   onScopeChange: (scope: PipelineScope) => void
   onStagesChange: (stages: Stage[]) => void
   onToggleMode: () => void
-  onChooseModel: (model: Model) => void
+  onChooseModel: (model: ModelSelection) => void
   onChooseStageModel: (stage: ModelStage, model: ModelName) => void
   onSaveOcr: (ocr: OcrConfig) => void
   onSaveInpainting: (inpainting: InpaintingConfig) => void
@@ -1071,7 +1066,7 @@ function OcrStagePicker({
               disabled={disabled}
               onBack={() => setModelOpen(false)}
               onSelect={(model) => {
-                onChange({ ...value, api: { ...value.api, model: modelSelection(model) } })
+                onChange({ ...value, api: { ...value.api, model } })
                 setModelOpen(false)
               }}
             />
@@ -1258,7 +1253,7 @@ function TranslationStagePicker({
   loading: boolean
   disabled: boolean
   busyModel: string | null
-  onSelect: (model: Model) => void
+  onSelect: (model: ModelSelection) => void
   targetLanguage: string | null
 }) {
   const { t } = useTranslation()

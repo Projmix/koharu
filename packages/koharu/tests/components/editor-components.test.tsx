@@ -1,5 +1,12 @@
 import { QueryClientProvider } from '@tanstack/react-query'
-import { act, fireEvent, render as testingRender, screen, waitFor } from '@testing-library/react'
+import {
+  act,
+  fireEvent,
+  render as testingRender,
+  renderHook,
+  screen,
+  waitFor,
+} from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ThemeProvider } from 'next-themes'
 import { StrictMode, type ReactNode } from 'react'
@@ -25,6 +32,7 @@ import {
   preparedPageKey,
   projectKey,
   queryClient,
+  useCommand,
 } from '@/lib/queries'
 import { useKoharuStore } from '@/lib/store'
 import * as canvasRuntime from '@koharu/bridge/canvas'
@@ -114,6 +122,7 @@ const ocrApiModels: Model[] = [
 
 const textLayer: Layer = {
   type: 'text',
+  angle_degrees: 0,
   id: 'element',
   parent: 'page',
   geometry: {
@@ -479,7 +488,7 @@ describe('greenfield editor', () => {
     const user = userEvent.setup()
     installProject()
     let finishImport: (() => void) | undefined
-    const importPages = vi.spyOn(commands, 'importPages').mockImplementation(
+    const importPages = vi.spyOn(commands, 'import').mockImplementation(
       () =>
         new Promise<null>((resolve) => {
           finishImport = () => resolve(null)
@@ -489,16 +498,18 @@ describe('greenfield editor', () => {
       <>
         <TitleBar />
         <PageRail />
+        <ActivityCenter />
       </>,
     )
 
     expect(screen.getByText('/')).toHaveClass('mx-2')
     expect(screen.queryByRole('button', { name: 'Import pages' })).not.toBeInTheDocument()
     await user.click(screen.getByRole('menuitem', { name: 'File' }))
-    await user.hover(await screen.findByRole('menuitem', { name: 'Import Pages…' }))
+    await user.hover(await screen.findByRole('menuitem', { name: 'Import Pages' }))
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Files…' }))
 
     expect(await screen.findByRole('status')).toHaveTextContent('Importing pages…')
+    expect(screen.getByRole('complementary', { name: 'Activity' })).toBeInTheDocument()
     expect(importPages).toHaveBeenCalledTimes(1)
 
     await user.click(screen.getByRole('menuitem', { name: 'File' }))
@@ -606,6 +617,88 @@ describe('greenfield editor', () => {
     expect(useKoharuStore.getState().selectedLayers).toEqual([])
   })
 
+  it.each(['png', 'psd', 'cbz'] as const)(
+    'shows %s export activity and prevents duplicate exports',
+    async (format) => {
+      const user = userEvent.setup()
+      installProject()
+      let finishExport: (() => void) | undefined
+      const exportProject = vi.spyOn(commands, 'export').mockImplementation(
+        () =>
+          new Promise<null>((resolve) => {
+            finishExport = () => resolve(null)
+          }),
+      )
+      render(
+        <>
+          <TitleBar />
+          <ActivityCenter />
+        </>,
+      )
+
+      expect(screen.queryByRole('complementary', { name: 'Activity' })).not.toBeInTheDocument()
+      await user.click(screen.getByRole('menuitem', { name: 'File' }))
+      await user.hover(await screen.findByRole('menuitem', { name: 'Export Project' }))
+      fireEvent.click(await screen.findByRole('menuitem', { name: `${format.toUpperCase()}…` }))
+
+      expect(await screen.findByRole('status')).toHaveTextContent('Export Project')
+      expect(exportProject).toHaveBeenCalledExactlyOnceWith(format)
+      await user.click(screen.getByRole('menuitem', { name: 'File' }))
+      expect(await screen.findByRole('menuitem', { name: 'Export Project' })).toHaveAttribute(
+        'aria-disabled',
+        'true',
+      )
+
+      await act(async () => finishExport?.())
+      await waitFor(() =>
+        expect(screen.queryByRole('complementary', { name: 'Activity' })).not.toBeInTheDocument(),
+      )
+      expect(await screen.findByRole('menuitem', { name: 'Export Project' })).not.toHaveAttribute(
+        'aria-disabled',
+        'true',
+      )
+    },
+  )
+
+  it.each([
+    { command: 'import', menu: 'Import Pages', choice: 'Files…', pending: 'Importing pages…' },
+    { command: 'export', menu: 'Export Project', choice: 'CBZ…', pending: 'Export Project' },
+  ] as const)(
+    'clears $command activity after failure',
+    async ({ command, menu, choice, pending }) => {
+      const user = userEvent.setup()
+      installProject()
+      let fail: ((error: Error) => void) | undefined
+      vi.spyOn(commands, command).mockImplementation(
+        () =>
+          new Promise<null>((_resolve, reject) => {
+            fail = reject
+          }),
+      )
+      render(
+        <>
+          <TitleBar />
+          <ActivityCenter />
+        </>,
+      )
+
+      await user.click(screen.getByRole('menuitem', { name: 'File' }))
+      await user.hover(await screen.findByRole('menuitem', { name: menu }))
+      fireEvent.click(await screen.findByRole('menuitem', { name: choice }))
+      expect(await screen.findByRole('status')).toHaveTextContent(pending)
+
+      await user.click(screen.getByRole('menuitem', { name: 'File' }))
+      await act(async () => fail?.(new Error('File operation failed')))
+      await waitFor(() =>
+        expect(screen.queryByRole('complementary', { name: 'Activity' })).not.toBeInTheDocument(),
+      )
+      expect(await screen.findByRole('menuitem', { name: menu })).not.toHaveAttribute(
+        'aria-disabled',
+        'true',
+      )
+    },
+  )
+
   it('opens community links through the Tauri opener plugin', async () => {
     nativeOpenUrl.mockClear()
     const user = userEvent.setup()
@@ -631,6 +724,26 @@ describe('greenfield editor', () => {
     expect(await screen.findByText('0.62.0')).toBeInTheDocument()
     expect(screen.getByText('Mayo Takanashi')).toBeInTheDocument()
     expect(nativeGetVersion).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows how many pages are selected above the filter', async () => {
+    installProject()
+    act(() => {
+      useKoharuStore.setState({ selectedPages: ['page-1'] })
+    })
+    render(<PageRail />)
+
+    // One page behaves like acting on the active page, so it is not worth
+    // announcing.
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+
+    act(() => {
+      useKoharuStore.setState({ selectedPages: ['page-1', 'page-2', 'page-3'] })
+    })
+
+    // A status region, so the count reaches assistive technology when it
+    // changes rather than only being visible.
+    expect(await screen.findByRole('status')).toHaveTextContent('3 selected')
   })
 
   it('loads page thumbnails into the filmstrip', async () => {
@@ -2477,7 +2590,7 @@ describe('greenfield editor', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Pipeline' }))
     expect(screen.getByRole('heading', { level: 2, name: 'Pipeline' })).toBeInTheDocument()
-    expect(screen.getAllByRole('combobox')).toHaveLength(7)
+    expect(screen.getAllByRole('combobox')).toHaveLength(8)
     const manualCleanup = screen.getByRole('combobox', {
       name: 'Remove: Local cleanup model',
     })
@@ -2515,7 +2628,7 @@ describe('greenfield editor', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Providers' }))
     expect(screen.getByRole('heading', { level: 2, name: 'Providers' })).toBeInTheDocument()
     expect(screen.getByLabelText('DeepL credential')).toBeInTheDocument()
-    expect(screen.getAllByLabelText('Base URL')).toHaveLength(3)
+    expect(screen.getAllByLabelText('Base URL')).toHaveLength(4)
     expect(screen.queryByRole('switch', { name: 'Vision' })).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Translation' }))
     expect(screen.getByRole('heading', { level: 2, name: 'Translation' })).toBeInTheDocument()
@@ -3562,7 +3675,44 @@ describe('greenfield editor', () => {
     expect(screen.getByText('3%')).toBeInTheDocument()
   })
 
-  it('keeps multiple running jobs visible and stops the selected JobId', async () => {
+  it('tracks arbitrary concurrent commands until each one settles', async () => {
+    const first = Promise.withResolvers<string>()
+    const second = Promise.withResolvers<string>()
+    const command = vi
+      .fn<(name: string, count: number) => Promise<string>>()
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise)
+    const { result } = renderHook(
+      () => useCommand(['rebuild-index'], command, 'Rebuilding index…'),
+      {
+        wrapper: ({ children }) => (
+          <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+        ),
+      },
+    )
+    render(<ActivityCenter />)
+
+    act(() => {
+      result.current.run('first', 2)
+      result.current.run('second', 3)
+    })
+    await waitFor(() => expect(screen.getAllByRole('status')).toHaveLength(2))
+    expect(screen.getAllByText('Rebuilding index…')).toHaveLength(2)
+    expect(command).toHaveBeenNthCalledWith(1, 'first', 2)
+    expect(command).toHaveBeenNthCalledWith(2, 'second', 3)
+    expect(result.current.busy).toBe(true)
+
+    await act(async () => first.resolve('done'))
+    await waitFor(() => expect(screen.getAllByRole('status')).toHaveLength(1))
+    expect(result.current.busy).toBe(true)
+
+    await act(async () => second.reject(new Error('Index failed')))
+    await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument())
+    expect(result.current.busy).toBe(false)
+    expect(screen.queryByRole('complementary', { name: 'Activity' })).not.toBeInTheDocument()
+  })
+
+  it('keeps running work visible and stoppable', async () => {
     installProject()
     useKoharuStore.setState({
       jobs: {
@@ -3588,10 +3738,24 @@ describe('greenfield editor', () => {
         },
       },
     })
+    // A real page label is a filename, which says nothing about position in
+    // the run, so the row numbers it too.
+    queryClient.setQueryData(pagesKey, [
+      {
+        id: 'page',
+        label: 'cover.png',
+        size: { width: 1000, height: 1500 },
+        source_asset: 'source',
+        layer_count: 1,
+      },
+    ])
     const stop = vi.spyOn(commands, 'stopJob').mockResolvedValue(null)
     render(<ActivityCenter />)
     expect(screen.getByText('25%')).toBeInTheDocument()
     expect(screen.getAllByRole('progressbar')).toHaveLength(2)
+    // Separate elements, so a long label truncates without taking the model.
+    expect(screen.getAllByText('Page 1: cover.png')).toHaveLength(2)
+    expect(screen.getByText('manga-ocr')).toBeInTheDocument()
     fireEvent.click(screen.getAllByRole('button', { name: 'Stop' })[1]!)
     await waitFor(() => expect(stop).toHaveBeenCalledWith('queued'))
   })
