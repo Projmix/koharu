@@ -5,6 +5,7 @@ use crate::stage::OcrPass;
 use crate::{ModelCell, OcrConfig, OcrMethod, OcrModel, scope::geometry_extents};
 use anyhow::{Context as _, Result, anyhow, bail};
 use async_trait::async_trait;
+use futures::{StreamExt as _, TryStreamExt as _, stream};
 use image::{DynamicImage, GenericImageView, Rgb};
 use koharu_ml::{
     baberu_ocr::BaberuOcr, hayai_ocr::HayaiOcr, manga_ocr::MangaOcr,
@@ -20,6 +21,7 @@ const PRODUCER: &str = "dev.koharu.pipeline.ocr";
 const OCR_EXCLUSION_CONTAINMENT_THRESHOLD: f64 = 0.5;
 const OCR_CROP_PADDING_SCALE: f64 = 1.2;
 const API_OCR_MIN_DIMENSION: u32 = 16;
+const API_OCR_CONCURRENCY: usize = 4;
 
 pub(super) struct Processor {
     config: OcrConfig,
@@ -257,7 +259,7 @@ async fn run_api(
     targets: Vec<OcrTarget>,
 ) -> Result<koharu_scene::Patch> {
     let page = input.page()?;
-    let mut results = Vec::with_capacity(targets.len());
+    let mut requests = Vec::with_capacity(targets.len());
     for target in targets {
         let draft = if config.method == OcrMethod::LocalApi {
             Some(
@@ -283,22 +285,30 @@ async fn run_api(
             instructions: config.api.instructions.clone(),
             draft,
         };
-        let recognized = tokio::select! {
-            biased;
-            _ = input.stop.cancelled() => return finish(input.scene.edit()),
-            result = translator.recognize(
-                &config.api.model,
-                config.api.generation,
-                request,
-            ) => result?,
-        };
-        results.push(OcrResult {
-            content,
-            region,
-            geometry,
-            text: normalize_ocr_text(recognized.1),
-        });
+        requests.push((content, region, geometry, request));
     }
+    // Regions are independent requests, so a page keeps a few in flight while
+    // results stay in region order. The first error drops the requests still
+    // running, which also stops further spending after a quota error.
+    let recognized = stream::iter(requests)
+        .map(|(content, region, geometry, request)| async move {
+            let (_, text) = translator
+                .recognize(&config.api.model, config.api.generation, request)
+                .await?;
+            Ok::<_, anyhow::Error>(OcrResult {
+                content,
+                region,
+                geometry,
+                text: normalize_ocr_text(text),
+            })
+        })
+        .buffered(API_OCR_CONCURRENCY)
+        .try_collect::<Vec<_>>();
+    let results = tokio::select! {
+        biased;
+        _ = input.stop.cancelled() => return finish(input.scene.edit()),
+        results = recognized => results?,
+    };
     apply_results(input, page, model_name, source_language, results)
 }
 

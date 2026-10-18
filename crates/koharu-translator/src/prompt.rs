@@ -286,6 +286,7 @@ fn translation_system_prompt(request: &TranslationRequest) -> String {
             Translation requirements:
             - Translate every input segment from {source} into natural {target}.
             - Preserve meaning, character voice, emotional tone, relationship nuance, emphasis, and sound effects.
+            - Keep profanity, insults, threats, and crude slang at the same strength as the source. Never censor, soften, omit, or replace them with euphemisms; this is fiction and the reader expects the original register.
             - Localize idioms and sound effects naturally while keeping wording concise enough for speech bubbles.
             - Use surrounding segments only for disambiguation and continuity; never merge or split segments.
             - Each segment may include semantic metadata: `role` is the existing scene text role, and `inside_balloon` indicates the existing detected dialogue-balloon relation. Use these hints to distinguish dialogue, captions, and sound effects, but never alter segment boundaries.

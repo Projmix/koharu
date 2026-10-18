@@ -16,7 +16,7 @@ status) and the root `AGENTS.md`. Line references are to `main` at the commit ab
 
 | # | Item | Stage | Gain | Effort |
 | --- | --- | --- | --- | --- |
-| 1 | Concurrent API OCR requests within a page | OCR | API and hybrid OCR several times faster | S |
+| 1 | Concurrent API OCR requests within a page (done) | OCR | API and hybrid OCR several times faster | S |
 | 2 | Offline evaluation set and scorer | all | Lets every later choice be measured | M |
 | 3 | Review flags in Scene, then JEV OCR selection | OCR | Better text and an explicit "check by hand" list | M+M |
 | 3a | Keep profanity and register; cross-check suspicious lines with DeepL or Google | translation | Swearing and rude lines are not softened or dropped | M |
@@ -91,13 +91,12 @@ the local text as an untrusted draft, and the API result always replaces the
 local one (`stages/ocr.rs:251`). API OCR is supported for OpenAI,
 OpenAI-compatible, OpenRouter and Qwen-VL-OCR (`provider.rs:212`).
 
-- **Sequential API calls (item 1).** `run_api` awaits one region at a time
-  (`stages/ocr.rs:261`). A page with 20 bubbles makes 20 round trips in
-  series. Send them with bounded concurrency (for example 4 to 8 in flight,
-  configurable per provider) inside the same job, keeping result order and
-  cooperative stop. This stays one job per stage. Quota errors already map to
-  `QuotaExceeded` (`remote/mod.rs:220`); stop the remaining requests on the
-  first one.
+- **Sequential API calls (item 1, done).** `run_api` awaited one region at
+  a time, so a page with 20 bubbles made 20 round trips in series. It now
+  keeps 4 requests in flight inside the same job (`API_OCR_CONCURRENCY` in
+  `stages/ocr.rs`), keeps region order and cooperative stop, and drops the
+  remaining requests on the first error, including `QuotaExceeded`. Make the
+  limit per provider only if a provider's rate limit requires it.
 - **No confidence (feeds item 3).** `OcrAnalysis.confidence` is always
   `None` (`stages/ocr.rs:416`). The local models decode token by token, so they can
   return a mean or minimum token probability without an extra pass. Store it; it is
@@ -192,9 +191,9 @@ through each provider's structured output.
   tend to soften or drop them. Nothing detects it: the Gemini adapter sends
   no safety settings and no adapter treats a content-filter finish as its own
   error. Plan, cheapest first:
-  1. State it in the prompt: keep profanity, insults, slurs used by
-     characters and crude slang at the source's strength; never censor,
-     soften, omit or add euphemisms.
+  1. Done: the shared translation system prompt (also used by the manual
+     chapter export) says to keep profanity, insults, threats and crude
+     slang at the source's strength and never censor or soften them.
   2. Mark suspicious segments deterministically: a small per-language list
      of source markers (for Japanese, for example `くそ`, `ちくしょう`,
      `てめえ`, `死ね`, `殺す`, `ぶっ`), a translation much shorter than its
