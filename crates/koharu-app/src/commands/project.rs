@@ -2850,6 +2850,7 @@ mod tests {
         let layout = SceneTextLayout {
             origin: Origin::User,
             kind: TextLayoutKind::Paragraph,
+            angle_degrees: None,
         };
         let moved = setup
             .add_text_layer(source_page, At::End, content, &layout)
@@ -3056,6 +3057,7 @@ mod tests {
         let layout = SceneTextLayout {
             origin: Origin::User,
             kind: TextLayoutKind::Paragraph,
+            angle_degrees: None,
         };
         let mut layers = Vec::new();
         for _ in 0..4 {
@@ -3271,6 +3273,7 @@ mod tests {
         let layout = SceneTextLayout {
             origin: Origin::User,
             kind: TextLayoutKind::Paragraph,
+            angle_degrees: None,
         };
         let first = setup
             .add_text_layer(page, At::End, content, &layout)
