@@ -237,7 +237,6 @@ pub struct TranslationConfig {
 /// The per-page scene markup pass that labels each text's kind, speaker and
 /// continuation for chapter translation.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Type)]
-#[serde(default)]
 pub struct SceneMarkupConfig {
     pub enabled: bool,
     pub model: TranslationModelSelection,
