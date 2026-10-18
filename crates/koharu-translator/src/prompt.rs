@@ -275,6 +275,7 @@ fn translation_system_prompt(request: &TranslationRequest) -> String {
             - Translate every input segment from {source} into natural {target}.
             - Preserve meaning, character voice, emotional tone, relationship nuance, emphasis, and sound effects.
             - Keep profanity, insults, threats, and crude slang at the same strength as the source. Never censor, soften, omit, or replace them with euphemisms; this is fiction and the reader expects the original register.
+            - Keep rough, casual, or rude speech just as rough; do not turn it into neutral or polite wording.
             - Localize idioms and sound effects naturally while keeping wording concise enough for speech bubbles.
             - Write a sound effect as the bare sound word lettered on the page, without asterisks, brackets, or other markup.
             - Use surrounding segments only for disambiguation and continuity; never merge or split segments.
