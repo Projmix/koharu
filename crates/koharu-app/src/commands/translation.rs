@@ -52,7 +52,6 @@ pub(crate) async fn export_chapter_translation(
         return Ok(false);
     };
     tokio::fs::write(file.path(), bytes).await?;
-    tracing::info!(target: "koharu_metrics", metric = "chapter_translation_exported");
     Ok(true)
 }
 
@@ -106,7 +105,6 @@ pub(crate) async fn import_chapter_translation(
         .state::<CanvasChannel>()
         .channel
         .publish(desktop.canvas_state());
-    tracing::info!(target: "koharu_metrics", metric = "chapter_translation_imported");
     Ok(true)
 }
 

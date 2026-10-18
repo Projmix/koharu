@@ -36,7 +36,7 @@ import {
 } from '@/lib/queries'
 import {
   isBrushTool,
-  MAX_BRUSH_DIAMETER,
+  maxBrushDiameter,
   MIN_BRUSH_DIAMETER,
   receiveError,
   useKoharuStore,
@@ -196,7 +196,6 @@ export function CanvasWorkspace() {
 
   const page = usePage().data
   const pages = usePages().data
-  const camera = useKoharuStore((state) => state.camera)
   const canvasPage = useKoharuStore((state) => state.canvasPage)
   const canvasRevision = useKoharuStore((state) => state.canvasRevision)
   const canvasGeneration = useKoharuStore((state) => state.canvasGeneration)
@@ -470,9 +469,22 @@ export function CanvasWorkspace() {
     }
   }, [report])
 
+  // The camera reaches the canvas from the store, not from a render: a passive effect lands a
+  // frame late under continuous input and halves the presented rate.
   useEffect(() => {
-    canvas?.setView(camera.zoom, camera.translation)
-  }, [canvas, camera])
+    if (!canvas) return
+    const apply = ({ zoom, translation }: CanvasView) => {
+      try {
+        canvas.setView(zoom, translation)
+      } catch (error) {
+        receiveError(errorMessage(error))
+      }
+    }
+    apply(useKoharuStore.getState().camera)
+    return useKoharuStore.subscribe((state, previous) => {
+      if (state.camera !== previous.camera) apply(state.camera)
+    })
+  }, [canvas])
 
   useEffect(() => {
     if (
@@ -567,7 +579,7 @@ export function CanvasWorkspace() {
         const diameter = clamp(
           state.brush.diameter + brushDelta,
           MIN_BRUSH_DIAMETER,
-          MAX_BRUSH_DIAMETER,
+          maxBrushDiameter(page?.size ?? { width: 2048, height: 2048 }),
         )
         if (diameter !== state.brush.diameter) {
           state.setBrush({ ...state.brush, diameter })
@@ -800,6 +812,7 @@ export function CanvasWorkspace() {
     }
 
     if (current.kind === 'pan') {
+      const { zoom } = useKoharuStore.getState().camera
       const bounds = surface.current!.getBoundingClientRect()
       const dpr = window.devicePixelRatio
       let translation: [number, number] = [
@@ -808,14 +821,14 @@ export function CanvasWorkspace() {
       ]
       translation = clampCameraTranslation(
         translation,
-        camera.zoom,
+        zoom,
         pageWidth ?? page.size.width,
         pageHeight ?? page.size.height,
         bounds.width * dpr,
         bounds.height * dpr,
         dpr,
       )
-      useKoharuStore.setState({ camera: { zoom: camera.zoom, translation, fitted: false } })
+      useKoharuStore.setState({ camera: { zoom, translation, fitted: false } })
       return
     }
 
@@ -843,12 +856,12 @@ export function CanvasWorkspace() {
     const current = gesture.current
     gesture.current = null
     if (!current || !page) return
+    const { zoom } = useKoharuStore.getState().camera
     if (current.kind === 'move') {
       finishTransform()
       if (!current.moved && current.collapseTo) selectLayers([current.collapseTo])
     } else if (current.kind === 'text') {
-      const pointText =
-        current.frame.width < 4 / camera.zoom && current.frame.height < 4 / camera.zoom
+      const pointText = current.frame.width < 4 / zoom && current.frame.height < 4 / zoom
       setDraft(null)
       void (
         pointText
@@ -862,7 +875,7 @@ export function CanvasWorkspace() {
         .catch(() => undefined)
     } else if (current.kind === 'ocr') {
       setDraft(null)
-      if (current.frame.width < 4 / camera.zoom || current.frame.height < 4 / camera.zoom) return
+      if (current.frame.width < 4 / zoom || current.frame.height < 4 / zoom) return
       commitPending.current = true
       void call(commands.addOcrRegion, current.frame)
         .then(async (result) => {
@@ -878,7 +891,7 @@ export function CanvasWorkspace() {
         .finally(() => (commitPending.current = false))
     } else if (current.kind === 'restore') {
       setDraft(null)
-      if (current.frame.width < 4 / camera.zoom || current.frame.height < 4 / camera.zoom) return
+      if (current.frame.width < 4 / zoom || current.frame.height < 4 / zoom) return
       commitPending.current = true
       void enqueue(() => call(commands.commitRestore, current.revision, current.frame))
         .catch(() => undefined)
@@ -991,7 +1004,7 @@ export function CanvasWorkspace() {
                 kind: 'pan',
                 pointer: event.pointerId,
                 start: physical,
-                translation: camera.translation,
+                translation: useKoharuStore.getState().camera.translation,
               }
             } else if (tool === 'select') {
               const target = selectionAt(point)
@@ -1151,7 +1164,7 @@ export function CanvasWorkspace() {
                 const nextDiameter = clamp(
                   currentBrush.diameter + delta,
                   MIN_BRUSH_DIAMETER,
-                  MAX_BRUSH_DIAMETER,
+                  maxBrushDiameter(page.size),
                 )
                 if (nextDiameter !== currentBrush.diameter) {
                   setBrush({ ...currentBrush, diameter: nextDiameter })
@@ -1204,7 +1217,6 @@ export function CanvasWorkspace() {
           {page && canvasState.status === 'ready' && (
             <CanvasOverlay
               page={page}
-              camera={camera}
               selected={selected}
               hovered={hovered}
               frames={layerFrames}
