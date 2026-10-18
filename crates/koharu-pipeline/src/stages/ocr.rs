@@ -367,8 +367,12 @@ async fn targets(
                 (*candidate != *region && nested_geometry(geometry, child)).then_some(child)
             })
             .collect::<Vec<_>>();
+        let neighbors = regions
+            .iter()
+            .filter_map(|(candidate, other)| (*candidate != *region).then_some(other))
+            .collect::<Vec<_>>();
         let crop = Arc::new(
-            crop(&source, geometry, &exclusions)
+            crop(&source, geometry, &exclusions, &neighbors)
                 .with_context(|| format!("text region {region} is outside its source image"))?,
         );
         for relation in input.scene.relations_to_as::<RecognizedFrom>(*region) {
@@ -491,10 +495,14 @@ fn normalize_ocr_text(text: String) -> String {
     }
 }
 
+/// Crop a text region with context padding. Nested child regions are removed
+/// from the crop, and so is every other text region's area outside this
+/// region: text that belongs to a neighbor must not be read twice.
 fn crop(
     source: &DynamicImage,
     geometry: &Geometry,
     exclusions: &[&Geometry],
+    neighbors: &[&Geometry],
 ) -> Result<DynamicImage> {
     let (min_x, min_y, max_x, max_y) =
         geometry_extents(geometry).ok_or_else(|| anyhow!("geometry is empty"))?;
@@ -527,7 +535,11 @@ fn crop(
             }
         }
     }
-    for exclusion in exclusions {
+    let masked = exclusions
+        .iter()
+        .map(|exclusion| (*exclusion, false))
+        .chain(neighbors.iter().map(|neighbor| (*neighbor, true)));
+    for (exclusion, outside_only) in masked {
         let Some((child_left, child_top, child_right, child_bottom)) = geometry_extents(exclusion)
         else {
             continue;
@@ -538,11 +550,11 @@ fn crop(
         let local_bottom = child_bottom.ceil().min(f64::from(bottom)).max(f64::from(y)) as u32 - y;
         for local_y in local_top..local_bottom {
             for local_x in local_left..local_right {
-                if point_in_geometry(
-                    f64::from(x + local_x) + 0.5,
-                    f64::from(y + local_y) + 0.5,
-                    exclusion,
-                ) {
+                let sample_x = f64::from(x + local_x) + 0.5;
+                let sample_y = f64::from(y + local_y) + 0.5;
+                if point_in_geometry(sample_x, sample_y, exclusion)
+                    && !(outside_only && point_in_geometry(sample_x, sample_y, geometry))
+                {
                     crop.put_pixel(local_x, local_y, Rgb([u8::MAX; 3]));
                 }
             }
@@ -1141,7 +1153,7 @@ mod tests {
             DynamicImage::ImageRgb8(image::RgbImage::from_pixel(100, 100, Rgb([10, 20, 30])));
         let region = Geometry::rectangle(20.0, 20.0, 40.0, 20.0);
 
-        let crop = crop(&source, &region, &[]).unwrap().to_rgb8();
+        let crop = crop(&source, &region, &[], &[]).unwrap().to_rgb8();
 
         assert_eq!(crop.dimensions(), (48, 24));
         assert_eq!(crop.get_pixel(0, 12), &Rgb([10, 20, 30]));
@@ -1154,10 +1166,26 @@ mod tests {
             DynamicImage::ImageRgb8(image::RgbImage::from_pixel(100, 100, Rgb([10, 20, 30])));
         let region = Geometry::rectangle(0.0, 0.0, 20.0, 20.0);
 
-        let crop = crop(&source, &region, &[]).unwrap().to_rgb8();
+        let crop = crop(&source, &region, &[], &[]).unwrap().to_rgb8();
 
         assert_eq!(crop.dimensions(), (22, 22));
         assert_eq!(crop.get_pixel(0, 0), &Rgb([10, 20, 30]));
+    }
+
+    #[test]
+    fn neighbor_text_in_the_context_padding_is_removed_but_shared_area_is_kept() {
+        let source =
+            DynamicImage::ImageRgb8(image::RgbImage::from_pixel(100, 100, Rgb([10, 20, 30])));
+        let region = Geometry::rectangle(20.0, 20.0, 40.0, 20.0);
+        let neighbor = Geometry::rectangle(55.0, 20.0, 30.0, 20.0);
+
+        let crop = crop(&source, &region, &[], &[&neighbor]).unwrap().to_rgb8();
+
+        // The crop starts at x = 16; x = 62 is padding inside the neighbor.
+        assert_eq!(crop.get_pixel(62 - 16, 12), &Rgb([u8::MAX; 3]));
+        // x = 57 is inside both regions and stays readable here.
+        assert_eq!(crop.get_pixel(57 - 16, 12), &Rgb([10, 20, 30]));
+        assert_eq!(crop.get_pixel(0, 12), &Rgb([10, 20, 30]));
     }
 
     #[test]
@@ -1167,7 +1195,7 @@ mod tests {
         let child = Geometry::rectangle(2.0, 3.0, 3.0, 2.0);
 
         assert!(nested_geometry(&parent, &child));
-        let crop = crop(&source, &parent, &[&child]).unwrap().to_rgb8();
+        let crop = crop(&source, &parent, &[&child], &[]).unwrap().to_rgb8();
 
         assert_eq!(crop.get_pixel(0, 0), &Rgb([10, 20, 30]));
         for y in 3..5 {
@@ -1192,7 +1220,7 @@ mod tests {
         };
         let child = Geometry::rectangle(4.0, 4.0, 2.0, 2.0);
 
-        let crop = crop(&source, &parent, &[&child]).unwrap().to_rgb8();
+        let crop = crop(&source, &parent, &[&child], &[]).unwrap().to_rgb8();
 
         assert_eq!(crop.get_pixel(0, 0), &Rgb([u8::MAX; 3]));
         assert_eq!(crop.get_pixel(4, 1), &Rgb([10, 20, 30]));
