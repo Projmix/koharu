@@ -13,13 +13,6 @@ const notoSansCJK = localFont({
 
 export const metadata: Metadata = {
   title: 'Koharu',
-  description:
-    'Local-first comic and manga translation studio with OCR, inpainting, and typesetting.',
-  openGraph: {
-    title: 'Koharu',
-    description:
-      'Local-first comic and manga translation studio with OCR, inpainting, and typesetting.',
-  },
 }
 
 function RootLayout({
