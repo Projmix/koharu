@@ -69,7 +69,14 @@ exact line is printed / handwritten.
 | Gemini 3.5 Flash-Lite | 5.50% | 7.10% | | 0.9 s | 0.40 |
 | Gemini 3.1 Flash-Lite | 6.91% | 6.11% | | | 0.33 |
 
-The hybrid fixed 25 crops of Hayai's draft and broke 8. The Claude rows and
+The hybrid fixed 25 crops of Hayai's draft and broke 8. Keeping the draft when the
+API request fails (`693f400`) brings the hybrid to 1.22% / 2.76%, and dropping
+furigana brings it to 0.63% / 2.76% (both computed offline from the saved
+answers). A Gemini 3.5 Flash arbiter that picks between the draft and the API
+reading on the 35 crops where they disagree was rejected: 30/35 correct
+picks, but 0.68% / 2.56% after the furigana fix, which is noise. It fails on the
+same small kana, punctuation and stray strokes as the reader. The best possible
+pick between the two readings would reach 0.49% / 2.17%. The Claude rows and
 GPT-6 Luna ran before `e9930e2`. Since then, OpenRouter OCR, like OpenRouter
 translation, requires native json_schema output, and OpenRouter has no
 endpoint for those models that accepts it (404 on every crop). The Gemini
