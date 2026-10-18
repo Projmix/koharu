@@ -614,6 +614,7 @@ export type TextClipboardLayer = {
 	translation: Translation | null,
 	role: string | null,
 	geometry: Geometry | null,
+	angle_degrees: number | null,
 	visibility: LayerVisibility,
 	typography: Typography | null,
 	layout: TextLayoutKind,

@@ -140,6 +140,7 @@ function textClipboardPayload(
         translation: layer.content.translation,
         role: layer.content.role,
         geometry: layer.geometry,
+        angle_degrees: layer.angle_degrees,
         visibility: layer.visibility,
         typography: layer.typography,
         layout: layer.layout,

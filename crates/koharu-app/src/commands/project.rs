@@ -211,6 +211,7 @@ pub struct TextClipboardLayer {
     pub translation: Option<Translation>,
     pub role: Option<String>,
     pub geometry: Option<Geometry>,
+    pub angle_degrees: Option<f32>,
     pub visibility: LayerVisibility,
     pub typography: Option<Typography>,
     pub layout: TextLayoutKind,
@@ -481,6 +482,7 @@ impl Project {
     fn clipboard_layer(snapshot: &Snapshot, layer: EntityId) -> Result<TextClipboardLayer> {
         let Layer::Text {
             geometry,
+            angle_degrees,
             visibility,
             content,
             typography,
@@ -505,6 +507,7 @@ impl Project {
             translation: content.translation,
             role: content.role,
             geometry,
+            angle_degrees,
             visibility,
             typography,
             layout,
@@ -523,6 +526,7 @@ impl Project {
                 current.geometry.as_ref(),
                 payload.geometry.as_ref(),
             )
+            && current.angle_degrees == payload.angle_degrees
             && current.visibility.visible == payload.visibility.visible
             && Self::clipboard_float_matches(
                 f64::from(current.visibility.opacity),
@@ -1018,6 +1022,7 @@ impl Project {
                         &SceneTextLayout {
                             origin: Origin::User,
                             kind: block.layout,
+                            angle_degrees: block.angle_degrees,
                         },
                     )?;
                     Self::set_clipboard_layer_components(edit, layer, block, offset)?;
@@ -1134,6 +1139,7 @@ impl Project {
                 &SceneTextLayout {
                     origin: Origin::User,
                     kind: TextLayoutKind::Paragraph,
+                    angle_degrees: None,
                 },
             )?;
             edit.set(
@@ -2492,6 +2498,7 @@ mod tests {
                 &SceneTextLayout {
                     origin: Origin::User,
                     kind: TextLayoutKind::Paragraph,
+                    angle_degrees: None,
                 },
             )
             .unwrap();
@@ -2620,6 +2627,7 @@ mod tests {
                 &SceneTextLayout {
                     origin: Origin::User,
                     kind: TextLayoutKind::Paragraph,
+                    angle_degrees: None,
                 },
             )
             .unwrap();
@@ -2724,6 +2732,7 @@ mod tests {
                 &SceneTextLayout {
                     origin: Origin::User,
                     kind: TextLayoutKind::Paragraph,
+                    angle_degrees: None,
                 },
             )
             .unwrap();
@@ -2756,6 +2765,7 @@ mod tests {
                 &SceneTextLayout {
                     origin: Origin::User,
                     kind: TextLayoutKind::Paragraph,
+                    angle_degrees: None,
                 },
             )
             .unwrap();
@@ -3208,6 +3218,7 @@ mod tests {
                 &SceneTextLayout {
                     origin: Origin::User,
                     kind: TextLayoutKind::Paragraph,
+                    angle_degrees: None,
                 },
             )
             .unwrap();
