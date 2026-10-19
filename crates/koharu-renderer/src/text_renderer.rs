@@ -224,7 +224,7 @@ impl TextRenderer {
         if let Some(language) = &descriptor.language {
             layout = layout.with_hyphenation_language_tag(language.as_str());
         }
-        if is_bubble_text && descriptor.writing_mode == WritingMode::Horizontal {
+        if !descriptor.point_text && descriptor.writing_mode == WritingMode::Horizontal {
             layout = layout.with_hyphenation_policy(HyphenationPolicy::LastResort);
         }
         let layout = if descriptor.auto_fit && !descriptor.point_text {

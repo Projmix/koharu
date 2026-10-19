@@ -191,6 +191,30 @@ pub struct TextLayout<'a> {
     cjk_punctuation_layout: bool,
 }
 
+/// Fork divergence from upstream, which split a word only once whole words
+/// were pinned to the readability floor: on the owner's chapter that left short
+/// lines in narrow balloons at 55-65% of the hand-set size, where he
+/// hyphenated instead. Above the floor, one split word is accepted when it buys
+/// at least this much size over whole words.
+const HYPHENATION_SIZE_GAIN: f32 = 1.25;
+
+/// Words a layout breaks across lines, not counting breaks after a hyphen
+/// already in the text.
+fn layout_split_words(text: &str, layout: &LayoutRun<'_>) -> usize {
+    layout
+        .lines
+        .iter()
+        .filter(|line| {
+            let (before, after) = text.split_at(line.range.end.min(text.len()));
+            before
+                .chars()
+                .next_back()
+                .is_some_and(char::is_alphanumeric)
+                && after.chars().next().is_some_and(char::is_alphanumeric)
+        })
+        .count()
+}
+
 fn largest_fitting_font_size<T>(
     minimum: f32,
     maximum: f32,
@@ -390,63 +414,70 @@ impl<'a> TextLayout<'a> {
                 && layout.height <= max_height + f32::EPSILON
         };
 
+        if self.hyphenation_policy == HyphenationPolicy::LastResort {
+            let mut unhyphenated = self.clone();
+            unhyphenated.hyphenation_policy = HyphenationPolicy::Disabled;
+            let clean = unhyphenated.largest_fitting(text, minimum, maximum, fits)?;
+            if let Some(clean) = clean {
+                if clean.font_size.floor() > minimum.floor() {
+                    // Fork divergence: see `HYPHENATION_SIZE_GAIN`.
+                    let single_split = |layout: &LayoutRun<'_>| {
+                        fits(layout) && layout_split_words(text, layout) <= 1
+                    };
+                    let target = clean.font_size * HYPHENATION_SIZE_GAIN;
+                    return Ok(
+                        match self.largest_fitting(text, clean.font_size, maximum, single_split)? {
+                            Some(hyphenated) if hyphenated.font_size >= target => hyphenated,
+                            _ => clean,
+                        },
+                    );
+                }
+                // Avoiding a word break is no longer useful once it pins the text to
+                // the configured readability floor. Compare raster-size buckets so
+                // hyphenation must recover a visible pixel, not a tuned percentage.
+                return Ok(match self.largest_fitting(text, minimum, maximum, fits)? {
+                    Some(hyphenated) if hyphenated.font_size.floor() > clean.font_size.floor() => {
+                        hyphenated
+                    }
+                    _ => clean,
+                });
+            }
+            if let Some(hyphenated) = self.largest_fitting(text, minimum, maximum, fits)? {
+                return Ok(hyphenated);
+            }
+        } else if let Some(best) = self.largest_fitting(text, minimum, maximum, fits)? {
+            return Ok(best);
+        }
+        self.run_with_size(text, minimum)
+    }
+
+    fn largest_fitting(
+        &self,
+        text: &str,
+        minimum: f32,
+        maximum: f32,
+        fits: impl Fn(&LayoutRun<'a>) -> bool,
+    ) -> Result<Option<LayoutRun<'a>>> {
         if self.comic_balloon.is_some() {
             // A balloon's usable width changes when the text reflows to a different
             // number of lines, so a smaller font can fail even though a larger one
             // fits. Search from largest to smallest instead of assuming monotonicity.
-            if self.hyphenation_policy == HyphenationPolicy::LastResort {
-                let mut unhyphenated = self.clone();
-                unhyphenated.hyphenation_policy = HyphenationPolicy::Disabled;
-                let clean = largest_fitting_font_size(
-                    minimum,
-                    maximum,
-                    |size| unhyphenated.run_with_size(text, size),
-                    fits,
-                )?;
-                // Avoiding a word break is no longer useful once it pins the text to
-                // the configured readability floor. Compare raster-size buckets so
-                // hyphenation must recover a visible pixel, not a tuned percentage.
-                if clean
-                    .as_ref()
-                    .is_some_and(|best| best.font_size.floor() > minimum.floor())
-                {
-                    return Ok(clean.unwrap());
-                }
-                let hyphenated = largest_fitting_font_size(
-                    minimum,
-                    maximum,
-                    |size| self.run_with_size(text, size),
-                    fits,
-                )?;
-                match (clean, hyphenated) {
-                    (Some(clean), Some(hyphenated))
-                        if hyphenated.font_size.floor() > clean.font_size.floor() =>
-                    {
-                        return Ok(hyphenated);
-                    }
-                    (Some(clean), _) => return Ok(clean),
-                    (None, Some(hyphenated)) => return Ok(hyphenated),
-                    (None, None) => {}
-                }
-            } else if let Some(best) = largest_fitting_font_size(
+            return largest_fitting_font_size(
                 minimum,
                 maximum,
                 |size| self.run_with_size(text, size),
                 fits,
-            )? {
-                return Ok(best);
-            }
-            return self.run_with_size(text, minimum);
+            );
         }
 
         let maximum_layout = self.run_with_size(text, maximum)?;
         if fits(&maximum_layout) {
-            return Ok(maximum_layout);
+            return Ok(Some(maximum_layout));
         }
 
         let mut best = self.run_with_size(text, minimum)?;
         if !fits(&best) {
-            return Ok(best);
+            return Ok(None);
         }
 
         let mut low = minimum;
@@ -463,7 +494,7 @@ impl<'a> TextLayout<'a> {
                 high = size;
             }
         }
-        Ok(best)
+        Ok(Some(best))
     }
 
     fn run_with_size(&self, text: &str, font_size: f32) -> Result<LayoutRun<'a>> {
@@ -2738,25 +2769,31 @@ mod tests {
     }
 
     #[test]
-    fn comic_auto_fit_uses_a_smaller_clean_setting_before_hyphenating() -> anyhow::Result<()> {
+    fn comic_auto_fit_splits_one_word_only_for_a_clearly_larger_size() -> anyhow::Result<()> {
         let font = any_system_font();
-        let layout = TextLayout::new(&font)
-            .with_min_font_size(9.0)
-            .with_max_font_size(24.0)
-            .with_hyphenation_policy(HyphenationPolicy::LastResort)
-            .with_alignment(TextAlign::Center)
-            .with_max_width(80.0)
-            .with_max_height(100.0)
-            .with_comic_balloon(
-                80.0,
-                100.0,
-                vec![(0.0, 0.0), (80.0, 0.0), (80.0, 100.0), (0.0, 100.0)],
-                0.0,
-            )
-            .run("prosperity")?;
+        let layout = |policy| {
+            TextLayout::new(&font)
+                .with_min_font_size(9.0)
+                .with_max_font_size(24.0)
+                .with_hyphenation_policy(policy)
+                .with_alignment(TextAlign::Center)
+                .with_max_width(80.0)
+                .with_max_height(100.0)
+                .with_comic_balloon(
+                    80.0,
+                    100.0,
+                    vec![(0.0, 0.0), (80.0, 0.0), (80.0, 100.0), (0.0, 100.0)],
+                    0.0,
+                )
+                .run("prosperity")
+        };
+        let clean = layout(HyphenationPolicy::Disabled)?;
+        let chosen = layout(HyphenationPolicy::LastResort)?;
 
-        assert_eq!(layout.lines.len(), 1);
-        assert!(layout.font_size < 24.0);
+        assert_eq!(clean.lines.len(), 1);
+        assert_eq!(chosen.lines.len(), 2);
+        assert_eq!(layout_split_words("prosperity", &chosen), 1);
+        assert!(chosen.font_size >= clean.font_size * HYPHENATION_SIZE_GAIN);
         Ok(())
     }
 
@@ -3058,7 +3095,7 @@ mod tests {
         let text = "A cat tower?";
         let layout = |policy| {
             TextLayout::new(&font)
-                .with_max_font_size(80.0)
+                .with_max_font_size(18.0)
                 .with_min_font_size(8.0)
                 .with_hyphenation_language_tag("en")
                 .with_hyphenation_policy(policy)
