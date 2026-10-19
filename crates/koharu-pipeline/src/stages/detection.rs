@@ -64,6 +64,9 @@ const PAGE_NUMBER_EDGE_FRACTION: f32 = 0.012;
 const PAGE_NUMBER_MAX_WIDTH_FRACTION: f32 = 0.016;
 const PAGE_NUMBER_MAX_HEIGHT_FRACTION: f32 = 0.035;
 const PAGE_NUMBER_MARGIN_FRACTION: f32 = 0.15;
+const DARK_BALLOON_LUMINANCE: u8 = 96;
+const DARK_BALLOON_RING_FRACTION: f32 = 0.9;
+const DARK_BALLOON_MIN_GROWTH: f32 = 1.15;
 const FREE_TEXT_ROLE: &str = "dev.koharu.text.free-text";
 const DIALOGUE_ROLE: &str = "dev.koharu.text.dialogue";
 const ONOMATOPOEIA_ROLE: &str = "dev.koharu.text.onomatopoeia";
@@ -388,9 +391,11 @@ async fn write_page(
     remove_spurious_onomatopoeia(&mut detections, size);
     remove_page_numbers(&mut detections, size);
     remove_nested_text_detections(&mut detections);
+    let image = image.to_rgb8();
+    let dark = dark_balloons(&image, &detections);
+    detections.extend(dark);
     sort_by_layout(&mut detections, source_language);
 
-    let image = image.to_rgb8();
     let regions = write_regions(&input.scene, edit, page, &image, &detections, generation)
         .context("failed to write detected regions")?;
     link_dialogue_regions(edit, &regions, generation)
@@ -1730,6 +1735,165 @@ fn closed_mask_for(
     output
 }
 
+/// Balloons with a dark fill and light lettering that the layout model did
+/// not report. A text box whose surrounding ring is dark is grown by flood fill
+/// over dark pixels; the fill must close inside a window around the text, or
+/// it is page background rather than a balloon. Light balloons are left to the
+/// model, since a light fill cannot be told from the page's own paper.
+fn dark_balloons(
+    image: &RgbImage,
+    detections: &[KoharuLayoutDetection],
+) -> Vec<KoharuLayoutDetection> {
+    let bubbles = detections
+        .iter()
+        .filter(|detection| detection.label == "bubble")
+        .collect::<Vec<_>>();
+    let mut found = Vec::<KoharuLayoutDetection>::new();
+    for text in detections
+        .iter()
+        .filter(|detection| detection.label == "text")
+    {
+        let inside = |bubble: &KoharuLayoutDetection| {
+            mask_containment(&bubble.mask, &text.mask, text.bbox)
+                >= DIALOGUE_MASK_CONTAINMENT_THRESHOLD
+        };
+        if bubbles.iter().any(|bubble| inside(bubble)) || found.iter().any(inside) {
+            continue;
+        }
+        if let Some(balloon) = dark_balloon(image, text.bbox) {
+            found.push(balloon);
+        }
+    }
+    found
+}
+
+fn dark_balloon(image: &RgbImage, bbox: [f32; 4]) -> Option<KoharuLayoutDetection> {
+    let (width, height) = image.dimensions();
+    let [left, top, right, bottom] = mask_window(bbox, width, height)?;
+    let side = (right - left).max(bottom - top);
+    let ring = ((right - left).min(bottom - top) / 10).max(2);
+    let reach = side + side / 2;
+    let window = [
+        left.saturating_sub(reach),
+        top.saturating_sub(reach),
+        right.saturating_add(reach).min(width),
+        bottom.saturating_add(reach).min(height),
+    ];
+    let [window_left, window_top, window_right, window_bottom] = window;
+    let local_width = window_right - window_left;
+    let local_height = window_bottom - window_top;
+    let dark = |x: u32, y: u32| {
+        let [red, green, blue] = image.get_pixel(x, y).0;
+        let luminance =
+            (u32::from(red) * 299 + u32::from(green) * 587 + u32::from(blue) * 114) / 1000;
+        luminance < u32::from(DARK_BALLOON_LUMINANCE)
+    };
+    let in_box = |x: u32, y: u32| x >= left && x < right && y >= top && y < bottom;
+
+    let mut seeds = Vec::new();
+    let mut ring_pixels = 0_u32;
+    for y in top.saturating_sub(ring)..(bottom + ring).min(height) {
+        for x in left.saturating_sub(ring)..(right + ring).min(width) {
+            if in_box(x, y) {
+                continue;
+            }
+            ring_pixels += 1;
+            if dark(x, y) {
+                seeds.push((x, y));
+            }
+        }
+    }
+    if ring_pixels == 0 {
+        return None;
+    }
+    // The share of dark ring pixels stands in for a model confidence.
+    let score = seeds.len() as f32 / ring_pixels as f32;
+    if score < DARK_BALLOON_RING_FRACTION {
+        return None;
+    }
+
+    let index = |x: u32, y: u32| ((y - window_top) * local_width + (x - window_left)) as usize;
+    let mut filled = vec![0_u8; (local_width * local_height) as usize];
+    for y in top..bottom {
+        for x in left..right {
+            filled[index(x, y)] = 1;
+        }
+    }
+    let mut stack = seeds;
+    for &(x, y) in &stack {
+        filled[index(x, y)] = 1;
+    }
+    while let Some((x, y)) = stack.pop() {
+        // Reaching the window edge means the dark area keeps going: it is a
+        // dark panel or background, not a closed balloon.
+        if (x == window_left && x > 0)
+            || (y == window_top && y > 0)
+            || (x + 1 == window_right && window_right < width)
+            || (y + 1 == window_bottom && window_bottom < height)
+            || x == 0
+            || y == 0
+            || x + 1 == width
+            || y + 1 == height
+        {
+            return None;
+        }
+        for (next_x, next_y) in [(x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)] {
+            let slot = index(next_x, next_y);
+            if filled[slot] == 0 && dark(next_x, next_y) {
+                filled[slot] = 1;
+                stack.push((next_x, next_y));
+            }
+        }
+    }
+
+    let (mut min_x, mut min_y, mut max_x, mut max_y) = (u32::MAX, u32::MAX, 0, 0);
+    let mut area = 0_u32;
+    for local_y in 0..local_height {
+        for local_x in 0..local_width {
+            if filled[(local_y * local_width + local_x) as usize] != 0 {
+                area += 1;
+                min_x = min_x.min(local_x);
+                min_y = min_y.min(local_y);
+                max_x = max_x.max(local_x);
+                max_y = max_y.max(local_y);
+            }
+        }
+    }
+    let text_area = (right - left) * (bottom - top);
+    if (area as f32) < text_area as f32 * DARK_BALLOON_MIN_GROWTH {
+        return None;
+    }
+    let mask_width = max_x - min_x + 1;
+    let mask_height = max_y - min_y + 1;
+    let pixels = (min_y..=max_y)
+        .flat_map(|local_y| {
+            let filled = &filled;
+            (min_x..=max_x).map(move |local_x| filled[(local_y * local_width + local_x) as usize])
+        })
+        .collect();
+    let x = window_left + min_x;
+    let y = window_top + min_y;
+    Some(KoharuLayoutDetection {
+        label_id: 0,
+        label: "bubble".to_owned(),
+        score,
+        bbox: [
+            x as f32,
+            y as f32,
+            (x + mask_width) as f32,
+            (y + mask_height) as f32,
+        ],
+        area,
+        mask: KoharuLayoutMask {
+            x,
+            y,
+            width: mask_width,
+            height: mask_height,
+            pixels,
+        },
+    })
+}
+
 fn valid_mask(mask: &KoharuLayoutMask) -> bool {
     mask.width
         .checked_mul(mask.height)
@@ -2515,8 +2679,8 @@ mod tests {
         FREE_TEXT_ROLE, ImageSize, KoharuLayoutRFDetrSeg2XLConfig, LayoutItem, LayoutKind,
         MaskPixel, ONOMATOPOEIA_ROLE, PageRegions, Processor, RecognizedFrom, RegionOutput,
         StageInput, StageProcessor, best_container, clamp_to_image, closed_mask_for, color_palette,
-        generation, infer_typography, layout_order, link_dialogue_regions, mask_containment,
-        mask_for, mask_geometry, non_maximum_suppression, normalize_text_color,
+        dark_balloons, generation, infer_typography, layout_order, link_dialogue_regions,
+        mask_containment, mask_for, mask_geometry, non_maximum_suppression, normalize_text_color,
         remove_nested_text_detections, remove_page_numbers, remove_spurious_onomatopoeia,
         write_region,
     };
@@ -3954,6 +4118,59 @@ mod tests {
 
         assert_eq!(inferred.color, [255, 255, 255]);
         assert_eq!(inferred.stroke_color, None);
+    }
+
+    fn text_detection(bbox: [u32; 4]) -> KoharuLayoutDetection {
+        let [left, top, right, bottom] = bbox;
+        KoharuLayoutDetection {
+            label_id: 0,
+            label: "text".to_owned(),
+            score: 1.0,
+            bbox: [left as f32, top as f32, right as f32, bottom as f32],
+            area: (right - left) * (bottom - top),
+            mask: KoharuLayoutMask {
+                x: left,
+                y: top,
+                width: right - left,
+                height: bottom - top,
+                pixels: vec![1; ((right - left) * (bottom - top)) as usize],
+            },
+        }
+    }
+
+    #[test]
+    fn dark_balloon_with_light_text_becomes_a_bubble() {
+        // A black ellipse with a white rim on white paper, white text inside.
+        let mut image = RgbImage::from_pixel(200, 200, Rgb([255, 255, 255]));
+        for y in 0..200_u32 {
+            for x in 0..200_u32 {
+                let dx = (x as f32 - 100.0) / 60.0;
+                let dy = (y as f32 - 100.0) / 40.0;
+                if dx * dx + dy * dy <= 1.0 {
+                    image.put_pixel(x, y, Rgb([20, 20, 20]));
+                }
+            }
+        }
+        for x in (80..120).step_by(8) {
+            for y in 90..110 {
+                image.put_pixel(x, y, Rgb([250, 250, 250]));
+            }
+        }
+        let balloons = dark_balloons(&image, &[text_detection([78, 88, 122, 112])]);
+        assert_eq!(balloons.len(), 1);
+        let [left, top, right, bottom] = balloons[0].bbox;
+        assert!((left - 40.0).abs() <= 2.0 && (right - 160.0).abs() <= 2.0);
+        assert!((top - 60.0).abs() <= 2.0 && (bottom - 140.0).abs() <= 2.0);
+        assert!(balloons[0].mask.contains(100, 70));
+        assert!(!balloons[0].mask.contains(45, 65));
+    }
+
+    #[test]
+    fn dark_background_and_light_paper_are_not_balloons() {
+        let night = RgbImage::from_pixel(200, 200, Rgb([10, 10, 10]));
+        assert!(dark_balloons(&night, &[text_detection([80, 90, 120, 110])]).is_empty());
+        let paper = RgbImage::from_pixel(200, 200, Rgb([255, 255, 255]));
+        assert!(dark_balloons(&paper, &[text_detection([80, 90, 120, 110])]).is_empty());
     }
 
     #[test]
