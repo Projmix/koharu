@@ -1603,12 +1603,7 @@ fn comic_line_breaks(
                         Some(result)
                     })
             })
-            .min_by(|left, right| {
-                left.overflowed
-                    .cmp(&right.overflowed)
-                    .then_with(|| left.profiles.len().cmp(&right.profiles.len()))
-                    .then_with(|| left.cost.total_cmp(&right.cost))
-            })
+            .min_by(|left, right| rank_comic_breaks(segments, left, right))
     };
 
     if policy == HyphenationPolicy::LastResort
@@ -1712,6 +1707,64 @@ fn exact_profiled_line_breaks(
         overflowed,
         cost,
     })
+}
+
+/// Orders balloon line-break candidates, best first. A candidate that fits wins and,
+/// among those, fewer lines. When nothing fits, keep words whole first and then spill
+/// as little as possible: extra lines read better than a word split across lines
+/// that still overflows.
+fn rank_comic_breaks(
+    segments: &[LineBreakMeasure],
+    left: &LineBreakResult,
+    right: &LineBreakResult,
+) -> std::cmp::Ordering {
+    left.overflowed.cmp(&right.overflowed).then_with(|| {
+        if left.overflowed {
+            let excess = |result: &LineBreakResult| {
+                breaks_excess(segments, &result.breaks, &result.profiles).ceil()
+            };
+            split_words(segments, &left.breaks)
+                .cmp(&split_words(segments, &right.breaks))
+                .then_with(|| excess(left).total_cmp(&excess(right)))
+                .then_with(|| left.cost.total_cmp(&right.cost))
+        } else {
+            left.profiles
+                .len()
+                .cmp(&right.profiles.len())
+                .then_with(|| left.cost.total_cmp(&right.cost))
+        }
+    })
+}
+
+/// Total width by which lines exceed their profiles.
+fn breaks_excess(segments: &[LineBreakMeasure], breaks: &[usize], profiles: &[LineProfile]) -> f32 {
+    let mut start = 0usize;
+    let mut excess = 0.0;
+    for (line, end) in breaks.iter().copied().enumerate() {
+        let mut advance = segments[start..end]
+            .iter()
+            .map(|segment| segment.advance)
+            .sum::<f32>();
+        advance -= segments[end - 1].trailing_advance;
+        if end < segments.len() {
+            advance += segments[end - 1].break_suffix_advance;
+        }
+        let width = profiles
+            .get(line)
+            .or_else(|| profiles.first())
+            .map_or(0.0, |profile| profile.width);
+        excess += (advance - width).max(0.0);
+        start = end;
+    }
+    excess
+}
+
+/// Line breaks that fall inside a word rather than at a space, hyphenated or not.
+fn split_words(segments: &[LineBreakMeasure], breaks: &[usize]) -> usize {
+    breaks
+        .iter()
+        .filter(|&&end| end < segments.len() && segments[end - 1].trailing_advance <= 0.0)
+        .count()
 }
 
 fn breaks_overflow(segments: &[LineBreakMeasure], breaks: &[usize], widths: &[f32]) -> bool {
@@ -2925,6 +2978,63 @@ mod tests {
             matches!((before, after), (Some(left), Some(right)) if left.is_alphabetic() && right.is_alphabetic())
         }));
         Ok(())
+    }
+
+    #[test]
+    fn overflowing_balloon_breaks_prefer_whole_words_over_fewer_lines() {
+        let word = |advance: f32, space: bool, hyphen: bool| LineBreakMeasure {
+            advance,
+            trailing_advance: if space { 6.0 } else { 0.0 },
+            break_suffix_advance: if hyphen { 6.0 } else { 0.0 },
+            break_penalty: 0.0,
+            is_mandatory: false,
+        };
+        // "aaaa bbb|ccc dd": the middle word may split with a hyphen.
+        let segments = [
+            word(46.0, true, false),
+            word(30.0, false, true),
+            word(36.0, true, false),
+            word(20.0, false, false),
+        ];
+        let profiles = |count: usize| {
+            vec![
+                LineProfile {
+                    width: 50.0,
+                    center_offset: 0.0,
+                    block_baseline: 0.0,
+                };
+                count
+            ]
+        };
+        let split = LineBreakResult {
+            breaks: vec![2, 4],
+            profiles: profiles(2),
+            overflowed: true,
+            cost: 1.0,
+        };
+        let whole = LineBreakResult {
+            breaks: vec![1, 3, 4],
+            profiles: profiles(3),
+            overflowed: true,
+            cost: 2.0,
+        };
+        let fitting = LineBreakResult {
+            breaks: vec![1, 3, 4],
+            profiles: profiles(3),
+            overflowed: false,
+            cost: 2.0,
+        };
+
+        assert_eq!(
+            rank_comic_breaks(&segments, &whole, &split),
+            std::cmp::Ordering::Less
+        );
+        assert_eq!(
+            rank_comic_breaks(&segments, &fitting, &split),
+            std::cmp::Ordering::Less
+        );
+        assert_eq!(split_words(&segments, &split.breaks), 1);
+        assert_eq!(split_words(&segments, &whole.breaks), 0);
     }
 
     #[test]
