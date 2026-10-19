@@ -409,6 +409,18 @@ fn anchor_flow_cells(
         .iter()
         .map(|(_, indices)| indices.iter().map(|&index| weight(index)).sum::<f32>())
         .collect::<Vec<_>>();
+    // Two flows split the balloon so each cell's area follows its text
+    // length: equal glyph sizes need area in proportion to glyph count.
+    let share_of_first = if clusters.len() == 2 && contour.len() >= 3 {
+        area_share(
+            contour,
+            clusters[0].0,
+            clusters[1].0,
+            cluster_weights[0] / (cluster_weights[0] + cluster_weights[1]),
+        )
+    } else {
+        0.5
+    };
     let mut cells = vec![Vec::new(); anchors.len()];
     for (cluster_index, &((x, y), ref indices)) in clusters.iter().enumerate() {
         // The cell is the editable balloon shape, so fallback bisectors must
@@ -422,11 +434,19 @@ fn anchor_flow_cells(
             if cluster_index == other_index {
                 continue;
             }
-            // The split sits at this cluster's share of the anchor segment,
-            // kept between a quarter and three quarters so neither flow loses
-            // its lobe entirely.
+            // The split sits at this cluster's share of the anchor segment;
+            // with more than two flows it stays between a quarter and three
+            // quarters so no flow loses its lobe entirely.
             let own = cluster_weights[cluster_index];
-            let share = (own / (own + cluster_weights[other_index])).clamp(0.25, 0.75);
+            let share = if clusters.len() == 2 && contour.len() >= 3 {
+                if cluster_index == 0 {
+                    share_of_first
+                } else {
+                    1.0 - share_of_first
+                }
+            } else {
+                (own / (own + cluster_weights[other_index])).clamp(0.25, 0.75)
+            };
             // Snapping the split to 1/16 px keeps cell edges exactly
             // representable, so dragging a cell is a pure translation.
             let snap = |value: f32| (value * 16.0).round() / 16.0;
@@ -481,6 +501,34 @@ fn anchor_flow_cells(
         }
     }
     cells
+}
+
+/// Position along the segment from `first` to `second` where the
+/// perpendicular cut leaves `target` of the contour's area on `first`'s side.
+/// The target stays between 20% and 80% so neither flow loses its room.
+fn area_share(contour: &[(f32, f32)], first: (f32, f32), second: (f32, f32), target: f32) -> f32 {
+    let total = polygon_area(contour).abs();
+    let normal = (second.0 - first.0, second.1 - first.1);
+    if total <= f32::EPSILON || normal.0 * normal.0 + normal.1 * normal.1 <= f32::EPSILON {
+        return 0.5;
+    }
+    let side = |share: f32| {
+        let point = (first.0 + normal.0 * share, first.1 + normal.1 * share);
+        let offset = normal.0 * point.0 + normal.1 * point.1;
+        polygon_area(&clip_half_plane(contour, normal, offset)).abs() / total
+    };
+    let target = target.clamp(0.2, 0.8);
+    // The cut may pass beyond either anchor when the texts differ a lot.
+    let (mut lower, mut upper) = (-4.0_f32, 5.0_f32);
+    for _ in 0..32 {
+        let middle = (lower + upper) * 0.5;
+        if side(middle) < target {
+            lower = middle;
+        } else {
+            upper = middle;
+        }
+    }
+    (lower + upper) * 0.5
 }
 
 fn polygon_bounds(polygon: &[(f32, f32)]) -> Option<(f32, f32, f32, f32)> {
@@ -1270,7 +1318,7 @@ mod tests {
         let anchors = [(25.0, 40.0), (75.0, 40.0)];
         let cells = flow_cells(frame, &contour, &anchors, &[30.0, 10.0]);
         let area = |cell: &[(f32, f32)]| polygon_area(cell).abs();
-        assert!((area(&cells[0]) - 100.0 * 80.0 * 0.625).abs() < 1.0);
+        assert!((area(&cells[0]) - 100.0 * 80.0 * 0.75).abs() < 1.0);
         assert!((area(&cells[0]) + area(&cells[1]) - 100.0 * 80.0).abs() < 1.0);
     }
 
