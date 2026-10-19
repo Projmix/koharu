@@ -245,7 +245,6 @@ impl Renderer {
         previous: Option<&Frame>,
         affected: Option<&AffectedDependencies>,
     ) -> Result<Frame> {
-        let compiled = self.share_balloon_sizes(compiled).await?;
         let mut nodes = vec![None; compiled.layers.len()];
         let mut pending = Vec::new();
         let mut reused = 0;
@@ -334,72 +333,6 @@ impl Renderer {
         workers
             .spawn_async(move || assemble_frame(compiled, nodes, stats))
             .await
-    }
-
-    /// Texts flowing into one balloon take one font size, as a letterer sets
-    /// a balloon: each fits its own cell first, and all of them are then
-    /// capped at the smallest of those sizes.
-    async fn share_balloon_sizes(&self, mut compiled: CompiledPage) -> Result<CompiledPage> {
-        let mut groups: HashMap<EntityId, Vec<usize>> = HashMap::new();
-        for (index, draft) in compiled.layers.iter().enumerate() {
-            if let Some(balloon) = draft.shared_balloon {
-                groups.entry(balloon).or_default().push(index);
-            }
-        }
-        groups.retain(|_, members| members.len() > 1);
-        if groups.is_empty() {
-            return Ok(compiled);
-        }
-        let members = groups
-            .values()
-            .flatten()
-            .map(|&index| (index, compiled.layers[index].descriptor.clone()))
-            .collect::<Vec<_>>();
-        self.inner
-            .fonts
-            .prepare(&font_requests(&members))
-            .await
-            .map_err(Error::FontResource)?;
-        let fonts = self.inner.fonts.clone();
-        let fitted = self
-            .workers()?
-            .spawn_async(move || {
-                members
-                    .into_par_iter()
-                    .filter_map(|(index, descriptor)| match descriptor {
-                        NodeDescriptor::Text(text) => Some((index, text)),
-                        NodeDescriptor::Image(_) => None,
-                    })
-                    .map(|(index, text)| {
-                        TextRenderer::new()
-                            .render_descriptor(&text, &fonts)
-                            .map(|rendered| (index, rendered.metadata.font_size))
-                    })
-                    .collect::<Result<HashMap<_, _>>>()
-            })
-            .await?;
-        for members in groups.values() {
-            let sizes = members
-                .iter()
-                .filter_map(|index| fitted.get(index).copied())
-                .collect::<Vec<_>>();
-            let (Some(smallest), Some(largest)) = (
-                sizes.iter().copied().reduce(f32::min),
-                sizes.iter().copied().reduce(f32::max),
-            ) else {
-                continue;
-            };
-            // Texts in one balloon read as one voice, so they share the
-            // smallest fitted size. A cell that is pathologically small must
-            // not drag its neighbours below three quarters of the largest fit.
-            let shared = smallest.max(largest * 0.75);
-            for &index in members {
-                if let NodeDescriptor::Text(text) = &mut compiled.layers[index].descriptor {
-                    text.automatic_ceiling = text.automatic_ceiling.min(shared);
-                }
-            }
-        }
-        Ok(compiled)
     }
 
     fn workers(&self) -> Result<Arc<rayon::ThreadPool>> {
@@ -529,8 +462,6 @@ struct LayerDraft {
     descriptor: NodeDescriptor,
     metadata: DraftMetadata,
     dependencies: Arc<[RenderDependency]>,
-    /// Balloon whose auto-fitted texts share one font size.
-    shared_balloon: Option<EntityId>,
 }
 
 #[derive(Clone)]
@@ -836,10 +767,6 @@ impl Traversal<'_> {
         } else {
             self.fit(entity, dependencies)?
         };
-        let shared_balloon = placement
-            .as_ref()
-            .and_then(|placement| placement.shared_balloon)
-            .filter(|_| authored.is_none());
         let (geometry, frame, balloon_contour) = if let Some(geometry) = authored {
             let Some(frame) = geometry_frame(&geometry, layout.angle_degrees) else {
                 return Ok(None);
@@ -946,8 +873,6 @@ impl Traversal<'_> {
             frame,
             presentation,
             ancestry,
-            shared_balloon: shared_balloon
-                .filter(|_| descriptor.auto_fit && !descriptor.point_text),
             descriptor: NodeDescriptor::Text(Box::new(descriptor)),
             metadata: DraftMetadata::Text {
                 text,
@@ -984,7 +909,6 @@ impl Traversal<'_> {
             frame,
             balloon_contour: None,
             dependencies: Arc::from([]),
-            shared_balloon: None,
         }))
     }
 
@@ -1012,7 +936,6 @@ impl Traversal<'_> {
             geometry,
             frame,
             dependencies: Arc::from([]),
-            shared_balloon: None,
         }))
     }
 }
@@ -1023,8 +946,6 @@ struct ResolvedPlacement {
     frame: GeometryFrame,
     balloon_contour: Option<Vec<(f32, f32)>>,
     dependencies: Arc<[RenderDependency]>,
-    /// The balloon this placement shares with other texts.
-    shared_balloon: Option<EntityId>,
 }
 
 struct BalloonFlowPlan {
@@ -1161,7 +1082,6 @@ fn resolve_balloon_flows(snapshot: &Snapshot, page: EntityId) -> Result<BalloonF
                     geometry,
                     frame,
                     dependencies: dependencies.clone(),
-                    shared_balloon: cells.is_some().then_some(balloon),
                 },
             );
         }
@@ -1232,7 +1152,6 @@ fn image_draft(
         descriptor: NodeDescriptor::Image(descriptor),
         metadata: DraftMetadata::Image(metadata),
         dependencies: dependencies.iter().cloned().collect(),
-        shared_balloon: None,
     })
 }
 
