@@ -202,6 +202,37 @@ pub struct TextLayout<'a> {
 /// at least this much size over whole words.
 const HYPHENATION_SIZE_GAIN: f32 = 1.25;
 
+/// See `TextLayout::balance_comic_lines`.
+const SHORT_INNER_LINE_FACTOR: f32 = 0.9;
+const BALANCE_MIN_SIZE_RATIO: f32 = 0.8;
+const BALANCE_PROBE_STEP: f32 = 0.5;
+const SHORT_LINE_MAX_LETTERS: usize = 2;
+
+/// Lines other than the first and last that hold at most `SHORT_LINE_MAX_LETTERS`
+/// letters and end a word: «и», or the «то» a break leaves after «том-».
+fn short_inner_lines(text: &str, layout: &LayoutRun<'_>) -> usize {
+    let count = layout.lines.len();
+    if count < 3 {
+        return 0;
+    }
+    layout.lines[1..count - 1]
+        .iter()
+        .filter(|line| {
+            let ends_word = text[line.range.end..]
+                .chars()
+                .next()
+                .is_none_or(char::is_whitespace)
+                && !text[line.range.clone()].trim_end().ends_with('-');
+            ends_word
+                && text[line.range.clone()]
+                    .chars()
+                    .filter(|character| character.is_alphanumeric())
+                    .count()
+                    <= SHORT_LINE_MAX_LETTERS
+        })
+        .count()
+}
+
 /// Words a layout breaks across lines, not counting breaks after a hyphen
 /// already in the text.
 fn layout_split_words(text: &str, layout: &LayoutRun<'_>) -> usize {
@@ -429,12 +460,15 @@ impl<'a> TextLayout<'a> {
                         fits(layout) && layout_split_words(text, layout) <= 1
                     };
                     let target = clean.font_size * HYPHENATION_SIZE_GAIN;
-                    return Ok(
-                        match self.largest_fitting(text, clean.font_size, maximum, single_split)? {
-                            Some(hyphenated) if hyphenated.font_size >= target => hyphenated,
-                            _ => clean,
-                        },
-                    );
+                    return match self.largest_fitting(
+                        text,
+                        clean.font_size,
+                        maximum,
+                        single_split,
+                    )? {
+                        Some(hyphenated) if hyphenated.font_size >= target => Ok(hyphenated),
+                        _ => unhyphenated.balance_comic_lines(text, clean, minimum, fits),
+                    };
                 }
                 // Avoiding a word break is no longer useful once it pins the text to
                 // the configured readability floor. Compare raster-size buckets so
@@ -453,6 +487,40 @@ impl<'a> TextLayout<'a> {
             return Ok(best);
         }
         self.run_with_size(text, minimum)
+    }
+
+    /// Fork divergence: the largest fitting size in a narrow balloon often stacks
+    /// one short word per line («В / том- / то / и / дело.»), where the owner sets a
+    /// slightly smaller size in fewer, even lines («В том-то / и дело.»). A short
+    /// line between two others costs `SHORT_INNER_LINE_FACTOR` of the size; the top
+    /// and bottom lines of a balloon are narrow anyway and stay free.
+    fn balance_comic_lines(
+        &self,
+        text: &str,
+        largest: LayoutRun<'a>,
+        minimum: f32,
+        fits: impl Fn(&LayoutRun<'a>) -> bool,
+    ) -> Result<LayoutRun<'a>> {
+        if self.comic_balloon.is_none() {
+            return Ok(largest);
+        }
+        let score = |layout: &LayoutRun<'_>| {
+            layout.font_size * SHORT_INNER_LINE_FACTOR.powi(short_inner_lines(text, layout) as i32)
+        };
+        let lowest = (largest.font_size * BALANCE_MIN_SIZE_RATIO).max(minimum);
+        let mut best_score = score(&largest);
+        let mut best = largest;
+        let mut size = best.font_size - BALANCE_PROBE_STEP;
+        while size >= lowest && size > best_score {
+            let candidate = self.run_with_size(text, size)?;
+            let candidate_score = score(&candidate);
+            if fits(&candidate) && candidate_score > best_score {
+                best_score = candidate_score;
+                best = candidate;
+            }
+            size -= BALANCE_PROBE_STEP;
+        }
+        Ok(best)
     }
 
     fn largest_fitting(
@@ -2107,6 +2175,16 @@ fn comic_break_penalty(text: &str, boundary: usize) -> f32 {
         Some(',' | ';' | ':' | '—' | '–') => return 20.0,
         _ => {}
     }
+    // Russian typesetting keeps a particle such as «-то» or «-ка» with its word: a
+    // break at a hyphen must not leave a tail of one or two letters.
+    if before.len() == boundary && before.ends_with('-') {
+        let tail = after
+            .find(|character: char| !character.is_alphabetic())
+            .map_or(after, |end| &after[..end]);
+        if tail.chars().count() <= 2 && !after[tail.len()..].starts_with('-') {
+            return 1_000.0;
+        }
+    }
     let next_word = after
         .split(|character: char| !character.is_ascii_alphabetic())
         .next()
@@ -2152,10 +2230,12 @@ fn binds_to_next_word(text: &str, range: Range<usize>, next_offset: usize) -> bo
         .chars()
         .next_back()
         .is_none_or(char::is_whitespace);
+    // A chain of one-letter words («и в будущем») binds through to the real word.
     let next_word_letters = text[next_offset.min(text.len())..]
         .split_whitespace()
-        .next()
-        .map_or(0, |word| word.chars().filter(|c| c.is_alphabetic()).count());
+        .map(|word| word.chars().filter(|c| c.is_alphabetic()).count())
+        .find(|&letters| letters != 1)
+        .unwrap_or(0);
     one_letter && starts_word && next_word_letters > 1
 }
 
@@ -2464,6 +2544,7 @@ mod tests {
     #[test]
     fn a_one_letter_word_never_ends_a_line_with_other_words() {
         assert!(binds_to_next_word("Секс в тачке.", 9..12, 12));
+        assert!(binds_to_next_word("и в будущем.", 0..3, 3));
         assert!(!binds_to_next_word("Х л ю п", 3..6, 6));
         assert!(!binds_to_next_word("…А вообще", 3..6, 6));
         let word = |advance: f32, binds_to_next: bool| LineBreakMeasure {
@@ -2857,6 +2938,38 @@ mod tests {
         assert_eq!(chosen.lines.len(), 2);
         assert_eq!(layout_split_words("prosperity", &chosen), 1);
         assert!(chosen.font_size >= clean.font_size * HYPHENATION_SIZE_GAIN);
+        Ok(())
+    }
+
+    #[test]
+    fn comic_auto_fit_trades_a_little_size_for_fewer_lone_short_words() -> anyhow::Result<()> {
+        const WIDTH: f32 = 110.0;
+        const HEIGHT: f32 = 160.0;
+        let font = any_system_font();
+        let text = "В том-то и дело.";
+        let layout = |policy| {
+            TextLayout::new(&font)
+                .with_min_font_size(9.0)
+                .with_max_font_size(60.0)
+                .with_hyphenation_policy(policy)
+                .with_alignment(TextAlign::Center)
+                .with_max_width(WIDTH)
+                .with_max_height(HEIGHT)
+                .with_comic_balloon(
+                    WIDTH,
+                    HEIGHT,
+                    vec![(0.0, 0.0), (WIDTH, 0.0), (WIDTH, HEIGHT), (0.0, HEIGHT)],
+                    0.0,
+                )
+                .run(text)
+        };
+        let largest = layout(HyphenationPolicy::Disabled)?;
+        let chosen = layout(HyphenationPolicy::LastResort)?;
+
+        assert!(short_inner_lines(text, &largest) > 0);
+        assert_eq!(short_inner_lines(text, &chosen), 0);
+        assert!(chosen.lines.len() < largest.lines.len());
+        assert!(chosen.font_size >= largest.font_size * BALANCE_MIN_SIZE_RATIO);
         Ok(())
     }
 
