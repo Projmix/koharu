@@ -561,9 +561,33 @@ fn link_dialogue_regions(
     regions: &PageRegions<'_>,
     generation: &Generation,
 ) -> Result<()> {
-    for text in &regions.texts {
+    let containing = regions
+        .texts
+        .iter()
+        .map(|text| containing_bubble(&regions.bubbles, text).map(|bubble| bubble.entity))
+        .collect::<Vec<_>>();
+    for (text, bubble_entity) in regions.texts.iter().zip(&containing) {
         if text.role == ONOMATOPOEIA_ROLE {
-            edit.relate::<FitsTo>(text.layer, text.entity)?;
+            // Fork divergence: a sound effect that is the only text in a balloon
+            // (often a dark balloon with light lettering) lays out in that balloon,
+            // keeping its role. One sharing a balloon with dialogue stays fitted to
+            // its own region so it does not take a share of the speech.
+            let alone = bubble_entity.is_some_and(|bubble| {
+                containing
+                    .iter()
+                    .filter(|other| **other == Some(bubble))
+                    .count()
+                    == 1
+            });
+            match bubble_entity {
+                Some(bubble) if alone => {
+                    edit.relate::<Inside>(text.entity, *bubble)?;
+                    edit.relate::<FlowsIn>(text.layer, *bubble)?;
+                }
+                _ => {
+                    edit.relate::<FitsTo>(text.layer, text.entity)?;
+                }
+            }
             continue;
         }
         let bubble = containing_bubble(&regions.bubbles, text);
@@ -2828,78 +2852,91 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn onomatopoeia_is_ocr_text_but_not_balloon_dialogue() {
-        let mut session = Session::memory().await.unwrap();
-        let detected = |label: &str| KoharuLayoutDetection {
-            label_id: 0,
-            label: label.to_owned(),
-            score: 1.0,
-            bbox: [10.0, 10.0, 20.0, 20.0],
-            area: 1,
-            mask: KoharuLayoutMask {
-                x: 0,
-                y: 0,
-                width: 1,
-                height: 1,
-                pixels: vec![u8::MAX],
-            },
-        };
-        let bubble_detection = detected("bubble");
-        let sound_effect_detection = detected("onomatopoeia");
-        let generation = generation(super::PRODUCER, super::OUTPUT_MODEL_ID).unwrap();
-        let mut ids = None;
-        let patch = session
-            .snapshot()
-            .patch(|edit| {
-                let page = edit.add_page(PageDraft::new("page", 100.0, 100.0), At::End)?;
-                let RegionOutput::Bubble(bubble) =
-                    write_region(edit, page, &bubble_detection, None, &generation).unwrap()
-                else {
-                    panic!("expected a bubble region");
-                };
-                let RegionOutput::Text(text) =
-                    write_region(edit, page, &sound_effect_detection, None, &generation).unwrap()
-                else {
-                    panic!("expected an OCR text region");
-                };
-                ids = Some((text.entity, text.content, text.layer));
-                link_dialogue_regions(
-                    edit,
-                    &PageRegions {
-                        bubbles: vec![bubble],
-                        texts: vec![text],
-                    },
-                    &generation,
-                )
+    async fn onomatopoeia_flows_in_a_balloon_only_when_it_is_the_balloons_only_text() {
+        for with_dialogue in [false, true] {
+            let mut session = Session::memory().await.unwrap();
+            let detected = |label: &str| KoharuLayoutDetection {
+                label_id: 0,
+                label: label.to_owned(),
+                score: 1.0,
+                bbox: [0.0, 0.0, 1.0, 1.0],
+                area: 1,
+                mask: KoharuLayoutMask {
+                    x: 0,
+                    y: 0,
+                    width: 1,
+                    height: 1,
+                    pixels: vec![u8::MAX],
+                },
+            };
+            let bubble_detection = detected("bubble");
+            let sound_effect_detection = detected("onomatopoeia");
+            let dialogue_detection = detected("text");
+            let generation = generation(super::PRODUCER, super::OUTPUT_MODEL_ID).unwrap();
+            let mut ids = None;
+            let patch = session
+                .snapshot()
+                .patch(|edit| {
+                    let page = edit.add_page(PageDraft::new("page", 100.0, 100.0), At::End)?;
+                    let RegionOutput::Bubble(bubble) =
+                        write_region(edit, page, &bubble_detection, None, &generation).unwrap()
+                    else {
+                        panic!("expected a bubble region");
+                    };
+                    let RegionOutput::Text(text) =
+                        write_region(edit, page, &sound_effect_detection, None, &generation)
+                            .unwrap()
+                    else {
+                        panic!("expected an OCR text region");
+                    };
+                    ids = Some((text.entity, text.content, text.layer, bubble.entity));
+                    let mut texts = vec![text];
+                    if with_dialogue {
+                        let RegionOutput::Text(dialogue) =
+                            write_region(edit, page, &dialogue_detection, None, &generation)
+                                .unwrap()
+                        else {
+                            panic!("expected an OCR text region");
+                        };
+                        texts.push(dialogue);
+                    }
+                    link_dialogue_regions(
+                        edit,
+                        &PageRegions {
+                            bubbles: vec![bubble],
+                            texts,
+                        },
+                        &generation,
+                    )
+                    .unwrap();
+                    Ok(())
+                })
                 .unwrap();
-                Ok(())
-            })
-            .unwrap();
-        let snapshot = session.commit(patch).await.unwrap().snapshot;
-        let (region, content, layer) = ids.unwrap();
+            let snapshot = session.commit(patch).await.unwrap().snapshot;
+            let (region, content, layer, bubble) = ids.unwrap();
 
-        assert_eq!(
-            snapshot.component::<Region>(region).unwrap().unwrap().kind,
-            TextRegion::kind()
-        );
-        assert_eq!(
-            snapshot
-                .component::<TextRole>(content)
+            assert_eq!(
+                snapshot
+                    .component::<TextRole>(content)
+                    .unwrap()
+                    .unwrap()
+                    .role,
+                ONOMATOPOEIA_ROLE
+            );
+            let flows_in = snapshot
+                .relation_from::<FlowsIn>(layer)
                 .unwrap()
-                .unwrap()
-                .role,
-            ONOMATOPOEIA_ROLE
-        );
-        assert!(snapshot.relation_from::<FlowsIn>(layer).unwrap().is_none());
-        assert_eq!(
-            snapshot
+                .map(|relation| relation.value().target);
+            let fits_to = snapshot
                 .relation_from::<FitsTo>(layer)
                 .unwrap()
-                .unwrap()
-                .value()
-                .target,
-            region
-        );
+                .map(|relation| relation.value().target);
+            if with_dialogue {
+                assert_eq!((flows_in, fits_to), (None, Some(region)));
+            } else {
+                assert_eq!((flows_in, fits_to), (Some(bubble), None));
+            }
+        }
     }
 
     fn detection(label: &str, score: f32, bbox: [f32; 4]) -> KoharuLayoutDetection {
