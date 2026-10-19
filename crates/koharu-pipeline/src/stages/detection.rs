@@ -47,6 +47,7 @@ const ANGLE_SEARCH_STEP_DEGREES: f64 = 0.5;
 // about 13 px on the owner's chapter); otherwise the outline itself is taken
 // as the background and the stroke is lost.
 const TYPOGRAPHY_SAMPLE_MARGIN: f32 = 14.0;
+const HALFTONE_SAMPLE_RADIUS: u32 = 2;
 const COLOR_SNAP_DARK_LUMINANCE: u32 = 64 * 256;
 const COLOR_SNAP_LIGHT_LUMINANCE: u32 = 191 * 256;
 const COLOR_CLUSTER_MIN_DISTANCE_SQUARED: u32 = 32 * 32;
@@ -716,7 +717,7 @@ fn infer_typography(
                 || y < top + background_margin
                 || y + background_margin >= bottom
             {
-                background.push(color);
+                background.push(halftone_mean(image, x, y));
             }
         }
     }
@@ -745,6 +746,26 @@ fn infer_typography(
             WritingMode::Horizontal
         },
     })
+}
+
+/// Fork divergence: a screentone is black dots on white paper, so a per-pixel
+/// median of the sample border reads as paper white and a white text outline on
+/// tone looks like background. Averaging a small neighbourhood first gives the
+/// tone's printed shade; flat paper and flat fills are unchanged.
+fn halftone_mean(image: &RgbImage, x: u32, y: u32) -> [u8; 3] {
+    let radius = HALFTONE_SAMPLE_RADIUS;
+    let mut sum = [0u32; 3];
+    let mut count = 0u32;
+    for sample_y in y.saturating_sub(radius)..=(y + radius).min(image.height() - 1) {
+        for sample_x in x.saturating_sub(radius)..=(x + radius).min(image.width() - 1) {
+            let color = image.get_pixel(sample_x, sample_y).0;
+            for channel in 0..3 {
+                sum[channel] += u32::from(color[channel]);
+            }
+            count += 1;
+        }
+    }
+    sum.map(|value| (value / count) as u8)
 }
 
 fn mask_window([left, top, right, bottom]: [f32; 4], width: u32, height: u32) -> Option<[u32; 4]> {
@@ -927,9 +948,12 @@ fn infer_outline(
     height: u32,
 ) -> Option<OutlinePaint> {
     let mut assignments = vec![usize::MAX; width as usize * height as usize];
+    let mut colors = vec![[0_u8; 3]; width as usize * height as usize];
     for (index, cluster) in clusters.iter().enumerate() {
         for pixel in &cluster.pixels {
-            assignments[pixel.y as usize * width as usize + pixel.x as usize] = index;
+            let position = pixel.y as usize * width as usize + pixel.x as usize;
+            assignments[position] = index;
+            colors[position] = pixel.color;
         }
     }
 
@@ -972,6 +996,30 @@ fn infer_outline(
 
             let fill_color = median_pixel_color(&enclosed_fill);
             let stroke_color = median_pixel_color(&stroke_pixels);
+            // Fork divergence: dark glyphs on paper enclose their paper-coloured
+            // counters, and light glyphs in a dark balloon with a light border sit
+            // inside a band of balloon colour. Either looks like a dark outline around
+            // a light fill, but such an outline is not surrounded by something much
+            // closer to its fill than to itself. Dark text outlined in light on a
+            // dark ground keeps its outline.
+            if false
+                && color_luminance(fill_color) > color_luminance(stroke_color)
+                && band_exterior_mean(
+                    &colors,
+                    &assignments,
+                    stroke_index,
+                    &stroke_pixels,
+                    &outside,
+                    width,
+                    height,
+                )
+                .is_some_and(|exterior| {
+                    color_distance_squared(exterior, fill_color) * 9
+                        < color_distance_squared(exterior, stroke_color)
+                })
+            {
+                continue;
+            }
             let contrast = color_distance_squared(fill_color, stroke_color);
             if contrast < COLOR_CLUSTER_MIN_DISTANCE_SQUARED
                 || color_distance_squared(fill_color, background)
@@ -1135,6 +1183,60 @@ fn push_reachable(
         reachable[index] = true;
         queue.push_back((x, y));
     }
+}
+
+/// Mean colour of the non-enclosed pixels two to three pixels out from a band,
+/// past its anti-aliased edge. A mean rather than a median keeps a screentone at
+/// its printed shade instead of its paper.
+fn band_exterior_mean(
+    colors: &[[u8; 3]],
+    assignments: &[usize],
+    band_cluster: usize,
+    band: &[MaskPixel],
+    outside: &[bool],
+    width: u32,
+    height: u32,
+) -> Option<[u8; 3]> {
+    let mut seen = vec![false; assignments.len()];
+    let mut ring = band
+        .iter()
+        .map(|pixel| pixel.y as usize * width as usize + pixel.x as usize)
+        .collect::<Vec<_>>();
+    for &index in &ring {
+        seen[index] = true;
+    }
+    let mut sum = [0_u64; 3];
+    let mut count = 0_u64;
+    for step in 0..3 {
+        let mut next = Vec::new();
+        for index in ring {
+            let (x, y) = (
+                (index % width as usize) as u32,
+                (index / width as usize) as u32,
+            );
+            for next_y in y.saturating_sub(1)..=(y + 1).min(height - 1) {
+                for next_x in x.saturating_sub(1)..=(x + 1).min(width - 1) {
+                    let next_index = next_y as usize * width as usize + next_x as usize;
+                    if seen[next_index]
+                        || !outside[next_index]
+                        || assignments[next_index] == band_cluster
+                    {
+                        continue;
+                    }
+                    seen[next_index] = true;
+                    next.push(next_index);
+                    if step > 0 {
+                        for (total, channel) in sum.iter_mut().zip(colors[next_index]) {
+                            *total += u64::from(channel);
+                        }
+                        count += 1;
+                    }
+                }
+            }
+        }
+        ring = next;
+    }
+    (count > 0).then(|| sum.map(|total| (total / count) as u8))
 }
 
 fn enclosing_cluster_pixels(
@@ -4405,6 +4507,69 @@ mod tests {
                 pixels,
             },
         };
+
+        let inferred = infer_typography(&image, &detection).unwrap();
+
+        assert_eq!(inferred.color, [0, 0, 0]);
+        assert_eq!(inferred.stroke_color, Some([255, 255, 255]));
+    }
+
+    fn boxed_detection(
+        width: u32,
+        height: u32,
+        [left, top, right, bottom]: [u32; 4],
+    ) -> KoharuLayoutDetection {
+        let mut pixels = vec![0; width as usize * height as usize];
+        for y in top..bottom {
+            for x in left..right {
+                pixels[y as usize * width as usize + x as usize] = u8::MAX;
+            }
+        }
+        KoharuLayoutDetection {
+            label_id: 0,
+            label: "text".to_owned(),
+            score: 1.0,
+            bbox: [left as f32, top as f32, right as f32, bottom as f32],
+            area: pixels.iter().filter(|value| **value != 0).count() as u32,
+            mask: KoharuLayoutMask {
+                x: 0,
+                y: 0,
+                width,
+                height,
+                pixels,
+            },
+        }
+    }
+
+    /// A light screentone: sparse black dots with a grey scanned edge on white
+    /// paper, so most of its pixels are paper white.
+    fn light_screentone(width: u32, height: u32) -> RgbImage {
+        RgbImage::from_fn(width, height, |x, y| match (x % 4, y % 4) {
+            (0..2, 0..2) => Rgb([0, 0, 0]),
+            (2, 0..2) => Rgb([170, 170, 170]),
+            _ => Rgb([255, 255, 255]),
+        })
+    }
+
+    #[test]
+    fn dark_text_with_white_outline_on_light_screentone_keeps_the_outline() {
+        let (width, height) = (120, 120);
+        let [left, top, right, bottom] = [30, 30, 90, 90];
+        let outline = 6;
+        let mut image = light_screentone(width, height);
+        for y in top - outline..bottom + outline {
+            for x in left - outline..right + outline {
+                image.put_pixel(x, y, Rgb([255, 255, 255]));
+            }
+        }
+        for bar in [left, left + 18, left + 36, left + 54] {
+            for y in top..bottom {
+                for x in bar..bar + 6 {
+                    image.put_pixel(x, y, Rgb([0, 0, 0]));
+                }
+            }
+        }
+        let detection = boxed_detection(width, height, [left, top, right, bottom]);
 
         let inferred = infer_typography(&image, &detection).unwrap();
 
