@@ -9,7 +9,7 @@ use hypher::Lang;
 use icu_normalizer::ComposingNormalizerBorrowed;
 use icu_properties::{
     CodePointMapData,
-    props::{GeneralCategory, GeneralCategoryGroup},
+    props::{GeneralCategory, GeneralCategoryGroup, Script},
 };
 use skrifa::{MetadataProvider, instance::Size};
 
@@ -122,6 +122,7 @@ struct ShapedSegment<'a> {
     advance: f32,
     trailing_advance: f32,
     break_penalty: f32,
+    binds_to_next: bool,
     break_suffix: Option<ShapedBreakSuffix<'a>>,
 }
 
@@ -132,6 +133,9 @@ struct LineBreakMeasure {
     break_suffix_advance: f32,
     break_penalty: f32,
     is_mandatory: bool,
+    /// A one-letter Cyrillic word such as «в» or «я» followed by a real word. It may
+    /// stand alone on a line but never ends a line that has other words.
+    binds_to_next: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -680,6 +684,8 @@ impl<'a> TextLayout<'a> {
                     }
                 })
                 .sum();
+            let binds_to_next = !segment.is_mandatory
+                && binds_to_next_word(text, segment.range.clone(), segment.next_offset);
             shaped_segments.push(ShapedSegment {
                 range: segment.range,
                 visible_end,
@@ -693,6 +699,7 @@ impl<'a> TextLayout<'a> {
                 } else {
                     0.0
                 },
+                binds_to_next,
                 break_suffix: segment_break_suffix,
             });
         }
@@ -1036,6 +1043,7 @@ impl<'a> TextLayout<'a> {
                     .map_or(0.0, |suffix| suffix.advance),
                 break_penalty: segment.break_penalty,
                 is_mandatory: segment.is_mandatory,
+                binds_to_next: segment.binds_to_next,
             })
             .collect::<Vec<_>>();
         let result = if let Some(balloon) = self.comic_balloon.as_ref() {
@@ -1509,7 +1517,9 @@ fn optimal_uniform_line_breaks(
             };
             let line_advance = advance - segments[end - 1].trailing_advance + suffix_advance;
             let hyphenated_break = end < len && suffix_advance > 0.0;
-            if hyphenated_break && !allow_hyphenation {
+            if hyphenated_break && !allow_hyphenation
+                || strands_one_letter_word(segments, start, end)
+            {
                 continue;
             }
             let mut cost = dp[start] + line_break_badness(line_advance, max_extent);
@@ -1691,7 +1701,9 @@ fn exact_profiled_line_breaks(
                     0.0
                 };
                 let hyphenated_break = end < len && suffix > 0.0;
-                if hyphenated_break && !allow_hyphenation {
+                if hyphenated_break && !allow_hyphenation
+                    || strands_one_letter_word(segments, start, end)
+                {
                     continue;
                 }
                 let line_advance = advance - segments[end - 1].trailing_advance + suffix;
@@ -2119,6 +2131,34 @@ fn comic_break_penalty(text: &str, boundary: usize) -> f32 {
     }
 }
 
+/// Fork divergence, following the Russian typesetting rule: a line that has other
+/// words never ends on a one-letter word. Koly's pages leave such a word alone on its
+/// own line in a narrow balloon, so that line stays allowed.
+fn strands_one_letter_word(segments: &[LineBreakMeasure], start: usize, end: usize) -> bool {
+    end < segments.len() && end - start > 1 && segments[end - 1].binds_to_next
+}
+
+/// Spaced-out letters («Х л ю п») have no word to bind to, and a letter glued to
+/// punctuation («…А») already shares its line with it; neither binds.
+fn binds_to_next_word(text: &str, range: Range<usize>, next_offset: usize) -> bool {
+    let is_cyrillic_letter = |letter: char| {
+        letter.is_alphabetic() && CodePointMapData::<Script>::new().get(letter) == Script::Cyrillic
+    };
+    let mut word = text[range.clone()].trim_end().chars();
+    let one_letter = word
+        .next()
+        .is_some_and(|letter| word.next().is_none() && is_cyrillic_letter(letter));
+    let starts_word = text[..range.start]
+        .chars()
+        .next_back()
+        .is_none_or(char::is_whitespace);
+    let next_word_letters = text[next_offset.min(text.len())..]
+        .split_whitespace()
+        .next()
+        .map_or(0, |word| word.chars().filter(|c| c.is_alphabetic()).count());
+    one_letter && starts_word && next_word_letters > 1
+}
+
 fn line_break_badness(line_advance: f32, max_extent: f32) -> f32 {
     if line_advance <= max_extent {
         (max_extent - line_advance).powi(3)
@@ -2413,11 +2453,32 @@ mod tests {
                 break_suffix_advance: 0.0,
                 break_penalty: 0.0,
                 is_mandatory: false,
+                binds_to_next: false,
             };
             7
         ];
 
         assert_eq!(optimal_line_breaks(&segments, 100.0), vec![2, 4, 7]);
+    }
+
+    #[test]
+    fn a_one_letter_word_never_ends_a_line_with_other_words() {
+        assert!(binds_to_next_word("Секс в тачке.", 9..12, 12));
+        assert!(!binds_to_next_word("Х л ю п", 3..6, 6));
+        assert!(!binds_to_next_word("…А вообще", 3..6, 6));
+        let word = |advance: f32, binds_to_next: bool| LineBreakMeasure {
+            advance,
+            trailing_advance: 0.0,
+            break_suffix_advance: 0.0,
+            break_penalty: 0.0,
+            is_mandatory: false,
+            binds_to_next,
+        };
+        // «сексом в / машине» would fill the first line best.
+        let segments = [word(60.0, false), word(20.0, true), word(60.0, false)];
+        assert_eq!(optimal_line_breaks(&segments, 80.0), vec![1, 3]);
+        // In a narrow column the word may stand alone on its own line.
+        assert_eq!(optimal_line_breaks(&segments, 60.0), vec![1, 2, 3]);
     }
 
     #[test]
@@ -2429,6 +2490,7 @@ mod tests {
                 break_suffix_advance: 0.0,
                 break_penalty: 0.0,
                 is_mandatory: false,
+                binds_to_next: false,
             },
             LineBreakMeasure {
                 advance: 40.0,
@@ -2436,6 +2498,7 @@ mod tests {
                 break_suffix_advance: 0.0,
                 break_penalty: 0.0,
                 is_mandatory: false,
+                binds_to_next: false,
             },
         ];
 
@@ -2854,6 +2917,7 @@ mod tests {
                 break_suffix_advance: 0.0,
                 break_penalty: 0.0,
                 is_mandatory: false,
+                binds_to_next: false,
             };
             5
         ];
@@ -2873,6 +2937,7 @@ mod tests {
             break_suffix_advance: 0.0,
             break_penalty: 0.0,
             is_mandatory: false,
+            binds_to_next: false,
         }; 4];
         let balloon = comic_balloon(
             100.0,
@@ -2925,6 +2990,7 @@ mod tests {
                 break_suffix_advance: 5.0,
                 break_penalty: 0.0,
                 is_mandatory: false,
+                binds_to_next: false,
             },
             LineBreakMeasure {
                 advance: 30.0,
@@ -2932,6 +2998,7 @@ mod tests {
                 break_suffix_advance: 0.0,
                 break_penalty: 0.0,
                 is_mandatory: false,
+                binds_to_next: false,
             },
         ];
         let unbroken =
@@ -2946,6 +3013,7 @@ mod tests {
                 break_suffix_advance: 10.0,
                 break_penalty: 0.0,
                 is_mandatory: false,
+                binds_to_next: false,
             },
             LineBreakMeasure {
                 advance: 55.0,
@@ -2953,6 +3021,7 @@ mod tests {
                 break_suffix_advance: 0.0,
                 break_penalty: 0.0,
                 is_mandatory: false,
+                binds_to_next: false,
             },
         ];
         let hyphenated =
@@ -3039,6 +3108,7 @@ mod tests {
             break_suffix_advance: if hyphen { 6.0 } else { 0.0 },
             break_penalty: 0.0,
             is_mandatory: false,
+            binds_to_next: false,
         };
         // "aaaa bbb|ccc dd": the middle word may split with a hyphen.
         let segments = [
@@ -3134,6 +3204,7 @@ mod tests {
                 break_suffix_advance: 0.0,
                 break_penalty: 0.0,
                 is_mandatory: true,
+                binds_to_next: false,
             },
             LineBreakMeasure {
                 advance: 20.0,
@@ -3141,6 +3212,7 @@ mod tests {
                 break_suffix_advance: 0.0,
                 break_penalty: 0.0,
                 is_mandatory: false,
+                binds_to_next: false,
             },
             LineBreakMeasure {
                 advance: 5.0,
@@ -3148,6 +3220,7 @@ mod tests {
                 break_suffix_advance: 0.0,
                 break_penalty: 0.0,
                 is_mandatory: false,
+                binds_to_next: false,
             },
         ];
         let profiles = vec![
@@ -3177,6 +3250,7 @@ mod tests {
                 break_suffix_advance: 5.0,
                 break_penalty: 0.0,
                 is_mandatory: false,
+                binds_to_next: false,
             },
             LineBreakMeasure {
                 advance: 25.0,
@@ -3184,6 +3258,7 @@ mod tests {
                 break_suffix_advance: 20.0,
                 break_penalty: 0.0,
                 is_mandatory: false,
+                binds_to_next: false,
             },
             LineBreakMeasure {
                 advance: 5.0,
@@ -3191,6 +3266,7 @@ mod tests {
                 break_suffix_advance: 0.0,
                 break_penalty: 0.0,
                 is_mandatory: false,
+                binds_to_next: false,
             },
         ];
 
