@@ -65,8 +65,9 @@ const PAGE_NUMBER_MAX_WIDTH_FRACTION: f32 = 0.016;
 const PAGE_NUMBER_MAX_HEIGHT_FRACTION: f32 = 0.035;
 const PAGE_NUMBER_MARGIN_FRACTION: f32 = 0.15;
 const DARK_BALLOON_LUMINANCE: u8 = 96;
-const DARK_BALLOON_RING_FRACTION: f32 = 0.9;
-const DARK_BALLOON_MIN_GROWTH: f32 = 1.15;
+const DARK_BALLOON_CORE_FRACTION: f32 = 0.5;
+const DARK_BALLOON_TEXT_SPAN: f32 = 0.8;
+const DARK_BALLOON_MIN_LETTERING: f32 = 0.03;
 const FREE_TEXT_ROLE: &str = "dev.koharu.text.free-text";
 const DIALOGUE_ROLE: &str = "dev.koharu.text.dialogue";
 const ONOMATOPOEIA_ROLE: &str = "dev.koharu.text.onomatopoeia";
@@ -1736,10 +1737,12 @@ fn closed_mask_for(
 }
 
 /// Balloons with a dark fill and light lettering that the layout model did
-/// not report. A text box whose surrounding ring is dark is grown by flood fill
-/// over dark pixels; the fill must close inside a window around the text, or
-/// it is page background rather than a balloon. Light balloons are left to the
-/// model, since a light fill cannot be told from the page's own paper.
+/// not report. The dark pixels in the middle of a text box are grown by flood
+/// fill over dark pixels; the fill must close inside a window around the text,
+/// or it is page background rather than a balloon. Seeds come from the middle
+/// of the box because a narrow balloon's rim crosses the box's own edge, and a
+/// seed beyond the rim would leak into the page. Light balloons are left to
+/// the model, since a light fill cannot be told from the page's own paper.
 fn dark_balloons(
     image: &RgbImage,
     detections: &[KoharuLayoutDetection],
@@ -1771,7 +1774,6 @@ fn dark_balloon(image: &RgbImage, bbox: [f32; 4]) -> Option<KoharuLayoutDetectio
     let (width, height) = image.dimensions();
     let [left, top, right, bottom] = mask_window(bbox, width, height)?;
     let side = (right - left).max(bottom - top);
-    let ring = ((right - left).min(bottom - top) / 10).max(2);
     let reach = side + side / 2;
     let window = [
         left.saturating_sub(reach),
@@ -1788,37 +1790,33 @@ fn dark_balloon(image: &RgbImage, bbox: [f32; 4]) -> Option<KoharuLayoutDetectio
             (u32::from(red) * 299 + u32::from(green) * 587 + u32::from(blue) * 114) / 1000;
         luminance < u32::from(DARK_BALLOON_LUMINANCE)
     };
-    let in_box = |x: u32, y: u32| x >= left && x < right && y >= top && y < bottom;
 
+    let core_left = left + (right - left) / 4;
+    let core_right = right - (right - left) / 4;
+    let core_top = top + (bottom - top) / 4;
+    let core_bottom = bottom - (bottom - top) / 4;
     let mut seeds = Vec::new();
-    let mut ring_pixels = 0_u32;
-    for y in top.saturating_sub(ring)..(bottom + ring).min(height) {
-        for x in left.saturating_sub(ring)..(right + ring).min(width) {
-            if in_box(x, y) {
-                continue;
-            }
-            ring_pixels += 1;
+    let mut core_pixels = 0_u32;
+    for y in core_top..core_bottom {
+        for x in core_left..core_right {
+            core_pixels += 1;
             if dark(x, y) {
                 seeds.push((x, y));
             }
         }
     }
-    if ring_pixels == 0 {
+    if core_pixels == 0 {
         return None;
     }
-    // The share of dark ring pixels stands in for a model confidence.
-    let score = seeds.len() as f32 / ring_pixels as f32;
-    if score < DARK_BALLOON_RING_FRACTION {
+    // Light lettering on a dark fill leaves the middle of the box mostly
+    // dark. The share stands in for a model confidence.
+    let score = seeds.len() as f32 / core_pixels as f32;
+    if score < DARK_BALLOON_CORE_FRACTION {
         return None;
     }
 
     let index = |x: u32, y: u32| ((y - window_top) * local_width + (x - window_left)) as usize;
     let mut filled = vec![0_u8; (local_width * local_height) as usize];
-    for y in top..bottom {
-        for x in left..right {
-            filled[index(x, y)] = 1;
-        }
-    }
     let mut stack = seeds;
     for &(x, y) in &stack {
         filled[index(x, y)] = 1;
@@ -1847,11 +1845,9 @@ fn dark_balloon(image: &RgbImage, bbox: [f32; 4]) -> Option<KoharuLayoutDetectio
     }
 
     let (mut min_x, mut min_y, mut max_x, mut max_y) = (u32::MAX, u32::MAX, 0, 0);
-    let mut area = 0_u32;
     for local_y in 0..local_height {
         for local_x in 0..local_width {
             if filled[(local_y * local_width + local_x) as usize] != 0 {
-                area += 1;
                 min_x = min_x.min(local_x);
                 min_y = min_y.min(local_y);
                 max_x = max_x.max(local_x);
@@ -1859,20 +1855,71 @@ fn dark_balloon(image: &RgbImage, bbox: [f32; 4]) -> Option<KoharuLayoutDetectio
             }
         }
     }
-    let text_area = (right - left) * (bottom - top);
-    if (area as f32) < text_area as f32 * DARK_BALLOON_MIN_GROWTH {
-        return None;
-    }
     let mask_width = max_x - min_x + 1;
     let mask_height = max_y - min_y + 1;
-    let pixels = (min_y..=max_y)
+    let x = window_left + min_x;
+    let y = window_top + min_y;
+    // The balloon must span the text; a dark blob beside the lettering does
+    // not.
+    let span_width = right.min(x + mask_width).saturating_sub(left.max(x));
+    let span_height = bottom.min(y + mask_height).saturating_sub(top.max(y));
+    if ((span_width * span_height) as f32)
+        < ((right - left) * (bottom - top)) as f32 * DARK_BALLOON_TEXT_SPAN
+    {
+        return None;
+    }
+
+    // The lettering is a hole in the fill: everything the mask's border cannot
+    // reach without crossing the fill belongs to the balloon.
+    let mut pixels = (min_y..=max_y)
         .flat_map(|local_y| {
             let filled = &filled;
             (min_x..=max_x).map(move |local_x| filled[(local_y * local_width + local_x) as usize])
         })
-        .collect();
-    let x = window_left + min_x;
-    let y = window_top + min_y;
+        .collect::<Vec<_>>();
+    let mut outside = vec![false; pixels.len()];
+    let mut stack = Vec::new();
+    for mask_y in 0..mask_height {
+        for mask_x in 0..mask_width {
+            let border =
+                mask_x == 0 || mask_y == 0 || mask_x + 1 == mask_width || mask_y + 1 == mask_height;
+            let slot = (mask_y * mask_width + mask_x) as usize;
+            if border && pixels[slot] == 0 {
+                outside[slot] = true;
+                stack.push((mask_x, mask_y));
+            }
+        }
+    }
+    while let Some((mask_x, mask_y)) = stack.pop() {
+        let neighbors = [
+            (mask_x.wrapping_sub(1), mask_y),
+            (mask_x + 1, mask_y),
+            (mask_x, mask_y.wrapping_sub(1)),
+            (mask_x, mask_y + 1),
+        ];
+        for (next_x, next_y) in neighbors {
+            if next_x >= mask_width || next_y >= mask_height {
+                continue;
+            }
+            let slot = (next_y * mask_width + next_x) as usize;
+            if pixels[slot] == 0 && !outside[slot] {
+                outside[slot] = true;
+                stack.push((next_x, next_y));
+            }
+        }
+    }
+    let mut lettering = 0_u32;
+    for (pixel, outside) in pixels.iter_mut().zip(outside) {
+        if !outside && *pixel == 0 {
+            *pixel = 1;
+            lettering += 1;
+        }
+    }
+    let area = pixels.iter().map(|&pixel| u32::from(pixel)).sum::<u32>();
+    // A solid black mark, such as an anger symbol, has no light lettering.
+    if (lettering as f32) < area as f32 * DARK_BALLOON_MIN_LETTERING {
+        return None;
+    }
     Some(KoharuLayoutDetection {
         label_id: 0,
         label: "bubble".to_owned(),
@@ -4153,7 +4200,9 @@ mod tests {
         }
         for x in (80..120).step_by(8) {
             for y in 90..110 {
-                image.put_pixel(x, y, Rgb([250, 250, 250]));
+                for stroke in x..x + 3 {
+                    image.put_pixel(stroke, y, Rgb([250, 250, 250]));
+                }
             }
         }
         let balloons = dark_balloons(&image, &[text_detection([78, 88, 122, 112])]);
@@ -4166,10 +4215,51 @@ mod tests {
     }
 
     #[test]
+    fn narrow_dark_balloon_whose_rim_crosses_the_text_box_becomes_a_bubble() {
+        // A narrow black balloon with a white rim on a dark page. The text box
+        // is wider than the balloon near its tips, so its corners lie on the
+        // page beyond the rim.
+        let mut image = RgbImage::from_pixel(200, 200, Rgb([40, 40, 40]));
+        for y in 0..200_u32 {
+            for x in 0..200_u32 {
+                let dx = (x as f32 - 100.0) / 20.0;
+                let dy = (y as f32 - 100.0) / 50.0;
+                let distance = dx * dx + dy * dy;
+                if distance <= 1.0 {
+                    image.put_pixel(x, y, Rgb([20, 20, 20]));
+                } else if distance <= 1.4 {
+                    image.put_pixel(x, y, Rgb([255, 255, 255]));
+                }
+            }
+        }
+        for y in (80..120).step_by(10) {
+            for x in 94..106 {
+                for stroke in y..y + 3 {
+                    image.put_pixel(x, stroke, Rgb([250, 250, 250]));
+                }
+            }
+        }
+        let balloons = dark_balloons(&image, &[text_detection([82, 62, 118, 138])]);
+        assert_eq!(balloons.len(), 1);
+        let [left, top, right, bottom] = balloons[0].bbox;
+        assert!((left - 80.0).abs() <= 2.0 && (right - 120.0).abs() <= 2.0);
+        assert!((top - 50.0).abs() <= 2.0 && (bottom - 150.0).abs() <= 2.0);
+        assert!(balloons[0].mask.contains(100, 100));
+        assert!(!balloons[0].mask.contains(83, 63));
+    }
+
+    #[test]
     fn dark_background_and_light_paper_are_not_balloons() {
         let night = RgbImage::from_pixel(200, 200, Rgb([10, 10, 10]));
         assert!(dark_balloons(&night, &[text_detection([80, 90, 120, 110])]).is_empty());
-        let paper = RgbImage::from_pixel(200, 200, Rgb([255, 255, 255]));
+        let mut paper = RgbImage::from_pixel(200, 200, Rgb([255, 255, 255]));
+        assert!(dark_balloons(&paper, &[text_detection([80, 90, 120, 110])]).is_empty());
+        // A solid black mark with no light lettering inside.
+        for y in 85..115 {
+            for x in 75..125 {
+                paper.put_pixel(x, y, Rgb([10, 10, 10]));
+            }
+        }
         assert!(dark_balloons(&paper, &[text_detection([80, 90, 120, 110])]).is_empty());
     }
 
