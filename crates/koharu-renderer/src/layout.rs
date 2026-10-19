@@ -197,15 +197,21 @@ fn largest_fitting_font_size<T>(
     mut layout_at: impl FnMut(f32) -> Result<T>,
     fits: impl Fn(&T) -> bool,
 ) -> Result<Option<T>> {
-    const PROBES: usize = 8;
+    // Fitting is not monotonic in a balloon: a size that reflows into one more
+    // line of whole words can fit between two sizes that do not. Probing every
+    // half pixel keeps such windows from being skipped, which would otherwise
+    // push the text to the floor and into mid-word hyphenation.
+    const PROBE_STEP: f32 = 0.5;
+    const MIN_PROBES: usize = 8;
     if maximum - minimum <= f32::EPSILON {
         let candidate = layout_at(maximum)?;
         return Ok(fits(&candidate).then_some(candidate));
     }
-    let step = (maximum - minimum) / PROBES as f32;
+    let probes = (((maximum - minimum) / PROBE_STEP).ceil() as usize).max(MIN_PROBES);
+    let step = (maximum - minimum) / probes as f32;
     let mut larger_non_fit = None;
-    for probe in 0..=PROBES {
-        let size = if probe == PROBES {
+    for probe in 0..=probes {
+        let size = if probe == probes {
             minimum
         } else {
             maximum - step * probe as f32
@@ -2264,7 +2270,15 @@ mod tests {
         .expect("the larger fitting range should be found");
 
         assert!((11.99..=12.0).contains(&fitted));
-        assert!(calls.get() <= 18);
+        assert!(calls.get() <= 40);
+
+        // A whole-word reflow that fits only in a window narrower than the
+        // old coarse probe step must still be found above the floor.
+        let narrow = largest_fitting_font_size(9.0, 24.0, Ok, |size| {
+            (13.2..=13.6).contains(size) || *size <= 9.0
+        })?
+        .expect("the narrow fitting window should be found");
+        assert!((13.5..=13.6).contains(&narrow));
         Ok(())
     }
 
