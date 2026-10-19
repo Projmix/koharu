@@ -61,11 +61,14 @@ pub(crate) fn point_in_frame(frame: GeometryFrame, x: f32, y: f32) -> (f32, f32)
 ///
 /// Reflex-vertex diagonals recover the physical necks between lobes first. Source
 /// anchors assign those lobes to flows and only become the partition itself when
-/// the contour has no complete, non-crossing neck decomposition.
+/// the contour has no complete, non-crossing neck decomposition. In that
+/// fallback, `weights` (one per anchor, typically text length) move each
+/// bisector toward the flow with less text so the space follows the content.
 pub(crate) fn flow_cells(
     frame: GeometryFrame,
     contour: &[(f32, f32)],
     anchors: &[(f32, f32)],
+    weights: &[f32],
 ) -> Vec<Vec<(f32, f32)>> {
     if anchors.is_empty() {
         return Vec::new();
@@ -78,7 +81,7 @@ pub(crate) fn flow_cells(
         .map(|(x, y)| (x.clamp(0.0, width), y.clamp(0.0, height)))
         .collect::<Vec<_>>();
     topological_flow_cells(contour, &anchors)
-        .unwrap_or_else(|| anchor_flow_cells(width, height, contour, &anchors))
+        .unwrap_or_else(|| anchor_flow_cells(width, height, contour, &anchors, weights))
 }
 
 fn topological_flow_cells(
@@ -375,7 +378,15 @@ fn anchor_flow_cells(
     height: f32,
     contour: &[(f32, f32)],
     anchors: &[(f32, f32)],
+    weights: &[f32],
 ) -> Vec<Vec<(f32, f32)>> {
+    let weight = |index: usize| {
+        weights
+            .get(index)
+            .copied()
+            .filter(|weight| weight.is_finite() && *weight > 0.0)
+            .unwrap_or(1.0)
+    };
     let scale = width.min(height).max(1.0);
     let coincidence_distance_squared = (scale * 0.0025).powi(2);
     let mut clusters = Vec::<((f32, f32), Vec<usize>)>::new();
@@ -394,6 +405,10 @@ fn anchor_flow_cells(
         }
     }
 
+    let cluster_weights = clusters
+        .iter()
+        .map(|(_, indices)| indices.iter().map(|&index| weight(index)).sum::<f32>())
+        .collect::<Vec<_>>();
     let mut cells = vec![Vec::new(); anchors.len()];
     for (cluster_index, &((x, y), ref indices)) in clusters.iter().enumerate() {
         // The cell is the editable balloon shape, so fallback bisectors must
@@ -407,8 +422,20 @@ fn anchor_flow_cells(
             if cluster_index == other_index {
                 continue;
             }
+            // The split sits at this cluster's share of the anchor segment,
+            // kept between a quarter and three quarters so neither flow loses
+            // its lobe entirely.
+            let own = cluster_weights[cluster_index];
+            let share = (own / (own + cluster_weights[other_index])).clamp(0.25, 0.75);
+            // Snapping the split to 1/16 px keeps cell edges exactly
+            // representable, so dragging a cell is a pure translation.
+            let snap = |value: f32| (value * 16.0).round() / 16.0;
+            let split = (
+                snap(x + (other_x - x) * share),
+                snap(y + (other_y - y) * share),
+            );
             let normal = (other_x - x, other_y - y);
-            let offset = (other_x * other_x + other_y * other_y - x * x - y * y) * 0.5;
+            let offset = normal.0 * split.0 + normal.1 * split.1;
             cell = clip_half_plane(&cell, normal, offset);
             if cell.len() < 3 {
                 break;
@@ -435,13 +462,13 @@ fn anchor_flow_cells(
         } else {
             (min_y, max_y)
         };
-        let step = (maximum - minimum) / indices.len() as f32;
+        let total = indices.iter().map(|&index| weight(index)).sum::<f32>();
+        let mut lower = minimum;
         for (order, &index) in indices.iter().enumerate() {
-            let lower = minimum + step * order as f32;
             let upper = if order + 1 == indices.len() {
                 maximum
             } else {
-                lower + step
+                lower + (maximum - minimum) * weight(index) / total
             };
             let (lower_normal, upper_normal) = if horizontal {
                 ((-1.0, 0.0), (1.0, 0.0))
@@ -450,6 +477,7 @@ fn anchor_flow_cells(
             };
             let strip = clip_half_plane(&cell, lower_normal, -lower);
             cells[index] = clip_half_plane(&strip, upper_normal, upper);
+            lower = upper;
         }
     }
     cells
@@ -805,7 +833,7 @@ mod tests {
             angle_degrees: 0.0,
         };
         let contour = vec![(0.0, 0.0), (100.0, 0.0), (100.0, 80.0), (0.0, 80.0)];
-        let cells = flow_cells(frame, &contour, &[(25.0, 40.0), (75.0, 40.0)]);
+        let cells = flow_cells(frame, &contour, &[(25.0, 40.0), (75.0, 40.0)], &[]);
         assert_eq!(cells.len(), 2);
         let first_right = cells[0]
             .iter()
@@ -831,7 +859,7 @@ mod tests {
             angle_degrees: 0.0,
         };
         let contour = [(0.0, 0.0), (100.0, 0.0), (50.0, 100.0)];
-        let cells = flow_cells(frame, &contour, &[(25.0, 25.0), (75.0, 25.0)]);
+        let cells = flow_cells(frame, &contour, &[(25.0, 25.0), (75.0, 25.0)], &[]);
         assert_eq!(cells.len(), 2);
         for cell in &cells {
             assert!(
@@ -868,7 +896,7 @@ mod tests {
             (0.0, 80.0),
         ];
 
-        let cells = flow_cells(frame, &contour, &[(15.0, 50.0), (65.0, 50.0)]);
+        let cells = flow_cells(frame, &contour, &[(15.0, 50.0), (65.0, 50.0)], &[]);
 
         assert!(contains_edge(&cells[0], (50.0, 30.0), (50.0, 70.0)));
         assert!(contains_edge(&cells[1], (50.0, 30.0), (50.0, 70.0)));
@@ -934,7 +962,7 @@ mod tests {
             (166.0, 1.0),
         ];
 
-        let cells = flow_cells(frame, &contour, &[(114.0, 115.0), (47.0, 207.0)]);
+        let cells = flow_cells(frame, &contour, &[(114.0, 115.0), (47.0, 207.0)], &[]);
 
         assert!(contains_edge(&cells[0], (59.0, 100.0), (95.0, 235.0)));
         assert!(contains_edge(&cells[1], (59.0, 100.0), (95.0, 235.0)));
@@ -1041,7 +1069,7 @@ mod tests {
             (76.0, 1.0),
         ];
 
-        let cells = flow_cells(frame, &contour, &[(65.0, 71.0), (29.0, 118.0)]);
+        let cells = flow_cells(frame, &contour, &[(65.0, 71.0), (29.0, 118.0)], &[]);
 
         assert!(contains_edge(&cells[0], (32.0, 54.0), (66.0, 143.0)));
         assert!(contains_edge(&cells[1], (32.0, 54.0), (66.0, 143.0)));
@@ -1124,7 +1152,12 @@ mod tests {
             (139.0, 1.0),
         ];
 
-        let cells = flow_cells(frame, &contour, &[(126.25, 135.4353), (50.0, 202.05078)]);
+        let cells = flow_cells(
+            frame,
+            &contour,
+            &[(126.25, 135.4353), (50.0, 202.05078)],
+            &[],
+        );
 
         assert!(contains_edge(&cells[0], (63.0, 95.0), (96.0, 263.0)));
         assert!(contains_edge(&cells[1], (63.0, 95.0), (96.0, 263.0)));
@@ -1165,7 +1198,7 @@ mod tests {
         ];
         let anchors = [(20.0, 30.0), (80.0, 30.0), (70.0, 110.0)];
 
-        let cells = flow_cells(frame, &contour, &anchors);
+        let cells = flow_cells(frame, &contour, &anchors, &[]);
 
         assert_eq!(cells.len(), 3);
         for (index, &anchor) in anchors.iter().enumerate() {
@@ -1201,7 +1234,12 @@ mod tests {
             angle_degrees: 0.0,
         };
         let contour = vec![(0.0, 0.0), (100.0, 0.0), (100.0, 80.0), (0.0, 80.0)];
-        let cells = flow_cells(frame, &contour, &[(50.0, 40.0), (50.0, 40.0), (50.0, 40.0)]);
+        let cells = flow_cells(
+            frame,
+            &contour,
+            &[(50.0, 40.0), (50.0, 40.0), (50.0, 40.0)],
+            &[],
+        );
         assert_eq!(cells.len(), 3);
         assert!(cells.iter().all(|cell| cell.len() >= 3));
         let bounds = cells
@@ -1215,6 +1253,25 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(bounds[0].1 <= bounds[1].0 + 1e-4);
         assert!(bounds[1].1 <= bounds[2].0 + 1e-4);
+    }
+
+    #[test]
+    fn anchor_split_gives_more_room_to_the_longer_text() {
+        let frame = GeometryFrame {
+            bounds: LayoutBox {
+                x: 0.0,
+                y: 0.0,
+                width: 100.0,
+                height: 80.0,
+            },
+            angle_degrees: 0.0,
+        };
+        let contour = vec![(0.0, 0.0), (100.0, 0.0), (100.0, 80.0), (0.0, 80.0)];
+        let anchors = [(25.0, 40.0), (75.0, 40.0)];
+        let cells = flow_cells(frame, &contour, &anchors, &[30.0, 10.0]);
+        let area = |cell: &[(f32, f32)]| polygon_area(cell).abs();
+        assert!((area(&cells[0]) - 100.0 * 80.0 * 0.625).abs() < 1.0);
+        assert!((area(&cells[0]) + area(&cells[1]) - 100.0 * 80.0).abs() < 1.0);
     }
 
     fn contains_edge(polygon: &[(f32, f32)], first: (f32, f32), second: (f32, f32)) -> bool {
