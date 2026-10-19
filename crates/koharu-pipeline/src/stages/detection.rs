@@ -953,6 +953,17 @@ fn infer_outline(
             {
                 continue;
             }
+            // A colour between the fill and another ink is anti-aliasing at
+            // their edge, not a drawn outline (white glyphs on a dark balloon).
+            if clusters.iter().enumerate().any(|(index, cluster)| {
+                index != fill_index
+                    && index != stroke_index
+                    && !cluster.pixels.is_empty()
+                    && (color_lies_between(stroke_color, fill_color, cluster.color)
+                        || color_lies_between(fill_color, stroke_color, cluster.color))
+            }) {
+                continue;
+            }
             let normalized_fill = normalize_text_color(fill_color);
             let normalized_stroke = normalize_text_color(stroke_color);
             if normalized_fill == normalized_stroke {
@@ -3856,6 +3867,56 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(text_scores, [0.1, 0.2, 0.3]);
+    }
+
+    #[test]
+    fn antialiased_edges_of_light_text_are_not_an_outline() {
+        // White strokes on a dark balloon: a grey blend rings the dark core of
+        // the gap between strokes, but it is anti-aliasing, not an outline.
+        let width = 120;
+        let height = 120;
+        let [left, top, right, bottom] = [36, 30, 84, 90];
+        let mut image = RgbImage::from_pixel(width, height, Rgb([24, 32, 32]));
+        for y in 33..87 {
+            for x in 39..81 {
+                image.put_pixel(x, y, Rgb([170, 177, 177]));
+            }
+        }
+        for y in 34..86 {
+            for x in (40..60).chain(64..80) {
+                image.put_pixel(x, y, Rgb([250, 252, 252]));
+            }
+        }
+        for y in 36..84 {
+            for x in 61..63 {
+                image.put_pixel(x, y, Rgb([6, 12, 12]));
+            }
+        }
+        let mut pixels = vec![0; width as usize * height as usize];
+        for y in top..bottom {
+            for x in left..right {
+                pixels[y as usize * width as usize + x as usize] = u8::MAX;
+            }
+        }
+        let detection = KoharuLayoutDetection {
+            label_id: 0,
+            label: "text".to_owned(),
+            score: 1.0,
+            bbox: [left as f32, top as f32, right as f32, bottom as f32],
+            area: pixels.iter().filter(|value| **value != 0).count() as u32,
+            mask: KoharuLayoutMask {
+                x: 0,
+                y: 0,
+                width,
+                height,
+                pixels,
+            },
+        };
+
+        let inferred = infer_typography(&image, &detection).unwrap();
+
+        assert_eq!(inferred.color, [255, 255, 255]);
+        assert_eq!(inferred.stroke_color, None);
     }
 
     #[test]
