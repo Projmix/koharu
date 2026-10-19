@@ -124,6 +124,7 @@ async fn removal_results_stack_above_rasters_and_preserve_existing_layers_and_un
             mask: prepared.mask,
             paint: prepared.paint,
             restore_bounds: prepared.restore_bounds,
+            flat_fill: prepared.flat_fill,
         };
         let patch = target
             .patch(
@@ -270,6 +271,7 @@ async fn repeated_automatic_cleanup_is_visible_and_preserves_layers_before_manua
             mask: prepared.mask,
             paint: prepared.paint,
             restore_bounds: prepared.restore_bounds,
+            flat_fill: prepared.flat_fill,
         };
         let patch = target
             .patch(
@@ -321,6 +323,7 @@ async fn repeated_automatic_cleanup_is_visible_and_preserves_layers_before_manua
         mask: prepared.mask,
         paint: prepared.paint,
         restore_bounds: prepared.restore_bounds,
+        flat_fill: prepared.flat_fill,
     };
     let patch = target
         .patch(
