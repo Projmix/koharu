@@ -150,3 +150,5 @@ Measured 2026-10-18 on 6 pages of the owner's chapter, 99 segments. Four of the 
 | Grok 4.3 | 27.1 / 25.2 / 28.9 | $0.067 | |
 
 None of the models refused, censored, or softened explicit lines. Sending page images with page-mode translation broke Koharu's strict source-echo check: Gemini "corrected" the source text from the image, and Qwen returned invalid JSON. Images therefore go only to scene markup. Gemini 3.5 Flash, Kimi K3 and GPT-6.1 Sol were not run because of the budget.
+
+A second Gemini 3.7 Flash run on 5 of those pages (88 segments, 2026-10-19) added scene markup and the prompt fixes `d3a0910` (bare sound effects) and `b867a7b` (rough speech stays rough). It scored chrF 44.3 overall and 46.0 on the lines the owner edited (39.0 on the first markup run). A line-by-line check against the Japanese found 86 of 88 lines with the right meaning, and 77 with no remarks. One of the two errors came from OCR.

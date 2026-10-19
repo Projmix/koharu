@@ -36,3 +36,4 @@
 ## Что улучшать дальше
 
 План улучшений по этапам конвейера: [improvement-plan.ru.md](improvement-plan.ru.md).
+Что уже проверено и почему выбрано именно так: [results.ru.md](results.ru.md).
