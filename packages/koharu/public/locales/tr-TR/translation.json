@@ -250,6 +250,8 @@
     "zh-TW": "繁體中文"
   },
   "layers": {
+    "textOverflow": "Metin alanına sığmıyor",
+    "textBelowReadableSize": "Metin okunabilir boyutun altına küçültüldü",
     "collapse": "{{name}} grubunu daralt",
     "delete": "{{name}} öğesini sil",
     "edit": "{{name}} öğesini düzenle",

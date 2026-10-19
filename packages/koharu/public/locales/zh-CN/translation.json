@@ -250,6 +250,8 @@
     "zh-TW": "繁體中文"
   },
   "layers": {
+    "textOverflow": "文本放不进区域",
+    "textBelowReadableSize": "文本缩小到了可读大小以下",
     "collapse": "折叠 {{name}}",
     "delete": "删除 {{name}}",
     "edit": "编辑 {{name}}",

@@ -1401,6 +1401,17 @@ describe('greenfield editor', () => {
     expect(remove).toHaveAttribute('data-active', 'false')
   })
 
+  it('flags text the renderer could not fit in the layer list', () => {
+    installProject()
+    queryClient.setQueryData(pageKey, (page: Page) => ({ ...page, layers: [textLayer] }))
+    useKoharuStore.setState({ textFitWarnings: { element: 'overflow' } })
+    render(<Inspector />)
+
+    expect(screen.getByTestId('text-fit-warning-element')).toHaveAccessibleName(
+      'Text does not fit its area',
+    )
+  })
+
   it('collapses and expands the text group without changing its visibility', () => {
     installProject()
     const textGroup = {

@@ -250,6 +250,8 @@
     "zh-TW": "繁體中文"
   },
   "layers": {
+    "textOverflow": "文字放不進區域",
+    "textBelowReadableSize": "文字縮小到可讀大小以下",
     "collapse": "收合 {{name}}",
     "delete": "刪除 {{name}}",
     "edit": "編輯 {{name}}",

@@ -63,6 +63,7 @@ export function CanvasOverlay({
   // Subscribed here so a camera change re-renders the overlay alone, not the whole workspace.
   const camera = useKoharuStore((state) => state.camera)
   const textTransformTarget = useKoharuStore((state) => state.textTransformTarget)
+  const textFitWarnings = useKoharuStore((state) => state.textFitWarnings)
   const expandedSelection = useMemo(
     () => expandLayerSelection(page.layers, selected),
     [page.layers, selected],
@@ -125,6 +126,7 @@ export function CanvasOverlay({
         const position = cssFrame(frame, camera)
         const selected = selectedIds.has(layer.id) && selectableLayer(layer)
         const highlighted = !selected && hovered === layer.id
+        const warned = !selected && !highlighted && Boolean(textFitWarnings[layer.id])
         return (
           <div
             key={layer.id}
@@ -140,7 +142,9 @@ export function CanvasOverlay({
               border:
                 highlighted || (selected && multipleSelected)
                   ? '1px solid var(--canvas-selection)'
-                  : undefined,
+                  : warned
+                    ? '1px dashed var(--color-amber-500)'
+                    : undefined,
               opacity,
               willChange: selected ? 'left, top, width, height, transform' : undefined,
             }}

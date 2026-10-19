@@ -4,7 +4,7 @@ use std::{collections::HashSet, future::Future, sync::Arc};
 
 use anyhow::{Context as _, Result, bail};
 use koharu_rasterizer::{Rasterizer, ResourceId};
-use koharu_renderer::{Frame as RenderedFrame, LayerKind, Renderer};
+use koharu_renderer::{Frame as RenderedFrame, LayerKind, RenderDiagnostic, Renderer};
 use koharu_scene::{Commit, EntityId, Geometry, Point, Revision, Snapshot};
 use parking_lot::{Mutex as SyncMutex, RwLock};
 use serde::{Deserialize, Serialize};
@@ -44,6 +44,23 @@ pub struct CanvasState {
     pub generation: u64,
     pub size: [u32; 2],
     pub element_frames: Vec<TransformFrame>,
+    /// Text the renderer could not fit at a readable size on the presented page.
+    pub text_fit_warnings: Vec<TextFitWarning>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Type)]
+pub struct TextFitWarning {
+    pub element: EntityId,
+    pub kind: TextFitWarningKind,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum TextFitWarningKind {
+    /// The text does not fit its area even at the smallest size tried.
+    Overflow,
+    /// The text fits only below the readable minimum size.
+    BelowReadableSize,
 }
 
 #[derive(Default)]
@@ -195,6 +212,7 @@ impl Desktop {
                 generation: presentation.generation,
                 size: [0, 0],
                 element_frames: Vec::new(),
+                text_fit_warnings: Vec::new(),
             };
         };
         let (width, height) = frame.size();
@@ -226,6 +244,7 @@ impl Desktop {
             generation: presentation.generation,
             size: [width, height],
             element_frames,
+            text_fit_warnings: text_fit_warnings(frame.diagnostics()),
         }
     }
 
@@ -545,6 +564,31 @@ fn frame_transform(original: Frame, preview: Frame) -> [f64; 6] {
 
 const RESIZE_EPSILON: f32 = 0.01;
 
+/// One warning per text element; overflow wins because the text is cut off.
+fn text_fit_warnings(diagnostics: &[RenderDiagnostic]) -> Vec<TextFitWarning> {
+    let mut warnings = Vec::<TextFitWarning>::new();
+    for diagnostic in diagnostics {
+        let (element, kind) = match diagnostic {
+            RenderDiagnostic::TextOverflow { entity, .. } => {
+                (*entity, TextFitWarningKind::Overflow)
+            }
+            RenderDiagnostic::TextBelowReadableSize { entity, .. } => {
+                (*entity, TextFitWarningKind::BelowReadableSize)
+            }
+            RenderDiagnostic::MissingAsset { .. } => continue,
+        };
+        match warnings
+            .iter_mut()
+            .find(|warning| warning.element == element)
+        {
+            Some(warning) if kind == TextFitWarningKind::Overflow => warning.kind = kind,
+            Some(_) => {}
+            None => warnings.push(TextFitWarning { element, kind }),
+        }
+    }
+    warnings
+}
+
 /// The rectangle that bounds `points` along axes rotated by `angle_degrees`, as
 /// top-left, top-right, bottom-right, bottom-left so its top edge keeps the angle.
 fn rectangle_in_frame_axes(points: &[Point], angle_degrees: f32) -> Vec<Point> {
@@ -588,7 +632,46 @@ mod tests {
 
     use koharu_scene::Point;
 
-    use super::{Desktop, rectangle_in_frame_axes};
+    use koharu_renderer::{RenderBounds, RenderDiagnostic};
+    use koharu_scene::EntityId;
+
+    use super::{
+        Desktop, TextFitWarning, TextFitWarningKind, rectangle_in_frame_axes, text_fit_warnings,
+    };
+
+    #[test]
+    fn overflow_outranks_a_small_size_for_the_same_text() {
+        let first = EntityId::new();
+        let second = EntityId::new();
+        let below = |entity| RenderDiagnostic::TextBelowReadableSize {
+            entity,
+            font_size: 6.0,
+            minimum_font_size: 9.0,
+        };
+        let overflow = |entity| RenderDiagnostic::TextOverflow {
+            entity,
+            available: RenderBounds::default(),
+            actual_width: 50.0,
+            actual_height: 50.0,
+            font_size: 9.0,
+        };
+
+        let warnings = text_fit_warnings(&[below(first), overflow(first), below(second)]);
+
+        assert_eq!(
+            warnings,
+            [
+                TextFitWarning {
+                    element: first,
+                    kind: TextFitWarningKind::Overflow
+                },
+                TextFitWarning {
+                    element: second,
+                    kind: TextFitWarningKind::BelowReadableSize
+                },
+            ]
+        );
+    }
 
     #[test]
     fn resized_balloon_area_becomes_the_dragged_rectangle() {

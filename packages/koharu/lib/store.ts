@@ -4,6 +4,7 @@ import { create } from 'zustand'
 
 import type {
   CanvasState,
+  TextFitWarningKind,
   Download,
   EntityId,
   ImageEditPreview,
@@ -72,6 +73,8 @@ interface KoharuStore {
   canvasSize: [number, number]
   fitCanvasRequest: number
   layerFrames: Record<EntityId, Frame>
+  /** Text the renderer could not fit at a readable size on the presented page. */
+  textFitWarnings: Record<EntityId, TextFitWarningKind>
   selectedLayers: EntityId[]
   pendingTextFocus: EntityId | null
   /** What a select-tool drag edits for a text layer; 'area' draws its fit area. */
@@ -128,6 +131,7 @@ export const useKoharuStore = create<KoharuStore>()((set) => ({
   canvasSize: [0, 0],
   fitCanvasRequest: 0,
   layerFrames: {},
+  textFitWarnings: {},
   selectedLayers: [],
   pendingTextFocus: null,
   textTransformTarget: 'text',
@@ -233,6 +237,9 @@ function canvasSnapshot(canvas: CanvasState) {
     canvasSize: canvas.size,
     layerFrames: Object.fromEntries(
       canvas.element_frames.map(({ element, frame }) => [element, frame]),
+    ),
+    textFitWarnings: Object.fromEntries(
+      canvas.text_fit_warnings.map(({ element, kind }) => [element, kind]),
     ),
   }
 }

@@ -58,6 +58,7 @@ import {
   type Layer,
   type SpeechKind,
   type TextAlignment,
+  type TextFitWarningKind,
   type TranslationReviewReason,
   type Typography,
   type WritingMode,
@@ -884,6 +885,11 @@ function LayersInspector() {
   )
 }
 
+const textFitWarningLabels = {
+  overflow: 'layers.textOverflow',
+  below_readable_size: 'layers.textBelowReadableSize',
+} as const satisfies Record<TextFitWarningKind, string>
+
 function LayerRow({
   layer,
   index,
@@ -940,6 +946,7 @@ function LayerRow({
   const detail = localizedLayerKind(layer, t)
   const currentRole = isTextLayer(layer) ? supportedTextRole(layer.content.role) : null
   const Icon = layerIcon(layer)
+  const fitWarning = useKoharuStore((state) => state.textFitWarnings[layer.id])
   const [numberValue, setNumberValue] = useState(number?.toString() ?? '')
 
   useEffect(() => setNumberValue(number?.toString() ?? ''), [number])
@@ -1047,7 +1054,19 @@ function LayerRow({
               />
             )}
             <span className='min-w-0 flex-1'>
-              <span className='block truncate text-[11px] font-medium'>{name}</span>
+              <span className='flex min-w-0 items-center gap-1'>
+                <span className='truncate text-[11px] font-medium'>{name}</span>
+                {fitWarning && (
+                  <TriangleAlert
+                    role='img'
+                    data-testid={`text-fit-warning-${layer.id}`}
+                    aria-label={t(textFitWarningLabels[fitWarning])}
+                    className='size-3 shrink-0 text-amber-500'
+                  >
+                    <title>{t(textFitWarningLabels[fitWarning])}</title>
+                  </TriangleAlert>
+                )}
+              </span>
               {!onRoleChange && (
                 <span className='block truncate text-[9px] leading-3 text-muted-foreground capitalize'>
                   {detail}

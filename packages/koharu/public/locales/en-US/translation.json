@@ -250,6 +250,8 @@
     "zh-TW": "繁體中文"
   },
   "layers": {
+    "textOverflow": "Text does not fit its area",
+    "textBelowReadableSize": "Text is shrunk below the readable size",
     "collapse": "Collapse {{name}}",
     "delete": "Delete {{name}}",
     "edit": "Edit {{name}}",

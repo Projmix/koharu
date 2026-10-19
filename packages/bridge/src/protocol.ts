@@ -163,6 +163,8 @@ export type CanvasState = {
 	generation: number,
 	size: [number, number],
 	element_frames: TransformFrame[],
+	/**  Text the renderer could not fit at a readable size on the presented page. */
+	text_fit_warnings: TextFitWarning[],
 };
 
 export type Character = {
@@ -715,6 +717,17 @@ export type TextContent = {
 	role: string | null,
 	source_region: EntityId | null,
 };
+
+export type TextFitWarning = {
+	element: EntityId,
+	kind: TextFitWarningKind,
+};
+
+export type TextFitWarningKind = 
+/**  The text does not fit its area even at the smallest size tried. */
+"overflow" | 
+/**  The text fits only below the readable minimum size. */
+"below_readable_size";
 
 export type TextLayoutKind = "point" | "paragraph";
 
