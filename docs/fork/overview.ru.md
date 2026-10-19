@@ -37,3 +37,4 @@
 
 План улучшений по этапам конвейера: [improvement-plan.ru.md](improvement-plan.ru.md).
 Что уже проверено и почему выбрано именно так: [results.ru.md](results.ru.md).
+Какие модели клининга пробовать, запросы и план тестов: [cleaning-models.ru.md](cleaning-models.ru.md).

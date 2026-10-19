@@ -3,7 +3,7 @@
 Every detector, OCR and cleaning model the fork uses, ships unused, has
 measured, or has decided against. The point is to never evaluate the same
 model twice: before trying a model, look it up here; after trying it, record
-the result. Last updated 2026-10-18.
+the result. Last updated 2026-10-19.
 
 ## Rules
 
@@ -122,6 +122,8 @@ Local.
 | AOT inpainting | in use | `mayocream/aot-inpainting` @ `cffe234` | |
 | FLUX.2 Klein 4B (GGUF) | in use | `unsloth/FLUX.2-klein-4B-GGUF` @ `0084d1d` | Prompted diffusion; slow without a strong GPU. |
 | RORem mixed (SDXL inpainting) | in use | `mayocream/RORem-mixed-GGUF` @ `62c75b3` | Object-removal diffusion. |
+| FLUX 3 Image Klein | candidate (medium) | [`black-forest-labs/flux-3-image-klein`](https://huggingface.co/unsloth/flux-3-image-klein) (2026-10-13), [GGUF](https://huggingface.co/unsloth/flux-3-image-klein-GGUF) 2.6–11 GB | 5.6B distilled (16 steps) plus a Qwen3-VL-4B text encoder; needs a prompt upsampler. Removal by bounding box, not a hard mask. 25–31 GB peak GPU memory at 1024²; impractical on the owner's CPU-only PC for full pages, crops untested. FLUX Kommunity License (non-commercial; commercial output under $5M revenue). The diffusers path has no NSFW classifier. See [cleaning-models.ru.md](cleaning-models.ru.md). |
+| Qwen-Image 2.1 / 2.1 Turbo | candidate (medium) | [`Qwen/Qwen-Image-2.1`](https://huggingface.co/Qwen/Qwen-Image-2.1) (2026-09-14), Turbo 2026-10-09 (8 steps), [GGUF](https://huggingface.co/unsloth/Qwen-Image-2.1-GGUF) 2.5–14 GB | 7B. The only recent model whose card lists local edits by a separate mask, matching the pipeline. Qwen Research License (non-commercial, download only). No official API. Same CPU caveat as FLUX 3 Klein. |
 | manga-cleaner | rejected 2026-10-18 | [`kzome/manga-cleaner`](https://huggingface.co/kzome/manga-cleaner) | comic-text-detector plus big-LaMa with median-colour fill: the same pieces the fork already has. AGPL-3.0. No quality metrics. |
 
 API (Fal, Replicate, OpenRouter image models).
@@ -132,8 +134,15 @@ API (Fal, Replicate, OpenRouter image models).
 | FLUX Kontext dev / pro / max, FLUX.2 dev / pro / flex / max / Klein 4B / 9B (Fal, Replicate) | in use | Prompted edits. |
 | Qwen Image Edit 2511, Seedream 4.5 Edit (Fal) | in use | |
 | Any OpenRouter image model | in use | Free-form model id. |
+| FLUX 3 Image (BFL, Replicate, Fal, OpenRouter) | candidate (high) | Released 2026-10-01. ~$0.048 per 1K image (third-party figure). `safety_tolerance` 0–4 on Replicate and BFL; whether 4 passes explicit input pages is untested. Needs a Replicate catalog entry; reachable now through OpenRouter without moderation control. |
+| FLUX 3 Image Klein API (BFL, Runware) | candidate (medium) | ~$0.009 per 1K image at BFL (third-party figure). Not wired. |
+| Qwen Image Edit 2511 on Replicate | candidate (high) | $0.03 per image; `disable_safety_checker` disables the output check. Not in the Replicate catalog yet. First pick for adult pages. |
+| Grok Imagine Image 2.0 (xAI, OpenRouter, Replicate) | candidate (medium) | ~$0.04 + $0.01 per input image (third-party figure). #4 on Image Edit Arena 2026-10-06. API adult-content policy unknown. |
+| MAI Image 2.6 / 2.6 Flash (OpenRouter) | candidate (quality ceiling only) | Refuses adult input (`Input content violated safety policies`). Flash is about half the price. |
+| GPT-Image-2.5, Nano Banana 2.1 (OpenRouter) | candidate (quality ceiling only) | Top of Image Edit Arena; provider policies forbid sexual content, so expected to fail adult pages. Test on ordinary pages only. |
+| Seedream 5.0 Pro Edit | candidate (low) | Official API refuses even mild content and checks edits harder than generation (third-party tests); only resellers claim otherwise. |
 
-No cloud cleaning model has been measured on the owner's pages. When the
+Candidates, prompts and the test plan (including cleaning with balloons already emptied versus not) are in [cleaning-models.ru.md](cleaning-models.ru.md), checked 2026-10-19. No cloud cleaning model has been measured on the owner's pages. When the
 evaluation set exists, score residual ink inside the mask, damage outside it,
 policy rejections, cost and time per page, and move losers to `rejected`.
 
