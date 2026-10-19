@@ -810,13 +810,20 @@ impl Traversal<'_> {
         let preferred_font = typography
             .as_ref()
             .and_then(|value| value.preferred_font.clone());
+        let speech_kind = self.speech_kind(content, dependencies)?;
         let mut font_families = self.font_families.to_vec();
-        if let Some(family) = self
-            .speech_kind(content, dependencies)?
-            .and_then(|kind| self.kind_fonts.get(kind))
-        {
+        if let Some(family) = speech_kind.and_then(|kind| self.kind_fonts.get(kind)) {
             font_families.insert(0, family.to_owned());
         }
+        // Automatic sizes scale with the page. On a 1280 px chapter 2.5% of
+        // the height matched hand-set free text and stopped short balloon
+        // lines from blowing up; sound effects keep the former 24 px there.
+        let automatic_ceiling = self.height as f32
+            * if speech_kind == Some(SpeechKind::SoundEffect) {
+                0.01875
+            } else {
+                0.025
+            };
         for family in preferred_font.iter().chain(font_families.iter()) {
             dependencies.insert(RenderDependency::Font(family.clone()));
         }
@@ -837,6 +844,7 @@ impl Traversal<'_> {
                 .map(Into::into),
             font_size: typography.as_ref().and_then(|value| value.size),
             minimum_font_size: MINIMUM_FONT_SIZE,
+            automatic_ceiling,
             auto_fit: typography.as_ref().is_none_or(|value| value.auto_fit),
             alignment,
             writing_mode,

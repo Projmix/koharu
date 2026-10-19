@@ -31,6 +31,8 @@ pub(crate) struct TextNodeDescriptor {
     pub(crate) font_style: Option<FontStyle>,
     pub(crate) font_size: Option<f32>,
     pub(crate) minimum_font_size: f32,
+    /// Largest automatic size, scaled to the page by the renderer.
+    pub(crate) automatic_ceiling: f32,
     pub(crate) auto_fit: bool,
     pub(crate) alignment: TextAlign,
     pub(crate) writing_mode: WritingMode,
@@ -330,8 +332,9 @@ fn automatic_maximum(
         } else {
             bounds.width
         }
+        .min(descriptor.automatic_ceiling)
     } else {
-        24.0
+        descriptor.automatic_ceiling
     }
 }
 
@@ -459,6 +462,7 @@ mod tests {
             font_style: None,
             font_size: Some(6.0),
             minimum_font_size: 9.0,
+            automatic_ceiling: 24.0,
             auto_fit: true,
             alignment: TextAlign::Center,
             writing_mode: WritingMode::Horizontal,
@@ -478,7 +482,12 @@ mod tests {
         };
 
         assert_eq!(automatic_maximum(&descriptor, bounds, false), 24.0);
-        assert_eq!(automatic_maximum(&descriptor, bounds, true), 240.0);
+        assert_eq!(automatic_maximum(&descriptor, bounds, true), 24.0);
+        let narrow = LayoutBox {
+            width: 18.0,
+            ..bounds
+        };
+        assert_eq!(automatic_maximum(&descriptor, narrow, true), 18.0);
     }
 
     #[test]
