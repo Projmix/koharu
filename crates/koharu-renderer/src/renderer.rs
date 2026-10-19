@@ -830,7 +830,15 @@ impl Traversal<'_> {
         let is_bubble = balloon_contour.is_some();
         let descriptor = TextNodeDescriptor {
             entity,
-            text: text.clone(),
+            text: if is_bubble
+                || writing_mode != WritingMode::Horizontal
+                || layout.kind == TextLayoutKind::Point
+                || typography.as_ref().is_some_and(|value| !value.auto_fit)
+            {
+                text.clone()
+            } else {
+                stacked_column_text(&text, frame.bounds).unwrap_or_else(|| text.clone())
+            },
             language: translation.language.clone(),
             width: frame.bounds.width,
             height: frame.bounds.height,
@@ -1466,6 +1474,31 @@ fn resolve_writing_mode(
     }
 }
 
+/// Letters of a short word one per line in a tall, narrow free-text frame,
+/// the way hand-lettered sound effects stack in a vertical column. Laid out
+/// horizontally such a word shrinks to the column width; longer phrases keep
+/// wrapping, since stacking them drops below the readable size.
+fn stacked_column_text(text: &str, bounds: LayoutBox) -> Option<String> {
+    const MAX_STACKED_LETTERS: usize = 6;
+    let text = text.trim();
+    let letters = text.chars().filter(|c| c.is_alphabetic()).count();
+    if bounds.height < bounds.width * 2.0
+        || letters == 0
+        || letters > MAX_STACKED_LETTERS
+        || text.chars().any(char::is_whitespace)
+    {
+        return None;
+    }
+    let mut stacked = String::with_capacity(text.len() * 2);
+    for (index, character) in text.chars().enumerate() {
+        if index > 0 {
+            stacked.push('\n');
+        }
+        stacked.push(character);
+    }
+    Some(stacked)
+}
+
 fn resolve_alignment(
     alignment: Option<TextAlignment>,
     writing_mode: WritingMode,
@@ -1740,6 +1773,29 @@ mod tests {
             resolve_alignment(None, WritingMode::Horizontal, false),
             TextAlign::Center
         );
+    }
+
+    #[test]
+    fn short_words_stack_in_tall_narrow_frames() {
+        let tall = LayoutBox {
+            x: 0.0,
+            y: 0.0,
+            width: 30.0,
+            height: 120.0,
+        };
+        let wide = LayoutBox {
+            width: 120.0,
+            height: 30.0,
+            ..tall
+        };
+
+        assert_eq!(
+            stacked_column_text("Ха-а…", tall).as_deref(),
+            Some("Х\nа\n-\nа\n…")
+        );
+        assert_eq!(stacked_column_text("Ха-а…", wide), None);
+        assert_eq!(stacked_column_text("Живёт в общежитии", tall), None);
+        assert_eq!(stacked_column_text("Подождите", tall), None);
     }
 
     #[test]
