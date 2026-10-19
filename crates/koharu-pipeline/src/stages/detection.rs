@@ -1751,7 +1751,7 @@ fn dark_balloons(
     let mut found = Vec::<KoharuLayoutDetection>::new();
     for text in detections
         .iter()
-        .filter(|detection| detection.label == "text")
+        .filter(|detection| matches!(detection.label.as_str(), "text" | "onomatopoeia"))
     {
         let inside = |bubble: &KoharuLayoutDetection| {
             mask_containment(&bubble.mask, &text.mask, text.bbox)

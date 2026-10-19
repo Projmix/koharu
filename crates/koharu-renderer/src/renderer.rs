@@ -817,9 +817,10 @@ impl Traversal<'_> {
         }
         // Automatic sizes scale with the page. On a 1280 px chapter 2.5% of
         // the height matched hand-set free text and stopped short balloon
-        // lines from blowing up; sound effects keep the former 24 px there.
+        // lines from blowing up; free sound effects keep the former 24 px
+        // there, while one set in a balloon is sized like the balloon's text.
         let automatic_ceiling = self.height as f32
-            * if speech_kind == Some(SpeechKind::SoundEffect) {
+            * if speech_kind == Some(SpeechKind::SoundEffect) && balloon_contour.is_none() {
                 0.01875
             } else {
                 0.025
