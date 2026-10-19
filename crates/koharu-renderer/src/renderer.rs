@@ -713,8 +713,9 @@ impl Traversal<'_> {
         Ok(())
     }
 
-    /// The scene markup kind of a content entity. Before markup runs, a
-    /// detected onomatopoeia role already identifies a sound effect.
+    /// The scene markup kind of a content entity. Before markup runs, the
+    /// detected role already identifies a sound effect, and text detection
+    /// placed inside a balloon is taken as speech.
     fn speech_kind(
         &self,
         content: EntityId,
@@ -728,8 +729,15 @@ impl Traversal<'_> {
         Ok(self
             .snapshot
             .component::<TextRole>(content)?
-            .filter(|role| role.role.ends_with(".onomatopoeia"))
-            .map(|_| SpeechKind::SoundEffect))
+            .and_then(|role| {
+                if role.role.ends_with(".onomatopoeia") {
+                    Some(SpeechKind::SoundEffect)
+                } else if role.role.ends_with(".dialogue") {
+                    Some(SpeechKind::Speech)
+                } else {
+                    None
+                }
+            }))
     }
 
     fn text_draft(
@@ -2026,6 +2034,68 @@ mod tests {
             descriptor.font_families,
             ["Edo", "CCWildWords", "Adobe 黑体 Std"]
         );
+    }
+
+    #[tokio::test]
+    async fn balloon_dialogue_takes_the_speech_font_before_markup() {
+        let mut session = Session::memory().await.unwrap();
+        let mut ids = None;
+        let create = session
+            .snapshot()
+            .patch(|edit| {
+                let page = edit.add_page(PageDraft::new("page", 200.0, 120.0), At::End)?;
+                let content = edit.add_text_content(page, At::End)?;
+                edit.set(
+                    content,
+                    &SourceText {
+                        text: Authored::user("やあ".to_owned()),
+                        language: None,
+                    },
+                )?;
+                edit.set(
+                    content,
+                    &Translation {
+                        text: Authored::user("Привет".to_owned()),
+                        language: None,
+                    },
+                )?;
+                edit.set(
+                    content,
+                    &TextRole {
+                        origin: Origin::User,
+                        role: "dev.koharu.text.dialogue".to_owned(),
+                    },
+                )?;
+                let text = edit.add_text_layer(
+                    page,
+                    At::End,
+                    content,
+                    &SceneTextLayout {
+                        origin: Origin::User,
+                        kind: TextLayoutKind::Paragraph,
+                        angle_degrees: Some(0.0),
+                    },
+                )?;
+                edit.set(text, &Geometry::rectangle(10.0, 10.0, 80.0, 40.0))?;
+                ids = Some((page, text));
+                Ok(())
+            })
+            .unwrap();
+        let snapshot = session.commit(create).await.unwrap().snapshot;
+        let (page, text) = ids.unwrap();
+        let mut typesetting = TypesettingConfig::default();
+        typesetting.kind_fonts.speech = Some("ChillSpeech".to_owned());
+        let renderer = Renderer::with_typesetting(typesetting);
+        let compiled = renderer.compile(&snapshot, page).unwrap();
+        let layer = compiled
+            .layers
+            .iter()
+            .find(|layer| layer.entity == text)
+            .unwrap();
+        let NodeDescriptor::Text(descriptor) = &layer.descriptor else {
+            panic!("expected a text layer");
+        };
+        assert_eq!(descriptor.font_families[0], "ChillSpeech");
     }
 
     #[tokio::test]
