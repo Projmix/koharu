@@ -13,8 +13,8 @@ use koharu_scene::{
     Asset, AssetRole, BlobId, Change, Component, ComponentOwner, EntityChange, EntityId, FitsTo,
     FlowsIn, Geometry, Group, OcrAnalysis, Origin, Page, Presents, RasterLayer, RasterLayerKind,
     RecognizedFrom, Region, RelationChange, RelationId, RelationSpec, Revision, Snapshot,
-    TextAlignment, TextDirection, TextLayout as SceneTextLayout, TextLayoutKind, Translation,
-    Typography, Visibility,
+    SpeechKind, SpeechMarkup, TextAlignment, TextDirection, TextLayout as SceneTextLayout,
+    TextLayoutKind, TextRole, Translation, Typography, Visibility,
 };
 use parking_lot::Mutex;
 use rayon::prelude::*;
@@ -31,9 +31,9 @@ use vello::{
 };
 
 use crate::{
-    Error, FontFamily, FontStyle, Frame, ImageKind, ImageMetadata, Layer, LayerKind, Presentation,
-    RasterImage, RenderBounds, RenderDependency, RenderDiagnostic, Result, RetentionStats,
-    TextAlign, TextMetadata, TypesettingConfig, WritingMode,
+    Error, FontFamily, FontStyle, Frame, ImageKind, ImageMetadata, KindFonts, Layer, LayerKind,
+    Presentation, RasterImage, RenderBounds, RenderDependency, RenderDiagnostic, Result,
+    RetentionStats, TextAlign, TextMetadata, TypesettingConfig, WritingMode,
     bubble::{GeometryFrame, LayoutBox, contour, flow_cells, geometry_bounds, geometry_frame},
     fonts::{FontPreview, FontRequest, Fonts},
     frame::{
@@ -500,6 +500,7 @@ impl Renderer {
             height,
             source_role: &source_role,
             font_families: &typesetting.font_families,
+            kind_fonts: &typesetting.kind_fonts,
             balloon_flows: flow_plan.placements,
             layers: Vec::new(),
             dependencies: BTreeSet::from([
@@ -574,6 +575,7 @@ struct Traversal<'a> {
     height: u32,
     source_role: &'a AssetRole,
     font_families: &'a [String],
+    kind_fonts: &'a KindFonts,
     balloon_flows: HashMap<EntityId, ResolvedPlacement>,
     layers: Vec<LayerDraft>,
     dependencies: BTreeSet<RenderDependency>,
@@ -711,6 +713,25 @@ impl Traversal<'_> {
         Ok(())
     }
 
+    /// The scene markup kind of a content entity. Before markup runs, a
+    /// detected onomatopoeia role already identifies a sound effect.
+    fn speech_kind(
+        &self,
+        content: EntityId,
+        dependencies: &mut BTreeSet<RenderDependency>,
+    ) -> Result<Option<SpeechKind>> {
+        dependencies.insert(component_dependency::<SpeechMarkup>(content));
+        if let Some(markup) = self.snapshot.component::<SpeechMarkup>(content)? {
+            return Ok(Some(markup.kind));
+        }
+        dependencies.insert(component_dependency::<TextRole>(content));
+        Ok(self
+            .snapshot
+            .component::<TextRole>(content)?
+            .filter(|role| role.role.ends_with(".onomatopoeia"))
+            .map(|_| SpeechKind::SoundEffect))
+    }
+
     fn text_draft(
         &mut self,
         entity: EntityId,
@@ -789,7 +810,13 @@ impl Traversal<'_> {
         let preferred_font = typography
             .as_ref()
             .and_then(|value| value.preferred_font.clone());
-        let font_families = self.font_families.to_vec();
+        let mut font_families = self.font_families.to_vec();
+        if let Some(family) = self
+            .speech_kind(content, dependencies)?
+            .and_then(|kind| self.kind_fonts.get(kind))
+        {
+            font_families.insert(0, family.to_owned());
+        }
         for family in preferred_font.iter().chain(font_families.iter()) {
             dependencies.insert(RenderDependency::Font(family.clone()));
         }
@@ -1860,6 +1887,73 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn markup_kind_font_precedes_the_default_families() {
+        let mut session = Session::memory().await.unwrap();
+        let mut ids = None;
+        let create = session
+            .snapshot()
+            .patch(|edit| {
+                let page = edit.add_page(PageDraft::new("page", 200.0, 120.0), At::End)?;
+                let content = edit.add_text_content(page, At::End)?;
+                edit.set(
+                    content,
+                    &SourceText {
+                        text: Authored::user("バン".to_owned()),
+                        language: None,
+                    },
+                )?;
+                edit.set(
+                    content,
+                    &Translation {
+                        text: Authored::user("Бам".to_owned()),
+                        language: None,
+                    },
+                )?;
+                edit.set(
+                    content,
+                    &SpeechMarkup {
+                        origin: Origin::User,
+                        kind: SpeechKind::SoundEffect,
+                        speaker: None,
+                    },
+                )?;
+                let text = edit.add_text_layer(
+                    page,
+                    At::End,
+                    content,
+                    &SceneTextLayout {
+                        origin: Origin::User,
+                        kind: TextLayoutKind::Paragraph,
+                        angle_degrees: Some(0.0),
+                    },
+                )?;
+                edit.set(text, &Geometry::rectangle(10.0, 10.0, 80.0, 40.0))?;
+                ids = Some((page, text));
+                Ok(())
+            })
+            .unwrap();
+        let snapshot = session.commit(create).await.unwrap().snapshot;
+        let (page, text) = ids.unwrap();
+        let mut typesetting = TypesettingConfig::default();
+        typesetting.kind_fonts.sound_effect = Some("Edo".to_owned());
+        typesetting.kind_fonts.speech = Some("ChillSpeech".to_owned());
+        let renderer = Renderer::with_typesetting(typesetting);
+        let compiled = renderer.compile(&snapshot, page).unwrap();
+        let layer = compiled
+            .layers
+            .iter()
+            .find(|layer| layer.entity == text)
+            .unwrap();
+        let NodeDescriptor::Text(descriptor) = &layer.descriptor else {
+            panic!("expected a text layer");
+        };
+        assert_eq!(
+            descriptor.font_families,
+            ["Edo", "CCWildWords", "Adobe 黑体 Std"]
+        );
+    }
+
+    #[tokio::test]
     async fn analysis_regions_are_not_promoted_to_image_layers() {
         let mut session = Session::memory().await.unwrap();
         let source = AssetRole::new("source").unwrap();
@@ -2072,6 +2166,7 @@ mod tests {
         let font = crate::fonts::FontSystem::new().first_font().unwrap();
         let renderer = Renderer::with_typesetting(TypesettingConfig {
             font_families: vec![font.family_name().to_owned()],
+            kind_fonts: KindFonts::default(),
         });
         let base_compiled = renderer.compile(&base, page).unwrap();
         let first = base_compiled

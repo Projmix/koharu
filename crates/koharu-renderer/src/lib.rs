@@ -14,7 +14,7 @@ mod shape;
 mod text_renderer;
 mod types;
 
-pub use config::TypesettingConfig;
+pub use config::{KindFonts, TypesettingConfig};
 pub use error::{Error, Result};
 pub use frame::{
     Frame, ImageKind, ImageMetadata, Layer, LayerKind, Presentation, RasterImage, RenderBounds,

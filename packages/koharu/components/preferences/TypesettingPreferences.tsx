@@ -1,14 +1,23 @@
 'use client'
 
-import { Plus, Trash2 } from 'lucide-react'
+import { Plus, Trash2, X } from 'lucide-react'
 import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { FontPicker } from '@/components/controls/FontPicker'
 import { PreferencePage } from '@/components/preferences/PreferenceFields'
 import { useFonts } from '@/lib/queries'
-import type { TypesettingConfig } from '@koharu/bridge/protocol'
+import type { KindFonts, TypesettingConfig } from '@koharu/bridge/protocol'
 import { Button } from '@koharu/ui/components/button'
+
+const speechKinds = [
+  ['speech', 'speech'],
+  ['thought', 'thought'],
+  ['narration', 'narration'],
+  ['sound_effect', 'sound-effect'],
+  ['sign', 'sign'],
+  ['aside', 'aside'],
+] as const satisfies readonly (readonly [keyof KindFonts, string])[]
 
 export function TypesettingPreferences({
   value,
@@ -30,6 +39,11 @@ export function TypesettingPreferences({
     const next = [...fontFamilies]
     next[index] = family
     onChange({ ...value, font_families: next })
+  }
+
+  const kindFonts = value.kind_fonts ?? {}
+  const setKindFont = (kind: keyof KindFonts, family: string | null) => {
+    onChange({ ...value, kind_fonts: { ...kindFonts, [kind]: family } })
   }
 
   const removeFamily = (index: number) => {
@@ -132,6 +146,51 @@ export function TypesettingPreferences({
             {t('settings.typesetting.loadError')}
           </p>
         )}
+      </section>
+      <section aria-labelledby='typesetting-kind-fonts' className='mt-6'>
+        <header className='mb-3'>
+          <h3 id='typesetting-kind-fonts' className='text-[12px] font-semibold'>
+            {t('settings.typesetting.kindFonts')}
+          </h3>
+          <p className='mt-0.5 text-[11px] leading-4 text-muted-foreground'>
+            {t('settings.typesetting.kindFontsDescription')}
+          </p>
+        </header>
+        <ul className='divide-y divide-border/80 overflow-hidden rounded-xl border border-border/80 bg-[var(--surface-panel)]'>
+          {speechKinds.map(([kind, labelKey]) => {
+            const family = kindFonts[kind] ?? ''
+            const label = t(`inspector.speechKinds.${labelKey}`)
+            return (
+              <li key={kind} className='flex min-w-0 items-center gap-3 px-3 py-2'>
+                <span className='w-28 shrink-0 truncate text-[11px] text-muted-foreground'>
+                  {label}
+                </span>
+                <div className='min-w-0 flex-1'>
+                  <FontPicker
+                    value={family}
+                    families={families}
+                    disabled={fonts.isPending}
+                    ariaLabel={t('settings.typesetting.kindFontLabel', { kind: label })}
+                    placeholder={t('settings.typesetting.kindFontDefault')}
+                    onChange={(next) => setKindFont(kind, next)}
+                  />
+                </div>
+                <Button
+                  type='button'
+                  variant='ghost'
+                  size='icon-sm'
+                  disabled={!family}
+                  aria-label={t('settings.typesetting.clearKindFont', { kind: label })}
+                  title={t('settings.typesetting.clearKindFont', { kind: label })}
+                  className='shrink-0 text-muted-foreground'
+                  onClick={() => setKindFont(kind, null)}
+                >
+                  <X className='size-3.5' />
+                </Button>
+              </li>
+            )
+          })}
+        </ul>
       </section>
     </PreferencePage>
   )
