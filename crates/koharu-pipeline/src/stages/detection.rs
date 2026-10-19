@@ -1665,42 +1665,73 @@ fn matches_mask_label(detection: &KoharuLayoutDetection, label: &str) -> bool {
     }
 }
 
+/// Closes the text masks so cleanup covers anti-aliasing and stray strokes.
+/// The closing halo of text that sits inside a bubble is clipped to that
+/// bubble's mask: a halo crossing the rim would hand the outline to the
+/// inpainter, which repaints it with the fill on either side. The text's own
+/// pixels are kept wherever they lie, so lettering that crosses the rim is
+/// still cleaned.
 fn closed_mask_for(
     detections: &[KoharuLayoutDetection],
     label: &str,
     size: ImageSize,
     radius: u8,
 ) -> GrayImage {
-    let masks = detections
+    let bubbles = detections
+        .iter()
+        .filter(|detection| detection.label == "bubble" && valid_mask(&detection.mask))
+        .collect::<Vec<_>>();
+    let texts = detections
         .iter()
         .filter(|detection| matches_mask_label(detection, label))
-        .map(|detection| &detection.mask)
-        .filter(|mask| valid_mask(mask) && mask.width > 0 && mask.height > 0)
+        .filter(|detection| {
+            let mask = &detection.mask;
+            valid_mask(mask) && mask.width > 0 && mask.height > 0
+        })
+        .map(|detection| {
+            let bubble = bubbles
+                .iter()
+                .filter(|bubble| {
+                    mask_containment(&bubble.mask, &detection.mask, detection.bbox)
+                        >= DIALOGUE_MASK_CONTAINMENT_THRESHOLD
+                })
+                .min_by_key(|bubble| bubble.area)
+                .map(|bubble| &bubble.mask);
+            (&detection.mask, bubble)
+        })
         .collect::<Vec<_>>();
     let mut output = GrayImage::new(size.width, size.height);
-    if masks.is_empty() {
+    if texts.is_empty() {
         return output;
     }
 
     // Two dilations can make instances interact before the final erosion.
     // Conservatively group their expanded bounds, then retain a third-radius
     // halo so the local erosion observes the same zero/page-edge neighborhood
-    // as a full-page operation.
+    // as a full-page operation. Text clipped to different bubbles never
+    // shares a closing, so each halo stays inside its own bubble.
     let interaction_radius = u32::from(radius) * 2;
-    let mut parents = (0..masks.len()).collect::<Vec<_>>();
-    for left in 0..masks.len() {
-        for right in left + 1..masks.len() {
-            if rectangles_touch(
-                expand_mask_bounds(masks[left], interaction_radius, size),
-                expand_mask_bounds(masks[right], interaction_radius, size),
-            ) {
+    let mut parents = (0..texts.len()).collect::<Vec<_>>();
+    for left in 0..texts.len() {
+        for right in left + 1..texts.len() {
+            let same_bubble = match (texts[left].1, texts[right].1) {
+                (Some(left), Some(right)) => std::ptr::eq(left, right),
+                (None, None) => true,
+                _ => false,
+            };
+            if same_bubble
+                && rectangles_touch(
+                    expand_mask_bounds(texts[left].0, interaction_radius, size),
+                    expand_mask_bounds(texts[right].0, interaction_radius, size),
+                )
+            {
                 union(&mut parents, left, right);
             }
         }
     }
 
     let mut groups = BTreeMap::<usize, Vec<usize>>::new();
-    for index in 0..masks.len() {
+    for index in 0..texts.len() {
         let root = find(&mut parents, index);
         groups.entry(root).or_default().push(index);
     }
@@ -1709,20 +1740,27 @@ fn closed_mask_for(
         .collect::<Vec<_>>()
         .into_par_iter()
         .filter_map(|group| {
-            let mut bounds = mask_bounds(masks[group[0]], size);
+            let mut bounds = mask_bounds(texts[group[0]].0, size);
             for &index in &group[1..] {
-                bounds = union_bounds(bounds, mask_bounds(masks[index], size));
+                bounds = union_bounds(bounds, mask_bounds(texts[index].0, size));
             }
             bounds = expand_bounds(bounds, u32::from(radius) * 3, size);
             let [left, top, right, bottom] = bounds;
             if left >= right || top >= bottom {
                 return None;
             }
-            let mut local = GrayImage::new(right - left, bottom - top);
+            let mut raw = GrayImage::new(right - left, bottom - top);
             for &index in &group {
-                stamp_mask(&mut local, masks[index], left, top);
+                stamp_mask(&mut raw, texts[index].0, left, top);
             }
-            let local = close(&dilate(&local, Norm::L2, radius), Norm::L2, radius);
+            let mut local = close(&dilate(&raw, Norm::L2, radius), Norm::L2, radius);
+            if let Some(bubble) = texts[group[0]].1 {
+                for (x, y, pixel) in local.enumerate_pixels_mut() {
+                    if raw.get_pixel(x, y).0[0] == 0 && !bubble.contains(left + x, top + y) {
+                        *pixel = Luma([0]);
+                    }
+                }
+            }
             Some((left, top, local))
         })
         .collect::<Vec<_>>();
@@ -3915,6 +3953,63 @@ mod tests {
                 "case {case}, radius {radius}"
             );
         }
+    }
+
+    #[test]
+    fn bubble_text_halo_stays_inside_the_bubble_but_keeps_its_own_pixels() {
+        let size = ImageSize {
+            width: 48,
+            height: 48,
+        };
+        let region = |label: &str, x, y, width, height, pixels: Vec<u8>| KoharuLayoutDetection {
+            label_id: 0,
+            label: label.to_owned(),
+            score: 1.0,
+            bbox: [x as f32, y as f32, (x + width) as f32, (y + height) as f32],
+            area: pixels.iter().filter(|value| **value != 0).count() as u32,
+            mask: KoharuLayoutMask {
+                x,
+                y,
+                width,
+                height,
+                pixels,
+            },
+        };
+        // Lettering against the right side of a 20x20 bubble; one stroke pixel
+        // in its last column lies on the rim beyond the bubble.
+        let mut pixels = vec![0; 5 * 5];
+        for row in 0..5 {
+            for column in 0..5 {
+                let inside = column < 4 && row < 4;
+                pixels[row * 5 + column] = if inside {
+                    u8::MAX
+                } else {
+                    u8::from(row == 4 && column == 4) * u8::MAX
+                };
+            }
+        }
+        let text = region("text", 26, 18, 5, 5, pixels);
+        let bubble = region("bubble", 10, 10, 20, 20, vec![u8::MAX; 20 * 20]);
+        let detections = vec![bubble.clone(), text.clone()];
+
+        let mask = closed_mask_for(&detections, "text", size, 3);
+
+        assert!(mask_containment(&bubble.mask, &text.mask, text.bbox) >= 0.9);
+        for (x, y, pixel) in mask.enumerate_pixels() {
+            if pixel.0[0] != 0 {
+                assert!(
+                    bubble.mask.contains(x, y) || text.mask.contains(x, y),
+                    "halo at ({x}, {y}) crosses the rim"
+                );
+            }
+            if text.mask.contains(x, y) {
+                assert_ne!(pixel.0[0], 0, "text pixel ({x}, {y}) is not cleaned");
+            }
+        }
+        assert_ne!(mask.get_pixel(23, 19).0[0], 0, "no halo inside the bubble");
+
+        let free = closed_mask_for(&[text.clone()], "text", size, 3);
+        assert_ne!(free.get_pixel(32, 19).0[0], 0, "free text lost its halo");
     }
 
     #[test]
