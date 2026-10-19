@@ -378,6 +378,15 @@ export type JobId = string;
 
 export type JobState = "running" | "finished" | "failed" | "stopped";
 
+export type KindFonts = {
+	speech?: string | null,
+	thought?: string | null,
+	narration?: string | null,
+	sound_effect?: string | null,
+	sign?: string | null,
+	aside?: string | null,
+};
+
 export type KoharuLayoutRFDetrSeg2XLConfig = {
 	text_threshold?: number | null,
 	bubble_threshold?: number | null,
@@ -767,6 +776,11 @@ export type TranslationUnitPolicy = "page_only" | "adaptive_v1";
 
 export type TypesettingConfig = {
 	font_families?: string[],
+	/**
+	 *  Font used ahead of `font_families` for text of one scene markup kind.
+	 *  A layer's own preferred font still wins.
+	 */
+	kind_fonts?: KindFonts,
 };
 
 export type Typography = {
