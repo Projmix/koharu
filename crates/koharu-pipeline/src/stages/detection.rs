@@ -43,7 +43,10 @@ const PRODUCER: &str = "dev.koharu.pipeline.detection";
 const ANGLE_SNAP_DEGREES: f32 = 3.0;
 const ANGLE_SEARCH_HALF_STEPS: i32 = 90;
 const ANGLE_SEARCH_STEP_DEGREES: f64 = 0.5;
-const TYPOGRAPHY_SAMPLE_MARGIN: f32 = 2.0;
+// The background ring must clear outlines drawn past the glyph box (up to
+// about 13 px on the owner's chapter); otherwise the outline itself is taken
+// as the background and the stroke is lost.
+const TYPOGRAPHY_SAMPLE_MARGIN: f32 = 14.0;
 const COLOR_SNAP_DARK_LUMINANCE: u32 = 64 * 256;
 const COLOR_SNAP_LIGHT_LUMINANCE: u32 = 191 * 256;
 const COLOR_CLUSTER_MIN_DISTANCE_SQUARED: u32 = 32 * 32;
@@ -3853,6 +3856,60 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(text_scores, [0.1, 0.2, 0.3]);
+    }
+
+    #[test]
+    fn dark_text_with_white_outline_on_halftone_keeps_the_outline() {
+        // Segmentation boxes the glyphs, so the white outline extends past the
+        // box into the screentone, as on real pages.
+        let width = 120;
+        let height = 120;
+        let [left, top, right, bottom] = [30, 30, 90, 90];
+        let outline = 6;
+        let mut image = RgbImage::from_fn(width, height, |x, y| {
+            if x % 4 < 2 && y % 4 < 2 {
+                Rgb([0, 0, 0])
+            } else {
+                Rgb([150, 150, 150])
+            }
+        });
+        for y in top - outline..bottom + outline {
+            for x in left - outline..right + outline {
+                image.put_pixel(x, y, Rgb([255, 255, 255]));
+            }
+        }
+        for bar in [left, left + 18, left + 36, left + 54] {
+            for y in top..bottom {
+                for x in bar..bar + 6 {
+                    image.put_pixel(x, y, Rgb([0, 0, 0]));
+                }
+            }
+        }
+        let mut pixels = vec![0; width as usize * height as usize];
+        for y in top..bottom {
+            for x in left..right {
+                pixels[y as usize * width as usize + x as usize] = u8::MAX;
+            }
+        }
+        let detection = KoharuLayoutDetection {
+            label_id: 0,
+            label: "text".to_owned(),
+            score: 1.0,
+            bbox: [left as f32, top as f32, right as f32, bottom as f32],
+            area: pixels.iter().filter(|value| **value != 0).count() as u32,
+            mask: KoharuLayoutMask {
+                x: 0,
+                y: 0,
+                width,
+                height,
+                pixels,
+            },
+        };
+
+        let inferred = infer_typography(&image, &detection).unwrap();
+
+        assert_eq!(inferred.color, [0, 0, 0]);
+        assert_eq!(inferred.stroke_color, Some([255, 255, 255]));
     }
 
     #[test]
