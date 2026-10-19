@@ -281,14 +281,24 @@ impl Desktop {
                 angle_degrees: original.angle_degrees,
             };
             let coefficients = frame_transform(original, element.frame);
+            let points = layer
+                .geometry()
+                .points
+                .iter()
+                .map(|point| transform_point(coefficients, point))
+                .collect::<Vec<_>>();
+            // Moving or rotating keeps the balloon's shape. Resizing makes the area the
+            // box the user dragged, like a paragraph text box, instead of stretching the
+            // balloon outline past the balloon.
+            let resized = (element.frame.width - original.width).abs() > RESIZE_EPSILON
+                || (element.frame.height - original.height).abs() > RESIZE_EPSILON;
             let geometry = Geometry {
                 origin: layer.geometry().origin.clone(),
-                points: layer
-                    .geometry()
-                    .points
-                    .iter()
-                    .map(|point| transform_point(coefficients, point))
-                    .collect(),
+                points: if resized {
+                    rectangle_in_frame_axes(&points, element.frame.angle_degrees)
+                } else {
+                    points
+                },
             };
             if geometry != *layer.geometry()
                 || element.frame.angle_degrees != original.angle_degrees
@@ -533,6 +543,36 @@ fn frame_transform(original: Frame, preview: Frame) -> [f64; 6] {
     ]
 }
 
+const RESIZE_EPSILON: f32 = 0.01;
+
+/// The rectangle that bounds `points` along axes rotated by `angle_degrees`, as
+/// top-left, top-right, bottom-right, bottom-left so its top edge keeps the angle.
+fn rectangle_in_frame_axes(points: &[Point], angle_degrees: f32) -> Vec<Point> {
+    let (sin, cos) = f64::from(angle_degrees).to_radians().sin_cos();
+    let (mut min_u, mut min_v) = (f64::INFINITY, f64::INFINITY);
+    let (mut max_u, mut max_v) = (f64::NEG_INFINITY, f64::NEG_INFINITY);
+    for point in points {
+        let u = point.x * cos + point.y * sin;
+        let v = -point.x * sin + point.y * cos;
+        min_u = min_u.min(u);
+        max_u = max_u.max(u);
+        min_v = min_v.min(v);
+        max_v = max_v.max(v);
+    }
+    [
+        (min_u, min_v),
+        (max_u, min_v),
+        (max_u, max_v),
+        (min_u, max_v),
+    ]
+    .into_iter()
+    .map(|(u, v)| Point {
+        x: u * cos - v * sin,
+        y: u * sin + v * cos,
+    })
+    .collect()
+}
+
 fn transform_point([a, b, c, d, e, f]: [f64; 6], point: &Point) -> Point {
     Point {
         x: a * point.x + c * point.y + e,
@@ -546,7 +586,47 @@ mod tests {
 
     use tokio::{sync::Notify, time::timeout};
 
-    use super::Desktop;
+    use koharu_scene::Point;
+
+    use super::{Desktop, rectangle_in_frame_axes};
+
+    #[test]
+    fn resized_balloon_area_becomes_the_dragged_rectangle() {
+        let ellipse = (0..16)
+            .map(|step| {
+                let angle = f64::from(step) * std::f64::consts::TAU / 16.0;
+                Point {
+                    x: 100.0 + 40.0 * angle.cos(),
+                    y: 200.0 + 60.0 * angle.sin(),
+                }
+            })
+            .collect::<Vec<_>>();
+
+        let rectangle = rectangle_in_frame_axes(&ellipse, 0.0);
+
+        let corners = rectangle
+            .iter()
+            .map(|p| (p.x.round(), p.y.round()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            corners,
+            [(60.0, 140.0), (140.0, 140.0), (140.0, 260.0), (60.0, 260.0)]
+        );
+    }
+
+    #[test]
+    fn rotated_area_rectangle_keeps_the_frame_angle() {
+        let square =
+            [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)].map(|(x, y)| Point { x, y });
+
+        let rectangle = rectangle_in_frame_axes(&square, 90.0);
+
+        let top = (
+            rectangle[1].x - rectangle[0].x,
+            rectangle[1].y - rectangle[0].y,
+        );
+        assert!(top.0.abs() < 1e-9 && (top.1 - 10.0).abs() < 1e-9);
+    }
 
     #[tokio::test]
     async fn newer_request_preempts_current_preparation_and_acquires_ownership() {

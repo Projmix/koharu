@@ -204,6 +204,8 @@
     "opacity": "Opacidad",
     "placement": "Colocación",
     "resetAutoFit": "Restablecer ajuste automático",
+    "drawArea": "Dibujar el área donde encaja este texto",
+    "drawAreaShort": "Dibujar área",
     "selectPage": "Selecciona una página para inspeccionar sus capas.",
     "size": "Tamaño",
     "source": "Texto original",

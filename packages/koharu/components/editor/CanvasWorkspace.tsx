@@ -85,7 +85,7 @@ type Gesture =
       moved: boolean
     }
   | {
-      kind: 'text' | 'ocr' | 'restore'
+      kind: 'text' | 'ocr' | 'restore' | 'area'
       pointer: number
       revision: number
       start: Point
@@ -838,7 +838,12 @@ export function CanvasWorkspace() {
       const delta = { x: point.x - current.start.x, y: point.y - current.start.y }
       current.moved ||= delta.x !== 0 || delta.y !== 0
       updateTransform(translateFrames(current.originals, delta))
-    } else if (current.kind === 'text' || current.kind === 'ocr' || current.kind === 'restore') {
+    } else if (
+      current.kind === 'text' ||
+      current.kind === 'ocr' ||
+      current.kind === 'restore' ||
+      current.kind === 'area'
+    ) {
       const end =
         current.kind === 'text' ? point : clampPagePoint(point, page.size.width, page.size.height)
       current.frame =
@@ -873,6 +878,20 @@ export function CanvasWorkspace() {
           return refresh(projectKey, pagesKey, pageKey)
         })
         .catch(() => undefined)
+    } else if (current.kind === 'area') {
+      setDraft(null)
+      const [layer] = useKoharuStore.getState().selectedLayers
+      if (!layer || current.frame.width < 4 / zoom || current.frame.height < 4 / zoom) return
+      commitPending.current = true
+      void enqueue(() =>
+        call(commands.setGeometry, [{ layer, points: framePoints(current.frame) }]),
+      )
+        .then(() => {
+          useKoharuStore.setState({ textTransformTarget: 'text' })
+          return refresh(projectKey, pagesKey, pageKey)
+        })
+        .catch(() => undefined)
+        .finally(() => (commitPending.current = false))
     } else if (current.kind === 'ocr') {
       setDraft(null)
       if (current.frame.width < 4 / zoom || current.frame.height < 4 / zoom) return
@@ -1006,6 +1025,17 @@ export function CanvasWorkspace() {
                 start: physical,
                 translation: useKoharuStore.getState().camera.translation,
               }
+            } else if (tool === 'select' && textTransformTarget === 'area') {
+              const start = clampPagePoint(point, page.size.width, page.size.height)
+              const frame = rectangleFrame(start, start)
+              gesture.current = {
+                kind: 'area',
+                pointer: event.pointerId,
+                revision: canvasRevision,
+                start,
+                frame,
+              }
+              setDraft(frame)
             } else if (tool === 'select') {
               const target = selectionAt(point)
               const additive = event.shiftKey || event.ctrlKey || event.metaKey

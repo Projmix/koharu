@@ -74,7 +74,8 @@ interface KoharuStore {
   layerFrames: Record<EntityId, Frame>
   selectedLayers: EntityId[]
   pendingTextFocus: EntityId | null
-  textTransformTarget: 'text' | 'region'
+  /** What a select-tool drag edits for a text layer; 'area' draws its fit area. */
+  textTransformTarget: 'text' | 'region' | 'area'
   selectedPages: EntityId[]
   tool: CanvasTool
   brush: CanvasBrush

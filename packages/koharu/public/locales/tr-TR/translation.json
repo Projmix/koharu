@@ -204,6 +204,8 @@
     "opacity": "Opaklık",
     "placement": "Yerleşim",
     "resetAutoFit": "Otomatik sığdırmaya sıfırla",
+    "drawArea": "Bu metnin sığacağı alanı çiz",
+    "drawAreaShort": "Alan çiz",
     "selectPage": "Katmanlarını incelemek için bir sayfa seçin.",
     "size": "Boyut",
     "source": "Kaynak metin",

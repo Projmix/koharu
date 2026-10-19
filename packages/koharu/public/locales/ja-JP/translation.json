@@ -204,6 +204,8 @@
     "opacity": "不透明度",
     "placement": "配置",
     "resetAutoFit": "自動調整に戻す",
+    "drawArea": "このテキストを収める範囲を描く",
+    "drawAreaShort": "範囲を描く",
     "selectPage": "ページを選択してレイヤーを確認します。",
     "size": "サイズ",
     "source": "原文",

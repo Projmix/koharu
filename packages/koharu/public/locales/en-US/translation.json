@@ -204,6 +204,8 @@
     "opacity": "Opacity",
     "placement": "Placement",
     "resetAutoFit": "Reset to auto fit",
+    "drawArea": "Draw the area this text fits into",
+    "drawAreaShort": "Draw area",
     "selectPage": "Select a page to inspect its layers.",
     "size": "Size",
     "source": "Source text",

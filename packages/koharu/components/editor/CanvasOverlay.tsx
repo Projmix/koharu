@@ -88,6 +88,8 @@ export function CanvasOverlay({
   const automaticRegion = selectedTextLayer?.automatic_region
     ? page.regions.find((region) => region.id === selectedTextLayer.automatic_region)
     : undefined
+  // A custom frame replaces the balloon as the area text is fitted into.
+  const fitArea = selectedTextLayer?.geometry ?? automaticRegion?.geometry
   const sourceRegion = selectedTextLayer?.content.source_region
     ? page.regions.find((region) => region.id === selectedTextLayer.content.source_region)
     : undefined
@@ -118,9 +120,7 @@ export function CanvasOverlay({
           numbers={regionNumbers}
         />
       )}
-      {automaticRegion && (
-        <AutomaticRegionOverlay geometry={automaticRegion.geometry} camera={camera} />
-      )}
+      {fitArea && <AutomaticRegionOverlay geometry={fitArea} camera={camera} />}
       {layers.map(({ layer, frame, opacity }) => {
         const position = cssFrame(frame, camera)
         const selected = selectedIds.has(layer.id) && selectableLayer(layer)

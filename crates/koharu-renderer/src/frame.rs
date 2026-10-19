@@ -603,7 +603,9 @@ fn element_frame(layer: &Layer) -> Option<PreparedElementFrame> {
     let LayerKind::Text(text) = layer.kind() else {
         return None;
     };
-    let bounds = text.rendered_bounds;
+    // Handles sit on the area text is fitted into, as with a Photoshop paragraph box,
+    // so a drag moves that area edge by edge. Point text has no area beyond its glyphs.
+    let bounds = text.layout_bounds;
     if bounds.width > 0.0 && bounds.height > 0.0 {
         return Some(PreparedElementFrame {
             x: bounds.x,

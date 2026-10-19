@@ -204,6 +204,8 @@
     "opacity": "Opacidade",
     "placement": "Posicionamento",
     "resetAutoFit": "Redefinir para ajuste automático",
+    "drawArea": "Desenhar a área em que este texto se ajusta",
+    "drawAreaShort": "Desenhar área",
     "selectPage": "Selecione uma página para inspecionar suas camadas.",
     "size": "Tamanho",
     "source": "Texto original",

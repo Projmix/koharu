@@ -19,6 +19,7 @@ import {
   Minus,
   Plus,
   RotateCcw,
+  SquareDashed,
   Trash2,
   TriangleAlert,
   Type,
@@ -1272,6 +1273,30 @@ function LayerEditor({ layer, onDelete }: { layer: Layer; onDelete?: () => void 
                   ? t('inspector.autoFit')
                   : t('inspector.unplaced')}
             </span>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    type='button'
+                    variant={textTransformTarget === 'area' ? 'secondary' : 'ghost'}
+                    size='xs'
+                    aria-label={t('inspector.drawArea')}
+                    aria-pressed={textTransformTarget === 'area'}
+                    className='ml-auto h-5 gap-1 rounded-md px-1.5 text-[9px] font-normal text-muted-foreground hover:text-foreground'
+                    onClick={() =>
+                      useKoharuStore.setState({
+                        textTransformTarget: textTransformTarget === 'area' ? 'text' : 'area',
+                        tool: 'select',
+                      })
+                    }
+                  />
+                }
+              >
+                <SquareDashed className='size-3' />
+                {t('inspector.drawAreaShort')}
+              </TooltipTrigger>
+              <TooltipContent side='left'>{t('inspector.drawArea')}</TooltipContent>
+            </Tooltip>
             {layer.geometry && layer.automatic_region && (
               <Tooltip>
                 <TooltipTrigger
@@ -1281,7 +1306,7 @@ function LayerEditor({ layer, onDelete }: { layer: Layer; onDelete?: () => void 
                       variant='ghost'
                       size='xs'
                       aria-label={t('inspector.resetAutoFit')}
-                      className='ml-auto h-5 gap-1 rounded-md px-1.5 text-[9px] font-normal text-muted-foreground hover:text-foreground'
+                      className='h-5 gap-1 rounded-md px-1.5 text-[9px] font-normal text-muted-foreground hover:text-foreground'
                       onClick={resetTextFrame}
                     />
                   }

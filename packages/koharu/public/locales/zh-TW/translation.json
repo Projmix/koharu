@@ -204,6 +204,8 @@
     "opacity": "不透明度",
     "placement": "位置",
     "resetAutoFit": "重設為自動符合",
+    "drawArea": "繪製此文字適配的區域",
+    "drawAreaShort": "繪製區域",
     "selectPage": "選擇頁面以檢查其圖層。",
     "size": "字級",
     "source": "原文",

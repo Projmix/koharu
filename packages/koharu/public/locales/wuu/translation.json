@@ -204,6 +204,8 @@
     "opacity": "不透明度",
     "placement": "位置",
     "resetAutoFit": "重置成自动适配",
+    "drawArea": "画出搿段文字适配个区域",
+    "drawAreaShort": "画区域",
     "selectPage": "先选一页，再看箇页个图层。",
     "size": "字号",
     "source": "原文",

@@ -204,6 +204,8 @@
     "opacity": "不透明度",
     "placement": "位置",
     "resetAutoFit": "重置为自动适配",
+    "drawArea": "绘制此文本适配的区域",
+    "drawAreaShort": "绘制区域",
     "selectPage": "选择一个页面以检查其图层。",
     "size": "字号",
     "source": "原文",

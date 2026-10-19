@@ -877,6 +877,27 @@ describe('canvas interaction adapter', () => {
     ])
   })
 
+  it('draws a rectangle as the selected text area and leaves drawing mode', async () => {
+    installProject()
+    const setGeometry = vi.spyOn(commands, 'setGeometry').mockResolvedValue(null)
+    const surface = renderWorkspace()
+    act(() => {
+      useKoharuStore.getState().selectLayers(['dialogue'])
+      useKoharuStore.setState({ textTransformTarget: 'area' })
+    })
+
+    fireEvent.pointerDown(surface, { button: 0, pointerId: 30, clientX: 20, clientY: 20 })
+    fireEvent.pointerMove(surface, { pointerId: 30, clientX: 60, clientY: 70 })
+    fireEvent.pointerUp(surface, { pointerId: 30, clientX: 60, clientY: 70 })
+
+    await waitFor(() => expect(setGeometry).toHaveBeenCalledOnce())
+    const [[update]] = setGeometry.mock.calls[0]
+    expect(update.layer).toBe('dialogue')
+    expect(update.points).toHaveLength(4)
+    await waitFor(() => expect(useKoharuStore.getState().textTransformTarget).toBe('text'))
+    expect(useKoharuStore.getState().selectedLayers).toEqual(['dialogue'])
+  })
+
   it('shows detected regions only while the select tool is active', () => {
     installProject()
     queryClient.setQueryData(pageKey, (page: { layers: Layer[] }) => ({
