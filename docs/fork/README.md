@@ -100,6 +100,10 @@ Known gaps after the rebuild:
   outline is capped at 0.1x the font size, and text inside a balloon gets
   none; a user-set outline is kept. Spaced sound-effect letters stack one
   per line. The Border row has a swap button for text and outline colours.
+  Free text fits only inside the detected panel holding at least half of
+  its region (rotated regions keep their area). Text whose fill and outline
+  both stay below a 1.5 contrast ratio with the image layers under it gets
+  the existing fit warning (`TextFitWarningKind::LowContrast`).
 
 
 ## JEV
