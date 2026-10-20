@@ -58,7 +58,11 @@
     "empty": "請選擇頁面以開始。",
     "fit": "適應視窗",
     "surface": "Koharu 畫布",
-    "unavailable": "WebGPU 畫布無法使用"
+    "unavailable": "WebGPU 畫布無法使用",
+    "unboxedText": {
+      "create": "在此建立文字區塊",
+      "dismiss": "不是文字"
+    }
   },
   "colorPicker": {
     "brushColor": "筆刷顏色",
@@ -74,6 +78,9 @@
     "issueCount_other": "有 {{count}} 個文字區塊需要查看。選擇即可開啟。",
     "emptyTranslation": "沒有譯文",
     "japaneseText": "譯文中仍有日文字元",
+    "unboxedText": "可能漏偵測的文字：{{count}} 處",
+    "unboxedText_one": "可能漏偵測的文字：{{count}} 處",
+    "unboxedText_other": "可能漏偵測的文字：{{count}} 處",
     "exportAnyway": "仍然匯出"
   },
   "common": {

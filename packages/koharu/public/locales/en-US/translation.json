@@ -58,7 +58,11 @@
     "empty": "Select a page to begin.",
     "fit": "Fit Window",
     "surface": "Koharu canvas",
-    "unavailable": "WebGPU canvas unavailable"
+    "unavailable": "WebGPU canvas unavailable",
+    "unboxedText": {
+      "create": "Create a text block here",
+      "dismiss": "Not text"
+    }
   },
   "colorPicker": {
     "brushColor": "Brush color",
@@ -74,6 +78,9 @@
     "issueCount_other": "{{count}} text blocks need a look. Select one to open it.",
     "emptyTranslation": "No translation",
     "japaneseText": "Japanese characters left in the translation",
+    "unboxedText": "Possible missed text: {{count}}",
+    "unboxedText_one": "Possible missed text: {{count}}",
+    "unboxedText_other": "Possible missed text: {{count}}",
     "exportAnyway": "Export anyway"
   },
   "common": {

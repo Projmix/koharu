@@ -33,14 +33,16 @@ export const commands = {
 	size: PageSize,
 	layers: Layer[],
 	regions: AnalysisRegion[],
-} | null>("get_page").then((v) => (v==null?v:({...v,layers:v.layers.map(i=>i),regions:v.regions.map(i=>({...i,geometry:({...i.geometry,points:i.geometry.points.map(i=>i)})}))}) as typeof v)),
+	/**  Lettering scene markup saw outside every text region, still unresolved. */
+	unboxed_text: UnboxedText[],
+} | null>("get_page").then((v) => (v==null?v:({...v,layers:v.layers.map(i=>i),regions:v.regions.map(i=>({...i,geometry:({...i.geometry,points:i.geometry.points.map(i=>i)})})),unboxed_text:v.unboxed_text.map(i=>i)}) as typeof v)),
 	listProjects: () => __TAURI_INVOKE<ProjectSummary[]>("list_projects"),
 	createProject: (name: string) => __TAURI_INVOKE<null>("create_project", { name }),
 	openProject: (name: string) => __TAURI_INVOKE<null>("open_project", { name }),
 	deleteProject: (name: string) => __TAURI_INVOKE<null>("delete_project", { name }),
 	closeProject: () => __TAURI_INVOKE<null>("close_project"),
 	import: (source: PageImportSource) => __TAURI_INVOKE<null>("import", { source }),
-	selectPage: (page: EntityId) => __TAURI_INVOKE<PageSelection>("select_page", { page }).then((v) => (({...v,page:({...v.page,layers:v.page.layers.map(i=>i),regions:v.page.regions.map(i=>({...i,geometry:({...i.geometry,points:i.geometry.points.map(i=>i)})}))})}) as typeof v)),
+	selectPage: (page: EntityId) => __TAURI_INVOKE<PageSelection>("select_page", { page }).then((v) => (({...v,page:({...v.page,layers:v.page.layers.map(i=>i),regions:v.page.regions.map(i=>({...i,geometry:({...i.geometry,points:i.geometry.points.map(i=>i)})})),unboxed_text:v.page.unboxed_text.map(i=>i)})}) as typeof v)),
 	getCharacters: () => __TAURI_INVOKE<Character[]>("get_characters"),
 	listProjectVersions: () => __TAURI_INVOKE<ProjectVersion[]>("list_project_versions").then((v) => (v.map(i=>i) as typeof v)),
 	saveProjectVersion: (name: string) => __TAURI_INVOKE<ProjectVersion>("save_project_version", { name }),
@@ -48,16 +50,17 @@ export const commands = {
 	deleteProjectVersion: (id: VersionId) => __TAURI_INVOKE<null>("delete_project_version", { id }),
 	renamePage: (page: EntityId, label: string) => __TAURI_INVOKE<null>("rename_page", { page, label }),
 	deletePages: (pages: EntityId[]) => __TAURI_INVOKE<null>("delete_pages", { pages }),
-	duplicatePages: (pages: EntityId[]) => __TAURI_INVOKE<DuplicatePagesResult>("duplicate_pages", { pages }).then((v) => (({...v,page:({...v.page,layers:v.page.layers.map(i=>i),regions:v.page.regions.map(i=>({...i,geometry:({...i.geometry,points:i.geometry.points.map(i=>i)})}))})}) as typeof v)),
+	duplicatePages: (pages: EntityId[]) => __TAURI_INVOKE<DuplicatePagesResult>("duplicate_pages", { pages }).then((v) => (({...v,page:({...v.page,layers:v.page.layers.map(i=>i),regions:v.page.regions.map(i=>({...i,geometry:({...i.geometry,points:i.geometry.points.map(i=>i)})})),unboxed_text:v.page.unboxed_text.map(i=>i)})}) as typeof v)),
 	pasteTextBlocks: (targetPage: EntityId, payload: TextClipboardPayload, position: {
 	x: number,
 	y: number,
-} | null) => __TAURI_INVOKE<TextTransferResult>("paste_text_blocks", { targetPage, payload: ({...payload,layers:payload.layers.map(i=>({...i,geometry:i.geometry==null?i.geometry:({...i.geometry,points:i.geometry.points.map(i=>i)}),angle_degrees:i.angle_degrees==null?i.angle_degrees:i.angle_degrees,typography:i.typography==null?i.typography:({...i.typography,size:i.typography.size==null?i.typography.size:i.typography.size,stroke_width:i.typography.stroke_width==null?i.typography.stroke_width:i.typography.stroke_width}),source_region:i.source_region==null?i.source_region:({...i.source_region,geometry:({...i.source_region.geometry,points:i.source_region.geometry.points.map(i=>i)})}),automatic_region:i.automatic_region==null?i.automatic_region:({...i.automatic_region,geometry:({...i.automatic_region.geometry,points:i.automatic_region.geometry.points.map(i=>i)})})}))}), position: position==null?position:position }).then((v) => (({...v,page:({...v.page,layers:v.page.layers.map(i=>i),regions:v.page.regions.map(i=>({...i,geometry:({...i.geometry,points:i.geometry.points.map(i=>i)})}))})}) as typeof v)),
+} | null) => __TAURI_INVOKE<TextTransferResult>("paste_text_blocks", { targetPage, payload: ({...payload,layers:payload.layers.map(i=>({...i,geometry:i.geometry==null?i.geometry:({...i.geometry,points:i.geometry.points.map(i=>i)}),angle_degrees:i.angle_degrees==null?i.angle_degrees:i.angle_degrees,typography:i.typography==null?i.typography:({...i.typography,size:i.typography.size==null?i.typography.size:i.typography.size,stroke_width:i.typography.stroke_width==null?i.typography.stroke_width:i.typography.stroke_width}),source_region:i.source_region==null?i.source_region:({...i.source_region,geometry:({...i.source_region.geometry,points:i.source_region.geometry.points.map(i=>i)})}),automatic_region:i.automatic_region==null?i.automatic_region:({...i.automatic_region,geometry:({...i.automatic_region.geometry,points:i.automatic_region.geometry.points.map(i=>i)})})}))}), position: position==null?position:position }).then((v) => (({...v,page:({...v.page,layers:v.page.layers.map(i=>i),regions:v.page.regions.map(i=>({...i,geometry:({...i.geometry,points:i.geometry.points.map(i=>i)})})),unboxed_text:v.page.unboxed_text.map(i=>i)})}) as typeof v)),
 	movePage: (page: EntityId, index: number) => __TAURI_INVOKE<null>("move_page", { page, index }),
 	setSourceText: (layer: EntityId, text: string) => __TAURI_INVOKE<null>("set_source_text", { layer, text }),
 	setTextRole: (layer: EntityId, role: string) => __TAURI_INVOKE<null>("set_text_role", { layer, role }),
 	setTranslation: (layer: EntityId, text: string | null) => __TAURI_INVOKE<null>("set_translation", { layer, text }),
 	setSpeechMarkup: (layer: EntityId, kind: SpeechKind, speaker: string | null) => __TAURI_INVOKE<null>("set_speech_markup", { layer, kind, speaker }),
+	dismissUnboxedText: (page: EntityId, flag: UnboxedText) => __TAURI_INVOKE<null>("dismiss_unboxed_text", { page, flag }),
 	setCharacters: (characters: CharacterInput[]) => __TAURI_INVOKE<null>("set_characters", { characters }),
 	/**
 	 *  Add another project's characters to the open project. Returns how many
@@ -68,8 +71,8 @@ export const commands = {
 	setGeometry: (updates: GeometryUpdate[]) => __TAURI_INVOKE<null>("set_geometry", { updates: updates.map(i=>({...i,points:i.points==null?i.points:i.points.map(i=>i)})) }),
 	setVisibility: (layers: EntityId[], visible: boolean | null, opacity: number | null) => __TAURI_INVOKE<null>("set_visibility", { layers, visible, opacity: opacity==null?opacity:opacity }),
 	deleteLayers: (layers: EntityId[]) => __TAURI_INVOKE<null>("delete_layers", { layers }),
-	moveLayer: (layer: EntityId, parent: EntityId, index: number) => __TAURI_INVOKE<Page>("move_layer", { layer, parent, index }).then((v) => (({...v,layers:v.layers.map(i=>i),regions:v.regions.map(i=>({...i,geometry:({...i.geometry,points:i.geometry.points.map(i=>i)})}))}) as typeof v)),
-	reorderLayers: (parent: EntityId, order: EntityId[]) => __TAURI_INVOKE<Page>("reorder_layers", { parent, order }).then((v) => (({...v,layers:v.layers.map(i=>i),regions:v.regions.map(i=>({...i,geometry:({...i.geometry,points:i.geometry.points.map(i=>i)})}))}) as typeof v)),
+	moveLayer: (layer: EntityId, parent: EntityId, index: number) => __TAURI_INVOKE<Page>("move_layer", { layer, parent, index }).then((v) => (({...v,layers:v.layers.map(i=>i),regions:v.regions.map(i=>({...i,geometry:({...i.geometry,points:i.geometry.points.map(i=>i)})})),unboxed_text:v.unboxed_text.map(i=>i)}) as typeof v)),
+	reorderLayers: (parent: EntityId, order: EntityId[]) => __TAURI_INVOKE<Page>("reorder_layers", { parent, order }).then((v) => (({...v,layers:v.layers.map(i=>i),regions:v.regions.map(i=>({...i,geometry:({...i.geometry,points:i.geometry.points.map(i=>i)})})),unboxed_text:v.unboxed_text.map(i=>i)}) as typeof v)),
 	undo: () => __TAURI_INVOKE<null>("undo"),
 	redo: () => __TAURI_INVOKE<null>("redo"),
 	process: (scope: Scope, operation: Operation) => __TAURI_INVOKE<JobId>("process", { scope, operation }),
@@ -77,7 +80,7 @@ export const commands = {
 	resolveImageEditPreview: (id: string, prompt: string | null) => __TAURI_INVOKE<null>("resolve_image_edit_preview", { id, prompt }),
 	exportChapterTranslation: () => __TAURI_INVOKE<boolean>("export_chapter_translation"),
 	importChapterTranslation: () => __TAURI_INVOKE<boolean>("import_chapter_translation"),
-	checkChapter: () => __TAURI_INVOKE<ChapterIssue[]>("check_chapter"),
+	checkChapter: () => __TAURI_INVOKE<ChapterCheck>("check_chapter"),
 	export: (format: ExportFormat) => __TAURI_INVOKE<null>("export", { format }),
 	getThumbnail: (page: EntityId) => __TAURI_INVOKE<ThumbnailBytes>("get_thumbnail", { page }),
 	getFonts: () => __TAURI_INVOKE<FontFamily[]>("get_fonts"),
@@ -96,7 +99,7 @@ export const commands = {
 	prepareCanvasPage: (page: EntityId) => __TAURI_INVOKE<{
 	revision: Revision,
 	page: Page,
-} | null>("prepare_canvas_page", { page }).then((v) => (v==null?v:({...v,page:({...v.page,layers:v.page.layers.map(i=>i),regions:v.page.regions.map(i=>({...i,geometry:({...i.geometry,points:i.geometry.points.map(i=>i)})}))})}) as typeof v)),
+} | null>("prepare_canvas_page", { page }).then((v) => (v==null?v:({...v,page:({...v.page,layers:v.page.layers.map(i=>i),regions:v.page.regions.map(i=>({...i,geometry:({...i.geometry,points:i.geometry.points.map(i=>i)})})),unboxed_text:v.page.unboxed_text.map(i=>i)})}) as typeof v)),
 	getCanvasPageManifest: (page: EntityId, revision: Revision) => __TAURI_INVOKE<CanvasBytes>("get_canvas_page_manifest", { page, revision }),
 	getCanvasPageResource: (page: EntityId, revision: Revision, resource: string) => __TAURI_INVOKE<CanvasBytes>("get_canvas_page_resource", { page, revision, resource }),
 	addPointText: (point: Point) => __TAURI_INVOKE<LayerCommit>("add_point_text", { point }),
@@ -174,9 +177,15 @@ export type CanvasState = {
 };
 
 /**
- *  A text block the final chapter check flags before export. Export is not
- *  blocked; the list only points at what still needs a look.
+ *  What the final chapter check flags before export. Export is not blocked;
+ *  the lists only point at what still needs a look.
  */
+export type ChapterCheck = {
+	texts: ChapterIssue[],
+	unboxed_text: UnboxedTextIssue[],
+};
+
+/**  A text block the final chapter check flags. */
 export type ChapterIssue = {
 	page: EntityId,
 	element: EntityId,
@@ -515,6 +524,8 @@ export type Page = {
 	size: PageSize,
 	layers: Layer[],
 	regions: AnalysisRegion[],
+	/**  Lettering scene markup saw outside every text region, still unresolved. */
+	unboxed_text: UnboxedText[],
 };
 
 export type PageImportSource = "files" | "folder";
@@ -847,6 +858,24 @@ export type Typography = {
 export type TypographyUpdate = {
 	layer: EntityId,
 	typography: Typography,
+};
+
+/**
+ *  Lettering markup saw outside every text region, as an axis-aligned box in
+ *  page units. It is a review flag, not detection geometry and not a layer.
+ */
+export type UnboxedText = {
+	x: number,
+	y: number,
+	width: number,
+	height: number,
+	kind: SpeechKind,
+};
+
+/**  A page where scene markup saw lettering outside every text region. */
+export type UnboxedTextIssue = {
+	page: EntityId,
+	count: number,
 };
 
 export type UpstreamUpdate = {

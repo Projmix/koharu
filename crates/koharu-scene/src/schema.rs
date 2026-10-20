@@ -8,7 +8,7 @@ use crate::{
     BubbleRegion, CharacterList, DetectionAnalysis, EntityId, EntityOrigin, Error, Geometry, Group,
     OcrAnalysis, Page, PageMarkup, Project, RasterLayer, Region, RegionSpec, Relation, Result,
     SourceText, SpeechMarkup, TextContent, TextGroup, TextLayout, TextRegion, TextRole,
-    Translation, TranslationReview, Typography, Visibility,
+    Translation, TranslationReview, Typography, UnboxedTextReview, Visibility,
     component::{Component, ComponentRecord, ValidationContext, decode, key},
     components::Assets,
     state::{Components, State},
@@ -65,6 +65,7 @@ component_schema! {
     SPEECH_MARKUP = 19 => SpeechMarkup,
     PAGE_MARKUP = 20 => PageMarkup,
     CHARACTER_LIST = 21 => CharacterList,
+    UNBOXED_TEXT_REVIEW = 22 => UnboxedTextReview,
 }
 
 pub(crate) fn validate_components(
@@ -111,7 +112,7 @@ pub(crate) fn validate_entity(state: &State, id: EntityId) -> Result<()> {
         Err(Error::invalid(format!(
             "entity {id} carries text content data but is not text content"
         )))
-    } else if has(PAGE_MARKUP) && !has(PAGE) {
+    } else if (has(PAGE_MARKUP) || has(UNBOXED_TEXT_REVIEW)) && !has(PAGE) {
         Err(Error::invalid(format!(
             "entity {id} has page markup but is not a page"
         )))

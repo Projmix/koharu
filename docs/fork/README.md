@@ -75,6 +75,14 @@ Known gaps after the rebuild:
   pages. A refusal, filtered, invalid or failed answer records
   `PageMarkup` as missing and the run continues. User-authored
   markup and a user-edited character list are never overwritten.
+  The model also locates lettering no numbered box covers, without
+  transcribing it; `PageMarkup.unboxed` keeps those boxes minus any a text
+  region covers. They are review flags, not regions or layers: a flag is
+  open while no text region covers 30% of it and the user has not
+  dismissed it (a user-owned page `UnboxedTextReview`, so markup can still
+  rerun). The canvas shows open flags with "create a text block", which
+  is the OCR tool's region-and-read path, and "not text"; the chapter
+  check lists them per page.
   `import_characters` adds another project's characters (read-only open of
   its newest valid state, skipping a known id or name) as one user-owned
   undo step. Chapter

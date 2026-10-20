@@ -264,6 +264,27 @@ pub(crate) async fn set_speech_markup(
 
 #[tauri::command]
 #[specta::specta]
+pub(crate) async fn dismiss_unboxed_text(
+    page: EntityId,
+    flag: koharu_scene::UnboxedText,
+    desktop: State<'_, Desktop>,
+    project: State<'_, CurrentProject>,
+    canvas_channel: State<'_, CanvasChannel>,
+) -> Result<(), Error> {
+    let (commit, active) = {
+        let mut project = project.project.lock().await;
+        let project = project.as_mut().context("no project is open")?;
+        let commit = project.dismiss_unboxed_text(page, flag).await?;
+        project.record_commit(&commit);
+        (commit, project.active_page())
+    };
+    let canvas = synchronize_canvas(&desktop, &commit, active).await?;
+    canvas_channel.channel.publish(canvas);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
 pub(crate) async fn set_characters(
     characters: Vec<CharacterInput>,
     desktop: State<'_, Desktop>,

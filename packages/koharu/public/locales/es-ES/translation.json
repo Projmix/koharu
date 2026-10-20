@@ -58,7 +58,11 @@
     "empty": "Selecciona una página para empezar.",
     "fit": "Ajustar a la ventana",
     "surface": "Lienzo de Koharu",
-    "unavailable": "El lienzo WebGPU no está disponible"
+    "unavailable": "El lienzo WebGPU no está disponible",
+    "unboxedText": {
+      "create": "Crear un bloque de texto aquí",
+      "dismiss": "No es texto"
+    }
   },
   "colorPicker": {
     "brushColor": "Color del pincel",
@@ -74,6 +78,9 @@
     "issueCount_other": "{{count}} bloques de texto necesitan revisión. Selecciona uno para abrirlo.",
     "emptyTranslation": "Sin traducción",
     "japaneseText": "Quedan caracteres japoneses en la traducción",
+    "unboxedText": "Posible texto sin detectar: {{count}}",
+    "unboxedText_one": "Posible texto sin detectar: {{count}}",
+    "unboxedText_other": "Posible texto sin detectar: {{count}}",
     "exportAnyway": "Exportar de todos modos"
   },
   "common": {

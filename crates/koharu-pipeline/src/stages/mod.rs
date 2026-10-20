@@ -18,6 +18,7 @@ pub(crate) use fal::FalModel;
 pub(crate) use fal::normalize_cleanup_prompt;
 pub use fal::{ImageEditConfig, InpaintingApplyMode};
 pub use inpainting::{Flux2KleinConfig, RoremMixedConfig};
+pub use markup::open_unboxed_text;
 pub use ocr::ocr_unverified;
 pub(crate) use replicate::ReplicateModel;
 pub use translation::ChapterTranslation;

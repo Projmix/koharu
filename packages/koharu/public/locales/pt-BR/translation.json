@@ -58,7 +58,11 @@
     "empty": "Selecione uma página para começar.",
     "fit": "Ajustar à janela",
     "surface": "Tela do Koharu",
-    "unavailable": "A tela WebGPU não está disponível"
+    "unavailable": "A tela WebGPU não está disponível",
+    "unboxedText": {
+      "create": "Criar um bloco de texto aqui",
+      "dismiss": "Não é texto"
+    }
   },
   "colorPicker": {
     "brushColor": "Cor do pincel",
@@ -74,6 +78,9 @@
     "issueCount_other": "{{count}} blocos de texto precisam de revisão. Selecione um para abri-lo.",
     "emptyTranslation": "Sem tradução",
     "japaneseText": "Restaram caracteres japoneses na tradução",
+    "unboxedText": "Possível texto não detectado: {{count}}",
+    "unboxedText_one": "Possível texto não detectado: {{count}}",
+    "unboxedText_other": "Possível texto não detectado: {{count}}",
     "exportAnyway": "Exportar mesmo assim"
   },
   "common": {

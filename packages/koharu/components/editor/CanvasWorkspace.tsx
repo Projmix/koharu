@@ -56,6 +56,7 @@ import {
   type TextClipboardPayload,
   type TextTransferMode,
   type TransformFrame,
+  type UnboxedText,
 } from '@koharu/bridge/protocol'
 import { Button } from '@koharu/ui/components/button'
 
@@ -396,6 +397,45 @@ export function CanvasWorkspace() {
         setPreviews({})
       })
   }, [canvas, enqueue, pageId, transformUpdates])
+
+  // One path for a drawn OCR rectangle and a flagged unboxed text: add the
+  // region, select its layer, then read it.
+  const readRegion = useCallback(
+    (frame: Frame) => {
+      commitPending.current = true
+      void call(commands.addOcrRegion, frame)
+        .then(async (result) => {
+          selectLayers([result.layer])
+          await refresh(projectKey, pagesKey, pageKey)
+          return call(
+            commands.process,
+            { scope: 'entities', value: [result.region] },
+            { operation: 'stages', stages: ['ocr'] },
+          )
+        })
+        .catch(() => undefined)
+        .finally(() => (commitPending.current = false))
+    },
+    [selectLayers],
+  )
+
+  const readUnboxedText = useCallback(
+    (flag: UnboxedText) => {
+      if (commitPending.current) return
+      readRegion({ x: flag.x, y: flag.y, width: flag.width, height: flag.height, angle_degrees: 0 })
+    },
+    [readRegion],
+  )
+
+  const dismissUnboxedText = useCallback(
+    (flag: UnboxedText) => {
+      if (!pageId) return
+      void enqueue(() => call(commands.dismissUnboxedText, pageId, flag))
+        .then(() => refresh(projectKey, pagesKey, pageKey))
+        .catch(() => undefined)
+    },
+    [enqueue, pageId],
+  )
 
   const cancelGesture = useCallback(() => {
     const current = gesture.current
@@ -895,19 +935,7 @@ export function CanvasWorkspace() {
     } else if (current.kind === 'ocr') {
       setDraft(null)
       if (current.frame.width < 4 / zoom || current.frame.height < 4 / zoom) return
-      commitPending.current = true
-      void call(commands.addOcrRegion, current.frame)
-        .then(async (result) => {
-          selectLayers([result.layer])
-          await refresh(projectKey, pagesKey, pageKey)
-          return call(
-            commands.process,
-            { scope: 'entities', value: [result.region] },
-            { operation: 'stages', stages: ['ocr'] },
-          )
-        })
-        .catch(() => undefined)
-        .finally(() => (commitPending.current = false))
+      readRegion(current.frame)
     } else if (current.kind === 'restore') {
       setDraft(null)
       if (current.frame.width < 4 / zoom || current.frame.height < 4 / zoom) return
@@ -1256,6 +1284,8 @@ export function CanvasWorkspace() {
               brushSize={brush.diameter}
               showBrushCursor={isBrushTool(tool)}
               showDetectionRegions={tool === 'select' || tool === 'ocr'}
+              onCreateUnboxedText={readUnboxedText}
+              onDismissUnboxedText={dismissUnboxedText}
               onTransformStart={beginTransform}
               onTransformFrame={updateTransform}
               onTransformEnd={finishTransform}

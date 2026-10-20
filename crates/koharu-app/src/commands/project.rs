@@ -18,7 +18,7 @@ use koharu_scene::{
     SpeechKind, SpeechMarkup, TextGroup as SceneTextGroup, TextLayout as SceneTextLayout,
     TextLayoutKind, TextRegion, TextRole as SceneTextRole, Translation as SceneTranslation,
     TranslationReview as SceneTranslationReview, TranslationReviewReason,
-    Typography as SceneTypography, Visibility as SceneVisibility,
+    Typography as SceneTypography, UnboxedText, UnboxedTextReview, Visibility as SceneVisibility,
 };
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -86,6 +86,8 @@ pub struct Page {
     pub size: PageSize,
     pub layers: Vec<Layer>,
     pub regions: Vec<AnalysisRegion>,
+    /// Lettering scene markup saw outside every text region, still unresolved.
+    pub unboxed_text: Vec<UnboxedText>,
 }
 
 #[derive(Clone, Debug, Serialize, Type)]
@@ -1423,6 +1425,38 @@ impl Project {
         self.commit(patch).await
     }
 
+    /// Drops one unboxed-text flag the user judged not to be lettering. The
+    /// webview's copy of the box can differ in the last bit after a JSON round
+    /// trip, so the stored flag it names is the one recorded.
+    pub(crate) async fn dismiss_unboxed_text(
+        &mut self,
+        page: EntityId,
+        flag: UnboxedText,
+    ) -> Result<Commit> {
+        let snapshot = self.snapshot();
+        let close = |a: f64, b: f64| (a - b).abs() <= 1e-6 * a.abs().max(1.0);
+        let flag = koharu_pipeline::open_unboxed_text(&snapshot, page)?
+            .into_iter()
+            .find(|open| {
+                open.kind == flag.kind
+                    && close(open.x, flag.x)
+                    && close(open.y, flag.y)
+                    && close(open.width, flag.width)
+                    && close(open.height, flag.height)
+            })
+            .context("the unboxed text flag is no longer on the page")?;
+        let mut review =
+            snapshot
+                .component::<UnboxedTextReview>(page)?
+                .unwrap_or(UnboxedTextReview {
+                    origin: Origin::User,
+                    dismissed: Vec::new(),
+                });
+        review.dismissed.push(flag);
+        let patch = snapshot.patch(|edit| edit.set(page, &review))?;
+        self.commit(patch).await
+    }
+
     /// Save the character list as the user's. A character that is no longer
     /// listed is also cleared from every text that names it as the speaker,
     /// in the same patch, so the edit undoes as one step.
@@ -2222,6 +2256,7 @@ impl Project {
             },
             layers,
             regions,
+            unboxed_text: koharu_pipeline::open_unboxed_text(snapshot, page)?,
         })
     }
 

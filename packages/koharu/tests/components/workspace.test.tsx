@@ -113,6 +113,7 @@ function installProject() {
     size: { width: 1000, height: 1000 },
     layers: [layer],
     regions: [],
+    unboxed_text: [],
   }
   queryClient.setQueryData(projectKey, {
     name: 'Book',
@@ -1430,6 +1431,36 @@ describe('canvas interaction adapter', () => {
     )
     expect(useKoharuStore.getState().selectedLayers).toEqual(['ocr-layer'])
     expect(useKoharuStore.getState().tool).toBe('ocr')
+  })
+
+  it('reads a flagged unboxed text as an OCR region or dismisses the flag', async () => {
+    installProject()
+    const flag = { x: 300, y: 200, width: 80, height: 40, kind: 'sound-effect' as const }
+    queryClient.setQueryData(pageKey, (page: object) => ({ ...page, unboxed_text: [flag] }))
+    const addRegion = vi
+      .spyOn(commands, 'addOcrRegion')
+      .mockResolvedValue({ revision: 2, layer: 'ocr-layer', region: 'ocr-region' })
+    const process = vi.spyOn(commands, 'process').mockResolvedValue('ocr-job')
+    const dismiss = vi.spyOn(commands, 'dismissUnboxedText').mockResolvedValue(null)
+    renderWorkspace()
+
+    expect(screen.getAllByTestId('unboxed-text')).toHaveLength(1)
+    fireEvent.click(screen.getByTitle('Create a text block here'))
+    await waitFor(() => expect(process).toHaveBeenCalledOnce())
+    expect(addRegion).toHaveBeenCalledWith({
+      x: 300,
+      y: 200,
+      width: 80,
+      height: 40,
+      angle_degrees: 0,
+    })
+    expect(process).toHaveBeenCalledWith(
+      { scope: 'entities', value: ['ocr-region'] },
+      { operation: 'stages', stages: ['ocr'] },
+    )
+
+    fireEvent.click(screen.getByTitle('Not text'))
+    await waitFor(() => expect(dismiss).toHaveBeenCalledWith('page', flag))
   })
 
   it('clamps an OCR rectangle to the page', async () => {

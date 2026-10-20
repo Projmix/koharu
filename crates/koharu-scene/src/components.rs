@@ -26,7 +26,7 @@ pub use layers::{
 };
 pub use markup::{
     Character, CharacterId, CharacterList, Gender, ObservedText, PageMarkup, PageMarkupMissing,
-    PageMarkupStatus, SpeechKind, SpeechMarkup,
+    PageMarkupStatus, SpeechKind, SpeechMarkup, UnboxedText, UnboxedTextReview,
 };
 pub use provenance::{Authored, Generation, Origin};
 pub use spatial::{Geometry, Point, Visibility};

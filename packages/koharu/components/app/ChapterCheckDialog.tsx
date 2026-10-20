@@ -9,7 +9,7 @@ import { switchPage } from '@/lib/navigation'
 import { usePages } from '@/lib/queries'
 import {
   commands,
-  type ChapterIssue,
+  type ChapterCheck,
   type ExportFormat,
   type TextFitWarningKind,
   type TranslationIssue,
@@ -52,7 +52,7 @@ export function ChapterCheckDialog({
 }) {
   const { t } = useTranslation()
   const pages = usePages(format !== null).data ?? []
-  const [issues, setIssues] = useState<ChapterIssue[] | null>(null)
+  const [issues, setIssues] = useState<ChapterCheck | null>(null)
   const handlers = useRef({ onClose, onExport })
   handlers.current = { onClose, onExport }
 
@@ -63,7 +63,7 @@ export function ChapterCheckDialog({
     call(commands.checkChapter)
       .then((found) => {
         if (!current) return
-        if (found.length === 0) {
+        if (found.texts.length === 0 && found.unboxed_text.length === 0) {
           handlers.current.onClose()
           handlers.current.onExport(format)
         } else {
@@ -79,6 +79,10 @@ export function ChapterCheckDialog({
   }, [format])
 
   const labels = new Map(pages.map((page) => [page.id, page.label]))
+  // Lettering without a text region is a text block the chapter still lacks.
+  const issueCount = issues
+    ? issues.texts.length + issues.unboxed_text.reduce((sum, page) => sum + page.count, 0)
+    : 0
 
   return (
     <Dialog open={format !== null} onOpenChange={(open) => !open && onClose()}>
@@ -88,7 +92,7 @@ export function ChapterCheckDialog({
           <DialogDescription>
             {issues === null
               ? t('chapterCheck.checking')
-              : t('chapterCheck.issueCount', { count: issues.length })}
+              : t('chapterCheck.issueCount', { count: issueCount })}
           </DialogDescription>
         </DialogHeader>
         <ScrollArea className='h-72 min-w-0 rounded-lg border border-border/75'>
@@ -101,7 +105,26 @@ export function ChapterCheckDialog({
             </div>
           ) : (
             <ul className='divide-y divide-border/65'>
-              {issues.map((issue) => (
+              {issues.unboxed_text.map((issue) => (
+                <li key={issue.page}>
+                  <button
+                    type='button'
+                    className='flex w-full items-start gap-3 px-3 py-2 text-left hover:bg-primary/10'
+                    onClick={() => {
+                      switchPage(issue.page, [issue.page], [])
+                      onClose()
+                    }}
+                  >
+                    <span className='w-14 shrink-0 truncate pt-px text-[10px] text-muted-foreground'>
+                      {labels.get(issue.page) ?? ''}
+                    </span>
+                    <span className='min-w-0 flex-1 text-[10px] text-destructive'>
+                      {t('chapterCheck.unboxedText', { count: issue.count })}
+                    </span>
+                  </button>
+                </li>
+              ))}
+              {issues.texts.map((issue) => (
                 <li key={issue.element}>
                   <button
                     type='button'

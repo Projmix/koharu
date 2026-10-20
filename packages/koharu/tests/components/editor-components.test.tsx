@@ -343,6 +343,7 @@ function installProject() {
     size: { width: 1000, height: 1500 },
     layers: [textLayer],
     regions: [],
+    unboxed_text: [],
   }
   queryClient.setQueryData(projectKey, {
     name: 'Book',
@@ -644,7 +645,7 @@ describe('greenfield editor', () => {
       const user = userEvent.setup()
       installProject()
       let finishExport: (() => void) | undefined
-      vi.spyOn(commands, 'checkChapter').mockResolvedValue([])
+      vi.spyOn(commands, 'checkChapter').mockResolvedValue({ texts: [], unboxed_text: [] })
       const exportProject = vi.spyOn(commands, 'export').mockImplementation(
         () =>
           new Promise<null>((resolve) => {
@@ -691,7 +692,7 @@ describe('greenfield editor', () => {
       const user = userEvent.setup()
       installProject()
       let fail: ((error: Error) => void) | undefined
-      vi.spyOn(commands, 'checkChapter').mockResolvedValue([])
+      vi.spyOn(commands, 'checkChapter').mockResolvedValue({ texts: [], unboxed_text: [] })
       vi.spyOn(commands, command).mockImplementation(
         () =>
           new Promise<null>((_resolve, reject) => {
@@ -820,6 +821,7 @@ describe('greenfield editor', () => {
         size: { width: 1000, height: 1500 },
         layers: [],
         regions: [],
+        unboxed_text: [],
       },
       {
         id: 'page-2',
@@ -827,6 +829,7 @@ describe('greenfield editor', () => {
         size: { width: 1000, height: 1500 },
         layers: [],
         regions: [],
+        unboxed_text: [],
       },
       {
         id: 'page-3',
@@ -834,6 +837,7 @@ describe('greenfield editor', () => {
         size: { width: 1000, height: 1500 },
         layers: [],
         regions: [],
+        unboxed_text: [],
       },
     ]
     queryClient.setQueryData(
@@ -937,6 +941,7 @@ describe('greenfield editor', () => {
       size: { width: 1000, height: 1500 },
       layers: [],
       regions: [],
+      unboxed_text: [],
     }
     queryClient.setQueryData(pagesKey, [
       ...(queryClient.getQueryData<PageSummary[]>(pagesKey) ?? []),
@@ -970,6 +975,7 @@ describe('greenfield editor', () => {
       size: { width: 1000, height: 1500 },
       layers: [],
       regions: [],
+      unboxed_text: [],
     }
     queryClient.setQueryData(pagesKey, [
       ...(queryClient.getQueryData<PageSummary[]>(pagesKey) ?? []),

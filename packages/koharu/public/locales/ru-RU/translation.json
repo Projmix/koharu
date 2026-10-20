@@ -58,7 +58,11 @@
     "empty": "Выберите страницу, чтобы начать.",
     "fit": "Вписать в окно",
     "surface": "Холст Koharu",
-    "unavailable": "Холст WebGPU недоступен"
+    "unavailable": "Холст WebGPU недоступен",
+    "unboxedText": {
+      "create": "Создать текстовый блок здесь",
+      "dismiss": "Это не текст"
+    }
   },
   "colorPicker": {
     "brushColor": "Цвет кисти",
@@ -74,6 +78,9 @@
     "issueCount_other": "Блоков для проверки: {{count}}. Выберите блок, чтобы открыть его.",
     "emptyTranslation": "Нет перевода",
     "japaneseText": "В переводе остались японские символы",
+    "unboxedText": "Возможно пропущенный текст: {{count}}",
+    "unboxedText_one": "Возможно пропущенный текст: {{count}}",
+    "unboxedText_other": "Возможно пропущенный текст: {{count}}",
     "exportAnyway": "Всё равно экспортировать"
   },
   "common": {

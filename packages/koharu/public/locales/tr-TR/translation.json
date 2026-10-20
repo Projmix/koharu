@@ -58,7 +58,11 @@
     "empty": "Başlamak için bir sayfa seçin.",
     "fit": "Pencereye Sığdır",
     "surface": "Koharu tuvali",
-    "unavailable": "WebGPU tuvali kullanılamıyor"
+    "unavailable": "WebGPU tuvali kullanılamıyor",
+    "unboxedText": {
+      "create": "Buraya metin bloğu oluştur",
+      "dismiss": "Metin değil"
+    }
   },
   "colorPicker": {
     "brushColor": "Fırça rengi",
@@ -74,6 +78,9 @@
     "issueCount_other": "{{count}} metin bloğunun gözden geçirilmesi gerekiyor. Açmak için birini seçin.",
     "emptyTranslation": "Çeviri yok",
     "japaneseText": "Çeviride Japonca karakterler kaldı",
+    "unboxedText": "Algılanmamış olabilecek metin: {{count}}",
+    "unboxedText_one": "Algılanmamış olabilecek metin: {{count}}",
+    "unboxedText_other": "Algılanmamış olabilecek metin: {{count}}",
     "exportAnyway": "Yine de dışa aktar"
   },
   "common": {

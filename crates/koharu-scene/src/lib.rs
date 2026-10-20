@@ -30,7 +30,8 @@ pub use components::{
     PageMarkupMissing, PageMarkupStatus, Point, Project, RasterLayer, RasterLayerKind, Region,
     RegionKind, Relation, RelationKind, SourceText, SpeechKind, SpeechMarkup, TextAlignment,
     TextContent, TextDirection, TextGroup, TextLayout, TextLayoutKind, TextRole, Translation,
-    TranslationReview, TranslationReviewReason, Typography, Visibility, WritingMode,
+    TranslationReview, TranslationReviewReason, Typography, UnboxedText, UnboxedTextReview,
+    Visibility, WritingMode,
 };
 pub use document::{AnalysisRegionRef, GroupRef, TextContentRef, TextLayerRef};
 pub use edit::{At, Edit, RemovePolicy};

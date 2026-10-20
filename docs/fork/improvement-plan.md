@@ -14,6 +14,20 @@ chapter that needs no manual edits. Each lands as its own change.
    the whole page to a vision model; ask it to also list visible text
    outside the numbered boxes, flag those places for review, and turn a
    flag into a region on request.
+   **Done:** markup also returns unboxed lettering as boxes, never
+   transcribed. A flag that a text region covers, or that the user
+   dismisses, disappears; the canvas shows the rest with "create a text
+   block" (the OCR tool's path) and "not text", and the chapter check
+   lists them by page. Measured on 11 pages with fresh detection, two runs
+   each: of the 7 real misses detection still has (item 3; p22 ヌチュ and
+   ヌチ are now detected), both runs found 6 (ポ, グサッ, 事務所, ハア,
+   ニチュ, ふきふき) and placed ぐ… 60 px low on a hand, the only false
+   positive (1 per 11 pages; none on the 7 pages without misses and none
+   on boxed text). They also found three real letterings the owner's
+   blocks lack (p22 トロォ and a second ハァ, a p23 outlined sound effect).
+   Markup itself is unchanged within run-to-run noise: no format failures
+   in 44 calls, kind agreement 121 and 120 of 133 against 120 between two
+   plain runs. A page costs 9% more ($0.0038 against $0.0035).
 2. **Vertical-text boxes cross panel borders.** The fit area of free text
    follows the Japanese vertical box, which can reach into the next panel
    (p7 «ДА БЛЯТЬ»). Clip the free-text fit area to its panel.

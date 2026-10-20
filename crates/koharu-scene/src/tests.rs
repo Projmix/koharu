@@ -1819,6 +1819,7 @@ async fn scene_markup_components_belong_to_their_owners() {
         origin: Origin::User,
         status: PageMarkupStatus::Complete,
         observed: Vec::new(),
+        unboxed: Vec::new(),
     };
     let result = session.snapshot().patch(|edit| {
         let page = edit.add_page(page(), At::End)?;

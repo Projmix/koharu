@@ -17,6 +17,7 @@ const MAX_CHARACTER_NOTES_BYTES: usize = 4096;
 const MAX_CHARACTERS: usize = 1024;
 const MAX_OBSERVED_TEXTS: usize = 100_000;
 const MAX_OBSERVED_TEXT_BYTES: usize = 16 * 1024 * 1024;
+const MAX_UNBOXED_TEXTS: usize = 1024;
 
 /// A project-wide identifier of a character in the [`CharacterList`].
 #[revisioned(revision = 1)]
@@ -144,17 +145,32 @@ pub struct ObservedText {
     pub source: String,
 }
 
+/// Lettering markup saw outside every text region, as an axis-aligned box in
+/// page units. It is a review flag, not detection geometry and not a layer.
+#[revisioned(revision = 1)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, Type)]
+pub struct UnboxedText {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+    pub kind: SpeechKind,
+}
+
 /// The outcome of scene markup for one page and the texts it was based on.
 ///
 /// `observed` lets a rerun skip a page whose texts are unchanged. The ids are
 /// observation keys, not references: a removed text only makes the record
 /// stale, so they are not declared as record references.
-#[revisioned(revision = 1)]
+#[revisioned(revision = 2)]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Type)]
 pub struct PageMarkup {
     pub origin: Origin,
     pub status: PageMarkupStatus,
     pub observed: Vec<ObservedText>,
+    /// Lettering the page may still be missing a text region for.
+    #[revision(start = 2)]
+    pub unboxed: Vec<UnboxedText>,
 }
 
 impl Component for PageMarkup {
@@ -170,6 +186,48 @@ impl Component for PageMarkup {
             })
         {
             return Err(Error::invalid("page markup observations are invalid"));
+        }
+        if self.unboxed.len() > MAX_UNBOXED_TEXTS
+            || self.unboxed.iter().any(|text| {
+                ![text.x, text.y, text.width, text.height]
+                    .iter()
+                    .all(|value| value.is_finite())
+                    || text.width <= 0.0
+                    || text.height <= 0.0
+            })
+        {
+            return Err(Error::invalid("page markup unboxed texts are invalid"));
+        }
+        self.origin.validate()
+    }
+
+    fn origin(&self) -> Option<&Origin> {
+        Some(&self.origin)
+    }
+
+    fn set_origin(&mut self, origin: Origin) -> bool {
+        self.origin = origin;
+        true
+    }
+}
+
+/// Unboxed-text flags of a page the user judged not to be lettering.
+///
+/// Markup owns its flags and a rerun replaces them; the user owns this list,
+/// so a dismissal never makes the markup record user-owned.
+#[revisioned(revision = 1)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Type)]
+pub struct UnboxedTextReview {
+    pub origin: Origin,
+    pub dismissed: Vec<UnboxedText>,
+}
+
+impl Component for UnboxedTextReview {
+    const KIND: &'static str = "dev.koharu.page.unboxed-text-review";
+
+    fn validate(&self, _context: &ValidationContext<'_>) -> Result<()> {
+        if self.dismissed.len() > MAX_UNBOXED_TEXTS {
+            return Err(Error::invalid("too many dismissed unboxed texts"));
         }
         self.origin.validate()
     }

@@ -230,10 +230,11 @@ fn markup_outcome(
 ) -> Result<MarkupOutcome> {
     Ok(match reply {
         ChatReply::Content(text) => {
-            let (regions, new_characters) = prompt::markup(provider, &text, request)?;
+            let (regions, new_characters, unboxed) = prompt::markup(provider, &text, request)?;
             MarkupOutcome::Marked {
                 regions,
                 new_characters,
+                unboxed,
             }
         }
         ChatReply::Withheld(reason) => MarkupOutcome::Withheld(reason),

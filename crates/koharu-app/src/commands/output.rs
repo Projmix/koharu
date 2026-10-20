@@ -157,8 +157,22 @@ pub(crate) async fn export(
     Ok(())
 }
 
-/// A text block the final chapter check flags before export. Export is not
-/// blocked; the list only points at what still needs a look.
+/// What the final chapter check flags before export. Export is not blocked;
+/// the lists only point at what still needs a look.
+#[derive(Clone, Debug, Serialize, Type)]
+pub struct ChapterCheck {
+    pub texts: Vec<ChapterIssue>,
+    pub unboxed_text: Vec<UnboxedTextIssue>,
+}
+
+/// A page where scene markup saw lettering outside every text region.
+#[derive(Clone, Debug, Serialize, Type)]
+pub struct UnboxedTextIssue {
+    pub page: EntityId,
+    pub count: u32,
+}
+
+/// A text block the final chapter check flags.
 #[derive(Clone, Debug, Serialize, Type)]
 pub struct ChapterIssue {
     pub page: EntityId,
@@ -185,7 +199,7 @@ pub enum TranslationIssue {
 pub(crate) async fn check_chapter(
     project: State<'_, CurrentProject>,
     desktop: State<'_, Desktop>,
-) -> std::result::Result<Vec<ChapterIssue>, Error> {
+) -> std::result::Result<ChapterCheck, Error> {
     let (source_language, target_language) = {
         let config = koharu_pipeline::PipelineConfig::load()?;
         let config = config.read()?;
@@ -254,7 +268,20 @@ pub(crate) async fn check_chapter(
             }
         }
     }
-    Ok(issues)
+    let mut unboxed_text = Vec::new();
+    for page in snapshot.pages() {
+        let count = koharu_pipeline::open_unboxed_text(&snapshot, page.id())?.len();
+        if count > 0 {
+            unboxed_text.push(UnboxedTextIssue {
+                page: page.id(),
+                count: u32::try_from(count).unwrap_or(u32::MAX),
+            });
+        }
+    }
+    Ok(ChapterCheck {
+        texts: issues,
+        unboxed_text,
+    })
 }
 
 /// Kana never belongs in a translation out of Japanese; kanji does only when

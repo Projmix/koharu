@@ -12,8 +12,9 @@ use imageproc::{
     rect::Rect,
 };
 use koharu_scene::{
-    Character, CharacterId, CharacterList, Continues, EntityId, Gender, Generation, ObservedText,
-    Origin, PageMarkup, PageMarkupMissing, PageMarkupStatus, Snapshot, SpeechKind, SpeechMarkup,
+    Character, CharacterId, CharacterList, Continues, EntityId, Gender, Generation, Geometry,
+    ObservedText, Origin, PageMarkup, PageMarkupMissing, PageMarkupStatus, Region, RegionSpec,
+    Snapshot, SpeechKind, SpeechMarkup, TextRegion, UnboxedText, UnboxedTextReview,
 };
 use koharu_translator::{
     CharacterGender, Language, MarkedRegion, MarkupCharacter, MarkupKind, MarkupOutcome,
@@ -38,6 +39,11 @@ const SPLIT_MIN_TEXTS: usize = 8;
 
 /// `(left, top, right, bottom)` in page units.
 type Bounds = (f64, f64, f64, f64);
+
+/// Share of an unboxed-text flag a text region must cover for the lettering
+/// to count as boxed. A sound effect whose region holds only its first
+/// character keeps its flag.
+const BOXED_SHARE: f64 = 0.3;
 
 struct PageText {
     content: EntityId,
@@ -190,7 +196,7 @@ async fn request_in_halves(
     let middle = context.texts.len() / 2;
     let first = (0..middle).collect::<Vec<_>>();
     let second = (middle..context.texts.len()).collect::<Vec<_>>();
-    let (regions, new_characters) = match request(
+    let (regions, new_characters, unboxed) = match request(
         input,
         config,
         translator,
@@ -205,7 +211,8 @@ async fn request_in_halves(
         MarkupOutcome::Marked {
             regions,
             new_characters,
-        } => (regions, new_characters),
+            unboxed,
+        } => (regions, new_characters, unboxed),
         withheld => return Ok(withheld),
     };
     let earlier = earlier_markup(&context.texts, &regions);
@@ -220,7 +227,7 @@ async fn request_in_halves(
         &new_characters,
     )
     .await?;
-    Ok(join_halves(regions, new_characters, rest))
+    Ok(join_halves(regions, new_characters, unboxed, rest))
 }
 
 /// The first half's answers, shown to the second half like the previous page.
@@ -237,21 +244,27 @@ fn earlier_markup(texts: &[PageText], regions: &[MarkedRegion]) -> Vec<PreviousM
         .collect()
 }
 
+/// Each half saw only its own boxes, so its unboxed lettering includes the
+/// other half's texts; the page patch drops whatever a text region covers.
 fn join_halves(
     mut regions: Vec<MarkedRegion>,
     mut new_characters: Vec<MarkupCharacter>,
+    mut unboxed: Vec<koharu_translator::UnboxedText>,
     rest: MarkupOutcome,
 ) -> MarkupOutcome {
     match rest {
         MarkupOutcome::Marked {
             regions: more,
             new_characters: more_characters,
+            unboxed: more_unboxed,
         } => {
             regions.extend(more);
             new_characters.extend(more_characters);
+            unboxed.extend(more_unboxed);
             MarkupOutcome::Marked {
                 regions,
                 new_characters,
+                unboxed,
             }
         }
         withheld => withheld,
@@ -337,10 +350,13 @@ fn page_patch(
     for (content, _) in &context.previous {
         edit.observe::<SpeechMarkup>(*content)?;
     }
+    let size = scene.page(page)?.page()?;
+    let mut found = Vec::new();
     let status = match outcome {
         Ok(MarkupOutcome::Marked {
             regions,
             new_characters,
+            unboxed,
         }) => {
             apply(
                 &mut edit,
@@ -350,6 +366,10 @@ fn page_patch(
                 regions,
                 new_characters,
             )?;
+            found = unboxed
+                .into_iter()
+                .map(|text| page_unboxed(&text, size.width, size.height))
+                .collect();
             PageMarkupStatus::Complete
         }
         Ok(MarkupOutcome::Withheld(reason)) => {
@@ -375,9 +395,89 @@ fn page_patch(
             origin: Origin::Generated(generated.clone()),
             status,
             observed: observed(&context.texts),
+            unboxed: uncovered(scene, page, found)?,
         },
     )?;
     super::finish(edit)
+}
+
+/// The page's unboxed-text flags that no text region covers now and the
+/// user has not dismissed. Adding a region over the lettering resolves its
+/// flag without editing the markup.
+pub fn open_unboxed_text(scene: &Snapshot, page: EntityId) -> Result<Vec<UnboxedText>> {
+    let Some(markup) = scene.page(page)?.markup()? else {
+        return Ok(Vec::new());
+    };
+    let dismissed = scene
+        .component::<UnboxedTextReview>(page)?
+        .map(|review| review.dismissed)
+        .unwrap_or_default();
+    let mut flags = markup.unboxed;
+    flags.retain(|flag| !dismissed.contains(flag));
+    uncovered(scene, page, flags)
+}
+
+/// Drops flags a text region covers and repeats of an earlier flag.
+fn uncovered(
+    scene: &Snapshot,
+    page: EntityId,
+    flags: Vec<UnboxedText>,
+) -> Result<Vec<UnboxedText>> {
+    let mut regions = Vec::new();
+    for entity in scene.descendants(page)? {
+        if !entity
+            .component::<Region>()?
+            .is_some_and(|region| region.kind == TextRegion::kind())
+        {
+            continue;
+        }
+        if let Some(bounds) = entity
+            .component::<Geometry>()?
+            .as_ref()
+            .and_then(crate::scope::geometry_extents)
+        {
+            regions.push(bounds);
+        }
+    }
+    let mut open: Vec<UnboxedText> = Vec::new();
+    for flag in flags {
+        let bounds = flag_bounds(&flag);
+        let area = bounds_area(bounds);
+        let boxed = regions
+            .iter()
+            .any(|region| overlap(bounds, *region) >= BOXED_SHARE * area);
+        let repeated = open.iter().any(|kept| {
+            let kept = flag_bounds(kept);
+            overlap(bounds, kept) >= 0.5 * area.min(bounds_area(kept))
+        });
+        if !boxed && !repeated {
+            open.push(flag);
+        }
+    }
+    Ok(open)
+}
+
+fn page_unboxed(text: &koharu_translator::UnboxedText, width: f64, height: f64) -> UnboxedText {
+    let [left, top, right, bottom] = text.bbox.map(f64::from);
+    UnboxedText {
+        x: left / 1000.0 * width,
+        y: top / 1000.0 * height,
+        width: (right - left) / 1000.0 * width,
+        height: (bottom - top) / 1000.0 * height,
+        kind: scene_kind(text.kind),
+    }
+}
+
+fn flag_bounds(flag: &UnboxedText) -> Bounds {
+    (flag.x, flag.y, flag.x + flag.width, flag.y + flag.height)
+}
+
+fn bounds_area((left, top, right, bottom): Bounds) -> f64 {
+    (right - left).max(0.0) * (bottom - top).max(0.0)
+}
+
+fn overlap(a: Bounds, b: Bounds) -> f64 {
+    bounds_area((a.0.max(b.0), a.1.max(b.1), a.2.min(b.2), a.3.min(b.3)))
 }
 
 fn apply(
@@ -895,6 +995,7 @@ mod tests {
                     region("2", MarkupKind::Narration, None, Some("1")),
                 ],
                 new_characters: Vec::new(),
+                unboxed: Vec::new(),
             }),
         )
         .await;
@@ -952,6 +1053,7 @@ mod tests {
                     region("3", MarkupKind::Thought, Some("hero"), None),
                 ],
                 new_characters: vec![character("yui", "Yui", CharacterGender::Female)],
+                unboxed: Vec::new(),
             }),
         )
         .await;
@@ -996,6 +1098,7 @@ mod tests {
             Ok(MarkupOutcome::Marked {
                 regions: vec![region("1", MarkupKind::Narration, Some("narrator"), None)],
                 new_characters: vec![character("narrator", "Narrator", CharacterGender::Male)],
+                unboxed: Vec::new(),
             }),
         )
         .await;
@@ -1046,6 +1149,7 @@ mod tests {
             Ok(MarkupOutcome::Marked {
                 regions: vec![region("1", MarkupKind::Narration, Some("yui"), Some("p1"))],
                 new_characters: vec![character("yui", "Yui", CharacterGender::Female)],
+                unboxed: Vec::new(),
             }),
         )
         .unwrap();
@@ -1096,17 +1200,20 @@ mod tests {
         let joined = join_halves(
             first.clone(),
             vec![hero.clone()],
+            Vec::new(),
             MarkupOutcome::Marked {
                 regions: vec![
                     region("3", MarkupKind::Speech, Some("hero"), Some("1")),
                     region("4", MarkupKind::Thought, None, None),
                 ],
                 new_characters: Vec::new(),
+                unboxed: Vec::new(),
             },
         );
         let MarkupOutcome::Marked {
             regions,
             new_characters,
+            ..
         } = joined
         else {
             panic!("expected joined markup");
@@ -1123,9 +1230,76 @@ mod tests {
             join_halves(
                 first,
                 Vec::new(),
+                Vec::new(),
                 MarkupOutcome::Withheld(MarkupWithheld::ContentFilter)
             ),
             MarkupOutcome::Withheld(MarkupWithheld::ContentFilter)
+        );
+    }
+
+    #[tokio::test]
+    async fn unboxed_text_is_flagged_until_covered_or_dismissed() {
+        let (mut session, page, _) = page_with_texts(&["一"]).await;
+        let unboxed = |bbox| koharu_translator::UnboxedText {
+            bbox,
+            kind: MarkupKind::SoundEffect,
+        };
+        let marked = || {
+            Ok(MarkupOutcome::Marked {
+                regions: vec![region("1", MarkupKind::Speech, None, None)],
+                new_characters: Vec::new(),
+                unboxed: vec![
+                    // Inside the existing text region.
+                    unboxed([100, 50, 300, 200]),
+                    unboxed([500, 500, 700, 600]),
+                    // The same lettering again.
+                    unboxed([510, 505, 700, 600]),
+                    unboxed([100, 800, 300, 900]),
+                ],
+            })
+        };
+        commit(&mut session, page, marked()).await;
+        let open = open_unboxed_text(&session.snapshot(), page).unwrap();
+        let flag = UnboxedText {
+            x: 50.0,
+            y: 100.0,
+            width: 20.0,
+            height: 20.0,
+            kind: SpeechKind::SoundEffect,
+        };
+        assert_eq!(open.len(), 2);
+        assert_eq!(open[0], flag);
+
+        // A dismissal is the user's own record; markup can still rerun.
+        let mut edit = session.snapshot().edit();
+        edit.set(
+            page,
+            &UnboxedTextReview {
+                origin: Origin::User,
+                dismissed: vec![open[1]],
+            },
+        )
+        .unwrap();
+        session.commit(edit.finish().unwrap()).await.unwrap();
+        commit(&mut session, page, marked()).await;
+        assert_eq!(
+            open_unboxed_text(&session.snapshot(), page).unwrap(),
+            [flag]
+        );
+
+        let mut edit = session.snapshot().edit();
+        edit.add_analysis_region::<TextRegion>(
+            page,
+            At::End,
+            &Geometry::rectangle(48.0, 98.0, 24.0, 24.0),
+            None,
+        )
+        .unwrap();
+        session.commit(edit.finish().unwrap()).await.unwrap();
+        assert!(
+            open_unboxed_text(&session.snapshot(), page)
+                .unwrap()
+                .is_empty()
         );
     }
 

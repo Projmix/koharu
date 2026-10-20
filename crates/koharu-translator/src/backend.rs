@@ -112,11 +112,21 @@ pub struct MarkedRegion {
     pub confidence: f32,
 }
 
+/// Lettering the model sees on the page outside every numbered box. It is
+/// located, never transcribed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnboxedText {
+    /// `[left, top, right, bottom]` normalized to 0..=1000 of the page size.
+    pub bbox: [u32; 4],
+    pub kind: MarkupKind,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum MarkupOutcome {
     Marked {
         regions: Vec<MarkedRegion>,
         new_characters: Vec<MarkupCharacter>,
+        unboxed: Vec<UnboxedText>,
     },
     Withheld(MarkupWithheld),
 }

@@ -58,7 +58,11 @@
     "empty": "ページを選択して開始します。",
     "fit": "ウィンドウに合わせる",
     "surface": "Koharu キャンバス",
-    "unavailable": "WebGPU キャンバスを利用できません"
+    "unavailable": "WebGPU キャンバスを利用できません",
+    "unboxedText": {
+      "create": "ここにテキストブロックを作成",
+      "dismiss": "文字ではない"
+    }
   },
   "colorPicker": {
     "brushColor": "ブラシカラー",
@@ -74,6 +78,9 @@
     "issueCount_other": "確認が必要なテキストブロック：{{count}}。選択すると開きます。",
     "emptyTranslation": "翻訳がありません",
     "japaneseText": "翻訳に日本語の文字が残っています",
+    "unboxedText": "未検出の可能性がある文字: {{count}}",
+    "unboxedText_one": "未検出の可能性がある文字: {{count}}",
+    "unboxedText_other": "未検出の可能性がある文字: {{count}}",
     "exportAnyway": "このまま書き出す"
   },
   "common": {

@@ -41,7 +41,7 @@ pub use backend::{
     CharacterGender, MarkedRegion, MarkupCharacter, MarkupKind, MarkupOutcome, MarkupRegion,
     MarkupRequest, MarkupWithheld, OcrRequest, PreviousMarkup, SegmentSpeaker, Shorten,
     TranslationCharacter, TranslationContext, TranslationRequest, TranslationSegmentMetadata,
-    TranslationUnit,
+    TranslationUnit, UnboxedText,
 };
 pub use error::Error;
 pub use language::Language;

@@ -58,7 +58,11 @@
     "empty": "先选一页，就好开始。",
     "fit": "适应窗口",
     "surface": "Koharu 画布",
-    "unavailable": "WebGPU 画布用弗来"
+    "unavailable": "WebGPU 画布用弗来",
+    "unboxedText": {
+      "create": "辣此地建文字块",
+      "dismiss": "弗是文字"
+    }
   },
   "colorPicker": {
     "brushColor": "笔刷颜色",
@@ -74,6 +78,9 @@
     "issueCount_other": "有 {{count}} 个文字块要看一看。点一记就打开。",
     "emptyTranslation": "呒没译文",
     "japaneseText": "译文里向还有日文字",
+    "unboxedText": "可能漏脱个文字：{{count}} 处",
+    "unboxedText_one": "可能漏脱个文字：{{count}} 处",
+    "unboxedText_other": "可能漏脱个文字：{{count}} 处",
     "exportAnyway": "照样导出"
   },
   "common": {
