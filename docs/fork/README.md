@@ -33,6 +33,10 @@ tree. It stays in history; bring its ideas back in separate changes, JEV
 first, following the plan below. `git show d1ebfef -- <path>` shows the old
 code.
 
+Since the rebuild, work lands on `claude/project-thread-lbw4bo`; on
+2026-10-20 it is more than 85 commits ahead of `main` and not merged yet.
+The fork features below describe that branch.
+
 Known gaps after the rebuild:
 
 - `packages/bridge/src/protocol.ts` was merged by hand because the cloud

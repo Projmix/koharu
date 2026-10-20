@@ -18,7 +18,17 @@ chapter that needs no manual edits. Each lands as its own change.
    follows the Japanese vertical box, which can reach into the next panel
    (p7 «ДА БЛЯТЬ»). Clip the free-text fit area to its panel.
 3. Remaining box errors: outlined sound effects missed, false sound
-   effects on artwork, merged or split boxes.
+   effects on artwork, merged or split boxes. Measured 2026-10-20: all 140
+   balloon blocks have a matching fresh detection box, but 22 of the 78
+   blocks outside balloons have none (missed, merged or split): the
+   yellow lines on the black p4, SFX written as spaced letters, several
+   outlined SFX. They also cause 7 of the 9 blocks the owner outlined and
+   automation did not, since nothing is sampled without a box. Classify
+   the 22 and fix the most common kind.
+
+Checked and rejected: choosing an outline from background busyness. The
+ring standard deviation around non-balloon blocks does not separate the
+owner's outlined blocks from the rest.
 
 ## OCR
 
@@ -26,7 +36,11 @@ chapter that needs no manual edits. Each lands as its own change.
    before the mode existed, so its effect on translation is unmeasured.
 2. **Hayai repetition loops** («かかかか…»). **Done:** a run of one to three
    characters repeated 8 times is never an agreement and goes to the API.
-3. **Flag disputed text** (API failed, or disagreed with both local
+3. **Local confidence:** today it is only agreement (1 or 0), so two
+   readers agreeing on the same mistake pass silently. The local decoders
+   can expose token probabilities without an extra pass; send
+   low-confidence agreements to the API too.
+4. **Flag disputed text** (API failed, or disagreed with both local
    readings) in the layer list, like fit warnings.
 
 ## Scene markup
@@ -66,3 +80,12 @@ within 20% for 91%, line count 72%, text colour 95%, outline 91%, all four
 4. **Final chapter check before export:** empty translations, Japanese
    left in Russian text, fit warnings, no-contrast text, missed text. All
    computed locally; export is not blocked.
+
+## Cross-cutting
+
+1. **Merge `claude/project-thread-lbw4bo` into `main`.** On 2026-10-20 it
+   is more than 85 commits ahead; everything done since 2026-10-18 lives
+   only there.
+2. **One evaluation command** for the chapter comparison that produced
+   these numbers (pages stay out of the repository). It is a new command,
+   so it needs an issue first.
