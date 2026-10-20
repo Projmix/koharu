@@ -45,6 +45,11 @@ owner's outlined blocks from the rest.
 
 1. **Measure the cross-check mode on the chapter.** The test copy was read
    before the mode existed, so its effect on translation is unmeasured.
+   **Done:** the owner's chapter was re-read (23 pages, 218 regions,
+   $0.30). Of 100 real differences from the old text, the new reading is
+   right in 73, the old in 3, both are equal in 8, and in 16 the OCR
+   region does not cover the whole text. Two of the three regressions are
+   Hayai and Manga OCR agreeing on the same mistake (item 3).
 2. **Hayai repetition loops** («かかかか…»). **Done:** a run of one to three
    characters repeated 8 times is never an agreement and goes to the API.
 3. **Local confidence:** today it is only agreement (1 or 0), so two
@@ -72,6 +77,12 @@ owner's outlined blocks from the rest.
    length limit, leaving the chapter untouched.
 3. **Sound-effect glossary** in the translation request (one of the two
    remaining errors was くにっ rendered as «Чмок»).
+   **Tried 2026-10-20 and reverted:** one general prompt line (render a
+   mimetic word by what it depicts, never a stock kiss sound) fixed くに
+   and ヌチ but left クチ as «Чмок» and turned two «Вздрог» into the noun
+   «Дрожь». Half the lines change between unchanged runs, so the effect is
+   not separable from noise. Open: a short glossary with examples
+   (クチ/ヌチ → «Хлюп», くに → «Мнёт») checked over several runs.
 4. The other translation errors come from OCR, so OCR item 1 is the main
    lever.
 
@@ -98,11 +109,16 @@ within 20% for 91%, line count 72%, text colour 95%, outline 91%, all four
 4. **Final chapter check before export:** empty translations, Japanese
    left in Russian text, fit warnings, no-contrast text, missed text. All
    computed locally; export is not blocked.
+   **Done:** choosing an export format lists blocks with an empty
+   translation, Japanese left in the translation, or a fit warning
+   (including low contrast). A row opens its page and layer; a clean
+   chapter exports at once. Open: missed text, which depends on detection
+   item 1.
 
 ## Cross-cutting
 
 1. **Merge `claude/project-thread-lbw4bo` into `main`.** On 2026-10-20 it
-   is more than 85 commits ahead; everything done since 2026-10-18 lives
+   is 102 commits ahead; everything done since 2026-10-18 lives
    only there.
 2. **One evaluation command** for the chapter comparison that produced
    these numbers (pages stay out of the repository). It is a new command,
