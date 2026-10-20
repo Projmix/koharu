@@ -14,7 +14,7 @@ the result. Last updated 2026-10-18.
   - `candidate`: worth measuring; not ported.
   - `rejected`: do not revisit unless the condition in its row changes.
 - A model moves to `rejected` only with a reason: a measurement on the
-  evaluation set (see [improvement-plan.md](improvement-plan.md), the offline evaluation set), a
+  evaluation set (see [results.ru.md](results.ru.md#как-проверяли)), a
   license that blocks it, or a duplicate of something already in use. Record
   the date and the evidence. "Looked worse once by eye" is not a reason.
 - Self-reported numbers from a model card are leads, not evidence. Numbers
