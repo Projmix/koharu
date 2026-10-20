@@ -1499,20 +1499,24 @@ fn resolve_writing_mode(
 /// Letters of a short word one per line in a tall, narrow free-text frame,
 /// the way hand-lettered sound effects stack in a vertical column. Laid out
 /// horizontally such a word shrinks to the column width; longer phrases keep
-/// wrapping, since stacking them drops below the readable size.
+/// wrapping, since stacking them drops below the readable size. A word
+/// translated as spaced letters («Х л ю п») is that same stacked word.
 fn stacked_column_text(text: &str, bounds: LayoutBox) -> Option<String> {
     const MAX_STACKED_LETTERS: usize = 6;
     let text = text.trim();
     let letters = text.chars().filter(|c| c.is_alphabetic()).count();
+    let spaced_letters = text
+        .split_whitespace()
+        .all(|token| token.chars().count() == 1);
     if bounds.height < bounds.width * 2.0
         || letters == 0
         || letters > MAX_STACKED_LETTERS
-        || text.chars().any(char::is_whitespace)
+        || !spaced_letters && text.chars().any(char::is_whitespace)
     {
         return None;
     }
     let mut stacked = String::with_capacity(text.len() * 2);
-    for (index, character) in text.chars().enumerate() {
+    for (index, character) in text.chars().filter(|c| !c.is_whitespace()).enumerate() {
         if index > 0 {
             stacked.push('\n');
         }
@@ -1815,7 +1819,18 @@ mod tests {
             stacked_column_text("Ха-а…", tall).as_deref(),
             Some("Х\nа\n-\nа\n…")
         );
+        assert_eq!(
+            stacked_column_text("Х л ю п", tall).as_deref(),
+            Some(
+                "Х
+л
+ю
+п"
+            )
+        );
         assert_eq!(stacked_column_text("Ха-а…", wide), None);
+        assert_eq!(stacked_column_text("Х л ю п", wide), None);
+        assert_eq!(stacked_column_text("Я и ты", tall), None);
         assert_eq!(stacked_column_text("Живёт в общежитии", tall), None);
         assert_eq!(stacked_column_text("Подождите", tall), None);
     }
