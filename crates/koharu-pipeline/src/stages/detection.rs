@@ -2964,8 +2964,8 @@ mod tests {
     };
     use koharu_ml::koharu_layout_rfdetr_seg_2xl::{KoharuLayoutDetection, KoharuLayoutMask};
     use koharu_scene::{
-        At, BubbleRegion, FitsTo, FlowsIn, Geometry, Inside, Origin, PageDraft, Region, RegionSpec,
-        Session, TextLayout, TextLayoutKind, TextRegion, TextRole, Typography, WritingMode,
+        At, BubbleRegion, FitsTo, FlowsIn, Geometry, Inside, Origin, PageDraft, Session,
+        TextLayout, TextLayoutKind, TextRegion, TextRole, Typography, WritingMode,
     };
     use koharu_translator::Language;
 
@@ -3724,36 +3724,24 @@ mod tests {
 
     #[tokio::test]
     async fn detected_typography_preserves_the_measured_outline() {
-        let mut session = Session::memory().await.unwrap();
-        let mut page = None;
-        let create = session
-            .snapshot()
-            .patch(|edit| {
-                page = Some(edit.add_page(PageDraft::new("page", 96.0, 96.0), At::End)?);
-                Ok(())
-            })
-            .unwrap();
-        let snapshot = session.commit(create).await.unwrap().snapshot;
-        let page = page.unwrap();
+        let session = Session::memory().await.unwrap();
         let (image, detection) = outlined_text(3, [0, 0, 0], [255, 255, 255]);
         let inferred = infer_typography(&image, &detection);
         let generation = generation(super::PRODUCER, super::OUTPUT_MODEL_ID).unwrap();
-        let mut layer = None;
-        let patch = snapshot
+        let mut typography = None;
+        session
+            .snapshot()
             .patch(|edit| {
+                let page = edit.add_page(PageDraft::new("page", 96.0, 96.0), At::End)?;
                 let output = write_region(edit, page, &detection, inferred, &generation).unwrap();
                 let RegionOutput::Text(text) = output else {
                     panic!("expected a text region");
                 };
-                layer = Some(text.layer);
+                typography = Some(text.typography);
                 Ok(())
             })
             .unwrap();
-        let snapshot = session.commit(patch).await.unwrap().snapshot;
-        let typography = snapshot
-            .component::<Typography>(layer.unwrap())
-            .unwrap()
-            .unwrap();
+        let typography = typography.unwrap();
 
         assert_eq!(typography.color, Some([0, 0, 0, 255]));
         assert_eq!(typography.stroke_color, Some([255, 255, 255, 255]));
