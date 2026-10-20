@@ -122,6 +122,17 @@ within 20% for 91%, line count 72%, text colour 95%, outline 91%, all four
 2. **Six small balloons** below 0.8x the owner's size, where the owner
    lets text run past the balloon edge. Consider allowing a small overrun
    in narrow balloons when the size would otherwise drop sharply.
+   **Checked and rejected:** the owner's text leaves the contour in 15 of
+   140 balloons, only sideways, by 0.14 to 0.66 of the font size. Of the
+   six, p9 «Ух ты!» (88 px against the usual 32 px cap) and p12 «..Мм»
+   do not leave it. Letting lines pass each side by 0.25 of their ink
+   height whenever the inside fit is below 0.8 of that size takes the six
+   to 3 and the balloon median to 1.00, but it changes 17 balloons and
+   the owner overruns in only 3 of them; 11 balloons end up over 1.25x
+   his size («А…» 1.44x, «Люблю» 1.47x). At 0.15 and 0.35 the trade is
+   the same. Neither the size gain (1.26 to 1.43x) nor the absolute size
+   separates his overrun balloons from the rest. p5 and p13 are text
+   sharing a balloon, where his lines leave their share of it.
 3. **Second sound-effect font** once markup gives soft vs hard.
 4. **Final chapter check before export:** empty translations, Japanese
    left in Russian text, fit warnings, no-contrast text, missed text. All
