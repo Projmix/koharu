@@ -38,6 +38,9 @@ pub(crate) struct TextNodeDescriptor {
     pub(crate) writing_mode: WritingMode,
     pub(crate) foreground_color: [u8; 4],
     pub(crate) stroke: Option<StrokeOptions>,
+    /// The outline width was measured on the source lettering by detection,
+    /// not chosen for this text; see `MEASURED_STROKE_MAX_SIZE_RATIO`.
+    pub(crate) measured_stroke: bool,
     pub(crate) line_height: f32,
     pub(crate) letter_spacing: f32,
     pub(crate) word_spacing: f32,
@@ -60,6 +63,13 @@ pub(crate) struct RenderedTextMetadata {
     pub(crate) font_size: f32,
     pub(crate) color: [u8; 4],
 }
+
+/// Fork divergence: detection measures the outline of the source lettering,
+/// which is often 6-17 px around large Japanese glyphs; copied onto the
+/// translated text it swallows the art and spills out of panels. The owner
+/// outlines at a median 0.1 of the font size (at most 0.21 on the test
+/// chapter), so a measured outline is drawn no wider than that median.
+const MEASURED_STROKE_MAX_SIZE_RATIO: f32 = 0.1;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct StrokeOptions {
@@ -256,7 +266,12 @@ impl TextRenderer {
         };
         let mut scene = PreparedScene::default();
         let mut resources = Vec::new();
-        if let Some(stroke) = descriptor.stroke {
+        if let Some(mut stroke) = descriptor.stroke {
+            if descriptor.measured_stroke {
+                stroke.width_px = stroke
+                    .width_px
+                    .min(layout.font_size * MEASURED_STROKE_MAX_SIZE_RATIO);
+            }
             options.stroke = Some(stroke);
         }
         self.render(
@@ -290,7 +305,7 @@ impl TextRenderer {
             width: layout.width,
             height: layout.height,
         };
-        let stroke_padding = descriptor
+        let stroke_padding = options
             .stroke
             .map_or(0.0, |stroke| stroke.width_px.max(0.0));
         Ok(RenderedTextNode {
@@ -445,7 +460,7 @@ mod tests {
     use koharu_scene::EntityId;
 
     use super::*;
-    use crate::fonts::FontSystem;
+    use crate::fonts::{FontRequest, FontSystem};
 
     #[test]
     fn automatic_size_preserves_free_text_default_and_balloon_extent() {
@@ -468,6 +483,7 @@ mod tests {
             writing_mode: WritingMode::Horizontal,
             foreground_color: [0, 0, 0, 255],
             stroke: None,
+            measured_stroke: false,
             line_height: 1.2,
             letter_spacing: 0.0,
             word_spacing: 0.0,
@@ -488,6 +504,65 @@ mod tests {
             ..bounds
         };
         assert_eq!(automatic_maximum(&descriptor, narrow, true), 18.0);
+    }
+
+    #[tokio::test]
+    async fn a_measured_outline_is_capped_by_the_laid_out_font_size() {
+        let family = FontSystem::new()
+            .first_font()
+            .unwrap()
+            .family_name()
+            .to_owned();
+        let fonts = Fonts::new();
+        fonts
+            .prepare(&[FontRequest {
+                family: family.clone(),
+                weight: None,
+                style: None,
+            }])
+            .await
+            .unwrap();
+        let padding = |font_size: f32, measured_stroke: bool| {
+            let descriptor = TextNodeDescriptor {
+                entity: EntityId::new(),
+                text: "Hi".to_owned(),
+                language: None,
+                width: 400.0,
+                height: 200.0,
+                balloon_contour: None,
+                preferred_font: Some(family.clone()),
+                font_families: vec![family.clone()],
+                font_weight: None,
+                font_style: None,
+                font_size: Some(font_size),
+                minimum_font_size: 9.0,
+                automatic_ceiling: 24.0,
+                auto_fit: false,
+                alignment: TextAlign::Center,
+                writing_mode: WritingMode::Horizontal,
+                foreground_color: [0, 0, 0, 255],
+                stroke: Some(StrokeOptions {
+                    color: [255, 255, 255, 255],
+                    width_px: 12.0,
+                }),
+                measured_stroke,
+                line_height: 1.2,
+                letter_spacing: 0.0,
+                word_spacing: 0.0,
+                text_inset: [0.0; 4],
+                point_text: false,
+            };
+            let rendered = TextRenderer::new()
+                .render_descriptor(&descriptor, &fonts)
+                .unwrap();
+            (rendered.local_bounds.width - rendered.metadata.rendered_bounds.width) * 0.5
+        };
+
+        for font_size in [12.0, 20.0, 40.0, 90.0] {
+            let cap = font_size * MEASURED_STROKE_MAX_SIZE_RATIO;
+            assert!((padding(font_size, true) - cap.min(12.0)).abs() < 1e-3);
+            assert!((padding(font_size, false) - 12.0).abs() < 1e-3);
+        }
     }
 
     #[test]

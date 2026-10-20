@@ -870,6 +870,9 @@ impl Traversal<'_> {
                 .and_then(|value| value.color)
                 .unwrap_or([0, 0, 0, 255]),
             stroke: resolve_stroke(typography.as_ref()),
+            measured_stroke: typography
+                .as_ref()
+                .is_some_and(|value| matches!(value.origin, Origin::Generated(_))),
             line_height: 1.2,
             letter_spacing: 0.0,
             word_spacing: 0.0,
