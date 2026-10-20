@@ -1,13 +1,25 @@
 'use client'
 
-import { Plus, Trash2, Users } from 'lucide-react'
+import { FolderInput, Plus, Trash2, Users } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { call } from '@/lib/backend'
-import { pageKey, projectKey, refresh, useCharacters } from '@/lib/queries'
-import { type Character, type CharacterInput, commands, type Gender } from '@koharu/bridge/protocol'
+import { pageKey, projectKey, refresh, useCharacters, useProject } from '@/lib/queries'
+import {
+  type Character,
+  type CharacterInput,
+  commands,
+  type Gender,
+  type ProjectSummary,
+} from '@koharu/bridge/protocol'
 import { Button } from '@koharu/ui/components/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@koharu/ui/components/dropdown-menu'
 import { Input } from '@koharu/ui/components/input'
 import { ScrollArea } from '@koharu/ui/components/scroll-area'
 import {
@@ -17,6 +29,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@koharu/ui/components/select'
+import { toast } from '@koharu/ui/components/toast'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@koharu/ui/components/tooltip'
 
 const genders: Gender[] = ['male', 'female', 'unknown']
@@ -161,8 +174,63 @@ export function CharacterPanel() {
             {t('characters.add')}
           </Button>
         </div>
+        <ImportCharactersMenu />
       </div>
     </ScrollArea>
+  )
+}
+
+/**
+ * Imports the character list of another project, such as the previous
+ * chapter. Native code reads that project without changing it and adds the
+ * characters this project does not list yet as one undo step.
+ */
+function ImportCharactersMenu() {
+  const { t } = useTranslation()
+  const current = useProject().data?.name
+  const [projects, setProjects] = useState<ProjectSummary[] | null>(null)
+  const sources = (projects ?? []).filter((project) => project.name !== current)
+
+  const load = (open: boolean) => {
+    if (!open) return
+    call(commands.listProjects)
+      .then(setProjects)
+      .catch(() => setProjects([]))
+  }
+  const importFrom = (source: string) =>
+    call(commands.importCharacters, source)
+      .then((count) => {
+        toast.add({ type: 'success', title: t('characters.imported', { count }) })
+        return refresh(projectKey, pageKey)
+      })
+      .catch(() => undefined)
+
+  return (
+    <DropdownMenu onOpenChange={load}>
+      <DropdownMenuTrigger
+        render={
+          <Button
+            type='button'
+            size='xs'
+            variant='ghost'
+            className='h-6 justify-start gap-1 text-[11px] text-muted-foreground'
+          />
+        }
+      >
+        <FolderInput className='size-3' />
+        {t('characters.import')}
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align='start' sideOffset={4} className='max-h-64 w-56'>
+        {projects !== null && sources.length === 0 && (
+          <DropdownMenuItem disabled>{t('characters.importNone')}</DropdownMenuItem>
+        )}
+        {sources.map((project) => (
+          <DropdownMenuItem key={project.name} onClick={() => void importFrom(project.name)}>
+            <span className='truncate'>{project.name}</span>
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }
 

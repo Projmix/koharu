@@ -9,7 +9,10 @@ use super::{
     ChannelExt as _, Error,
     canvas::{CanvasChannel, Point},
     processing::Processing,
-    project::{CharacterInput, CurrentProject, Page, Project, TextClipboardPayload, Typography},
+    project::{
+        CharacterInput, CurrentProject, Page, Project, ProjectLibrary, TextClipboardPayload,
+        Typography,
+    },
 };
 async fn synchronize_canvas(
     desktop: &Desktop,
@@ -277,6 +280,33 @@ pub(crate) async fn set_characters(
     let canvas = synchronize_canvas(&desktop, &commit, page).await?;
     canvas_channel.channel.publish(canvas);
     Ok(())
+}
+
+/// Add another project's characters to the open project. Returns how many
+/// were new.
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn import_characters(
+    source: String,
+    desktop: State<'_, Desktop>,
+    library: State<'_, ProjectLibrary>,
+    project: State<'_, CurrentProject>,
+    canvas_channel: State<'_, CanvasChannel>,
+) -> Result<u32, Error> {
+    let (commit, page, added) = {
+        let mut project = project.project.lock().await;
+        let project = project.as_mut().context("no project is open")?;
+        if project.name == source {
+            return Err(anyhow::anyhow!("a project cannot import its own characters").into());
+        }
+        let imported = library.characters(&source).await?;
+        let (commit, added) = project.import_characters(imported).await?;
+        project.record_commit(&commit);
+        (commit, project.active_page(), added)
+    };
+    let canvas = synchronize_canvas(&desktop, &commit, page).await?;
+    canvas_channel.channel.publish(canvas);
+    Ok(u32::try_from(added).context("too many characters")?)
 }
 
 #[tauri::command]

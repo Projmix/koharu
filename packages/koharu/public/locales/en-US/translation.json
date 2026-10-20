@@ -743,6 +743,9 @@
     "notesPlaceholder": "Notes, e.g. how they talk",
     "remove": "Remove {{name}}",
     "newName": "New character name",
-    "add": "Add"
+    "add": "Add",
+    "import": "Import from project…",
+    "importNone": "No other projects",
+    "imported": "Characters added: {{count}}"
   }
 }

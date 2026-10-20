@@ -328,6 +328,16 @@ impl ProjectLibrary {
         Project::open(name, path).await
     }
 
+    /// The character list of another project, read from its newest valid
+    /// state. Opening takes the project's lock and never writes its state.
+    pub(crate) async fn characters(&self, name: &str) -> Result<Vec<Character>> {
+        let (_, path) = self.resolve(name)?;
+        let session = Session::open(&path)
+            .await
+            .with_context(|| format!("failed to open {}", path.display()))?;
+        Project::characters(&session.snapshot())
+    }
+
     pub(crate) fn delete(&self, name: &str) -> Result<()> {
         let (_, path) = self.resolve(name)?;
         if !path.is_dir() {
@@ -1472,6 +1482,38 @@ impl Project {
             Ok(())
         })?;
         self.commit(patch).await
+    }
+
+    /// Add characters carried over from another project as the user's, so
+    /// scene markup keeps them. A character whose id or name is already
+    /// listed is skipped. Returns how many were added; the import is one
+    /// undo step.
+    pub(crate) async fn import_characters(
+        &mut self,
+        imported: Vec<Character>,
+    ) -> Result<(Commit, usize)> {
+        let snapshot = self.snapshot();
+        let mut characters = Self::characters(&snapshot)?;
+        let before = characters.len();
+        for character in imported {
+            if characters
+                .iter()
+                .all(|known| known.id != character.id && known.name.trim() != character.name.trim())
+            {
+                characters.push(character);
+            }
+        }
+        let added = characters.len() - before;
+        let patch = snapshot.patch(|edit| {
+            if added > 0 {
+                edit.set_project(&CharacterList {
+                    origin: Origin::User,
+                    characters,
+                })?;
+            }
+            Ok(())
+        })?;
+        Ok((self.commit(patch).await?, added))
     }
 
     /// `laid_out_size` is the font size the presented page drew a layer at.
@@ -3908,5 +3950,80 @@ mod tests {
             &[ScenePoint { x: 2.0, y: 2.0 }],
         );
         assert_eq!(white.get_pixel(2, 2).0, [255, 255, 255, 255]);
+    }
+
+    #[tokio::test]
+    async fn importing_characters_adds_missing_ones_without_touching_the_source() {
+        let root = tempfile::tempdir().unwrap();
+        let library = ProjectLibrary {
+            root: root.path().to_owned(),
+        };
+        let input = |name: &str, gender: Gender| CharacterInput {
+            id: None,
+            name: name.to_owned(),
+            gender,
+            notes: format!("{name} notes"),
+        };
+        {
+            let mut source = library.create("chapter-1").await.unwrap();
+            source
+                .set_characters(vec![
+                    input("Izuku", Gender::Male),
+                    input("Ochaco", Gender::Female),
+                ])
+                .await
+                .unwrap();
+        }
+        let source_files = |name: &str| {
+            ["state-a.khr", "state-b.khr"].map(|file| {
+                std::fs::read(root.path().join(format!("{name}.khrproj")).join(file)).ok()
+            })
+        };
+        let before = source_files("chapter-1");
+        let mut target = library.create("chapter-2").await.unwrap();
+        target
+            .set_characters(vec![input("Ochaco", Gender::Unknown)])
+            .await
+            .unwrap();
+        let undo_steps = target.undo.len();
+
+        let imported = library.characters("chapter-1").await.unwrap();
+        let (commit, added) = target.import_characters(imported.clone()).await.unwrap();
+        target.record_commit(&commit);
+
+        assert_eq!(added, 1);
+        assert_eq!(target.undo.len(), undo_steps + 1);
+        let list = target
+            .snapshot()
+            .project_component::<CharacterList>()
+            .unwrap()
+            .unwrap();
+        assert_eq!(list.origin, Origin::User);
+        assert_eq!(
+            list.characters
+                .iter()
+                .map(|character| (character.name.as_str(), character.gender))
+                .collect::<Vec<_>>(),
+            [("Ochaco", Gender::Unknown), ("Izuku", Gender::Male)]
+        );
+        assert_eq!(list.characters[1], imported[0]);
+
+        let revision = target.revision();
+        let (commit, added) = target.import_characters(imported).await.unwrap();
+        target.record_commit(&commit);
+        assert_eq!(added, 0);
+        assert_eq!(target.revision(), revision);
+        assert_eq!(target.undo.len(), undo_steps + 1);
+        assert_eq!(source_files("chapter-1"), before);
+
+        target.undo().await.unwrap();
+        assert_eq!(
+            Project::characters(&target.snapshot())
+                .unwrap()
+                .iter()
+                .map(|character| character.name.as_str())
+                .collect::<Vec<_>>(),
+            ["Ochaco"]
+        );
     }
 }

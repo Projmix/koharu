@@ -743,6 +743,9 @@
     "notesPlaceholder": "메모(예: 말투)",
     "remove": "{{name}} 삭제",
     "newName": "새 등장인물 이름",
-    "add": "추가"
+    "add": "추가",
+    "import": "프로젝트에서 가져오기…",
+    "importNone": "다른 프로젝트가 없습니다",
+    "imported": "추가된 캐릭터: {{count}}"
   }
 }

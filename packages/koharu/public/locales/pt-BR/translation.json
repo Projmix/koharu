@@ -743,6 +743,9 @@
     "notesPlaceholder": "Notas, por exemplo como fala",
     "remove": "Remover {{name}}",
     "newName": "Nome do novo personagem",
-    "add": "Adicionar"
+    "add": "Adicionar",
+    "import": "Importar de um projeto…",
+    "importNone": "Nenhum outro projeto",
+    "imported": "Personagens adicionados: {{count}}"
   }
 }

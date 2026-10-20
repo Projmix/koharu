@@ -743,6 +743,9 @@
     "notesPlaceholder": "メモ（例: 話し方）",
     "remove": "{{name}}を削除",
     "newName": "新しい登場人物の名前",
-    "add": "追加"
+    "add": "追加",
+    "import": "プロジェクトから読み込む…",
+    "importNone": "ほかのプロジェクトはありません",
+    "imported": "追加したキャラクター: {{count}}"
   }
 }

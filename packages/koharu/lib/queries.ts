@@ -63,11 +63,15 @@ export function usePage(enabled = true) {
   return useQuery({ ...pageQuery, enabled })
 }
 
-/** The project character list, refetched whenever the project revision moves. */
+/**
+ * The project character list, refetched whenever the project revision moves.
+ * Revisions are per project, so the key also names the project.
+ */
 export function useCharacters(enabled = true) {
-  const revision = useProject(enabled).data?.revision
+  const project = useProject(enabled).data
+  const revision = project?.revision
   return useQuery({
-    queryKey: [...charactersKey, revision],
+    queryKey: [...charactersKey, project?.name, revision],
     queryFn: () => call(commands.getCharacters),
     enabled: enabled && revision !== undefined,
   })

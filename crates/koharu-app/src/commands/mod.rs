@@ -93,6 +93,7 @@ pub fn bindings() -> tauri_specta::Builder<tauri_runtime_cef::CefRuntime> {
             editing::set_translation,
             editing::set_speech_markup,
             editing::set_characters,
+            editing::import_characters,
             editing::set_typography,
             editing::set_geometry,
             editing::set_visibility,

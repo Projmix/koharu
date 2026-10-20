@@ -743,6 +743,9 @@
     "notesPlaceholder": "Notlar, ör. nasıl konuştuğu",
     "remove": "{{name}} karakterini kaldır",
     "newName": "Yeni karakter adı",
-    "add": "Ekle"
+    "add": "Ekle",
+    "import": "Projeden içe aktar…",
+    "importNone": "Başka proje yok",
+    "imported": "Eklenen karakter: {{count}}"
   }
 }

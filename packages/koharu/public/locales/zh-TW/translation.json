@@ -743,6 +743,9 @@
     "notesPlaceholder": "備註，例如說話方式",
     "remove": "移除 {{name}}",
     "newName": "新角色姓名",
-    "add": "新增"
+    "add": "新增",
+    "import": "從專案匯入…",
+    "importNone": "沒有其他專案",
+    "imported": "已新增角色：{{count}}"
   }
 }

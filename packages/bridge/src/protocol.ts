@@ -59,6 +59,11 @@ export const commands = {
 	setTranslation: (layer: EntityId, text: string | null) => __TAURI_INVOKE<null>("set_translation", { layer, text }),
 	setSpeechMarkup: (layer: EntityId, kind: SpeechKind, speaker: string | null) => __TAURI_INVOKE<null>("set_speech_markup", { layer, kind, speaker }),
 	setCharacters: (characters: CharacterInput[]) => __TAURI_INVOKE<null>("set_characters", { characters }),
+	/**
+	 *  Add another project's characters to the open project. Returns how many
+	 *  were new.
+	 */
+	importCharacters: (source: string) => __TAURI_INVOKE<number>("import_characters", { source }),
 	setTypography: (updates: TypographyUpdate[]) => __TAURI_INVOKE<null>("set_typography", { updates: updates.map(i=>({...i,typography:({...i.typography,size:i.typography.size==null?i.typography.size:i.typography.size,stroke_width:i.typography.stroke_width==null?i.typography.stroke_width:i.typography.stroke_width})})) }),
 	setGeometry: (updates: GeometryUpdate[]) => __TAURI_INVOKE<null>("set_geometry", { updates: updates.map(i=>({...i,points:i.points==null?i.points:i.points.map(i=>i)})) }),
 	setVisibility: (layers: EntityId[], visible: boolean | null, opacity: number | null) => __TAURI_INVOKE<null>("set_visibility", { layers, visible, opacity: opacity==null?opacity:opacity }),

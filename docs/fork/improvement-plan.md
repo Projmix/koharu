@@ -89,7 +89,12 @@ owner's outlined blocks from the rest.
 ## Translation
 
 1. **Characters across chapters:** import the character list and forms
-   of address from a previous project.
+   of address from a previous project. **Done 2026-10-20:** "Import from
+   project…" under the character list reads another project read-only and
+   adds the characters missing by id and name as one undo step. The list
+   becomes the user's, so markup keeps it but also stops adding new
+   characters; add a newcomer by hand. Checked on a copy of the chapter:
+   markup on two pages of the target used the imported names and genders.
 2. **"Shorten" for fit warnings:** retranslate one flagged region with a
    length limit, leaving the chapter untouched.
 3. **Sound-effect glossary** in the translation request (one of the two

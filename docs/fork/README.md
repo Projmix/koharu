@@ -74,7 +74,10 @@ Known gaps after the rebuild:
   per-page `PageMarkup` with the texts it saw, so a rerun skips unchanged
   pages. A refusal, filtered, invalid or failed answer records
   `PageMarkup` as missing and the run continues. User-authored
-  markup and a user-edited character list are never overwritten. Chapter
+  markup and a user-edited character list are never overwritten.
+  `import_characters` adds another project's characters (read-only open of
+  its newest valid state, skipping a known id or name) as one user-owned
+  undo step. Chapter
   translation sends `speech_kind`, `speaker` {name, gender}, `continues` per
   segment and a top-level `characters` list, so the translator can use the
   speaker's gender for Russian verb and adjective agreement.
