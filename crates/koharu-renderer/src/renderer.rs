@@ -1365,6 +1365,7 @@ fn assemble_frame(
             dependencies: draft.dependencies,
         })));
     }
+    diagnostics.extend(low_contrast_diagnostics(&layers));
     let layers: Arc<[Layer]> = layers.into();
     let layer_index = layers
         .iter()
@@ -1433,6 +1434,115 @@ fn transform_bounds(bounds: RenderBounds, transform: Affine) -> RenderBounds {
         width: rect.width() as f32,
         height: rect.height() as f32,
     }
+}
+
+/// Below this ratio text is hard to tell from its ground; WCAG asks 3 of
+/// large text, and dark lettering on a mid-grey screentone still reaches 2.
+const MIN_TEXT_CONTRAST: f32 = 1.5;
+const CONTRAST_SAMPLES: u32 = 24;
+
+/// Fork divergence: cleaning can paint a dark balloon white under light
+/// lettering, and the text then vanishes without any other warning (p22).
+/// Text is reported when neither its fill nor its outline stands out from the
+/// image layers under it. The ground is the median luminance of those layers
+/// composited over the rendered text, so the check depends on the assembled
+/// frame alone and an incremental frame reports what a full render would.
+fn low_contrast_diagnostics(layers: &[Layer]) -> Vec<RenderDiagnostic> {
+    let mut diagnostics = Vec::new();
+    for (index, layer) in layers.iter().enumerate() {
+        let (LayerKind::Text(text), NodeDescriptor::Text(descriptor)) =
+            (layer.kind(), &layer.0.node.descriptor)
+        else {
+            continue;
+        };
+        if !layer.presentation().visible {
+            continue;
+        }
+        let Some(ground) = ground_luminance(&layers[..index], text.rendered_bounds) else {
+            continue;
+        };
+        let against_ground = |color: [u8; 4]| {
+            let luminance = relative_luminance([color[0], color[1], color[2]].map(f32::from));
+            (luminance.max(ground) + 0.05) / (luminance.min(ground) + 0.05)
+        };
+        let outline = descriptor
+            .stroke
+            .filter(|stroke| stroke.width_px >= 1.0)
+            .map_or(1.0, |stroke| against_ground(stroke.color));
+        let contrast = against_ground(text.color).max(outline);
+        if contrast < MIN_TEXT_CONTRAST {
+            diagnostics.push(RenderDiagnostic::TextLowContrast {
+                entity: layer.entity(),
+                contrast,
+            });
+        }
+    }
+    diagnostics
+}
+
+fn ground_luminance(below: &[Layer], bounds: RenderBounds) -> Option<f32> {
+    let images = below
+        .iter()
+        .filter(|layer| layer.presentation().visible && layer.presentation().opacity > 0.0)
+        .filter_map(|layer| {
+            let image = layer.raster_image()?;
+            Some((
+                layer.placement().inverse(),
+                layer.presentation().opacity,
+                image,
+            ))
+        })
+        .collect::<Vec<_>>();
+    let mut samples = Vec::new();
+    for row in 0..CONTRAST_SAMPLES {
+        for column in 0..CONTRAST_SAMPLES {
+            let point = vello::kurbo::Point::new(
+                f64::from(
+                    bounds.x + bounds.width * (column as f32 + 0.5) / CONTRAST_SAMPLES as f32,
+                ),
+                f64::from(bounds.y + bounds.height * (row as f32 + 0.5) / CONTRAST_SAMPLES as f32),
+            );
+            let mut color: Option<[f32; 3]> = None;
+            for (inverse, opacity, image) in &images {
+                let local = *inverse * point;
+                if local.x < 0.0
+                    || local.y < 0.0
+                    || local.x >= f64::from(image.width)
+                    || local.y >= f64::from(image.height)
+                {
+                    continue;
+                }
+                let offset = (local.y as usize * image.width as usize + local.x as usize) * 4;
+                let Some(pixel) = image.pixels.get(offset..offset + 4) else {
+                    continue;
+                };
+                let alpha = f32::from(pixel[3]) / 255.0 * opacity;
+                let base = color.unwrap_or([255.0; 3]);
+                color = Some(std::array::from_fn(|channel| {
+                    base[channel] + (f32::from(pixel[channel]) - base[channel]) * alpha
+                }));
+            }
+            samples.extend(color.map(relative_luminance));
+        }
+    }
+    if samples.is_empty() {
+        return None;
+    }
+    let middle = samples.len() / 2;
+    Some(*samples.select_nth_unstable_by(middle, f32::total_cmp).1)
+}
+
+/// WCAG relative luminance of an sRGB colour with channels from 0 to 255.
+fn relative_luminance(color: [f32; 3]) -> f32 {
+    let [red, green, blue] = color.map(|channel| {
+        let channel = channel / 255.0;
+        if channel <= 0.040_45 {
+            channel / 12.92
+        } else {
+            ((channel + 0.055) / 1.055).powf(2.4)
+        }
+    });
+    0.2126 * red + 0.7152 * green + 0.0722 * blue
 }
 
 fn transform_diagnostic(diagnostic: RenderDiagnostic, transform: Affine) -> RenderDiagnostic {
@@ -2637,6 +2747,110 @@ mod tests {
                 original.layer(entity).unwrap().kind()
             );
         }
+    }
+
+    #[tokio::test]
+    async fn text_that_matches_the_image_under_it_is_low_contrast() {
+        let mut session = Session::memory().await.unwrap();
+        let source = AssetRole::new("source").unwrap();
+        let mut ids = None;
+        let create = session
+            .snapshot()
+            .patch(|edit| {
+                let page = edit.add_page(PageDraft::new("page", 200.0, 120.0), At::End)?;
+                edit.set_asset(
+                    page,
+                    &source,
+                    asset(png(200, 120, [0, 0, 0, 255]), 200, 120),
+                )?;
+                // White paint over the dark page's left half, like a balloon
+                // cleaned white under light lettering.
+                let paint = edit.add_entity(page, At::End)?;
+                edit.set(paint, &Geometry::rectangle(0.0, 0.0, 100.0, 120.0))?;
+                edit.set_asset(
+                    paint,
+                    &source,
+                    asset(png(100, 120, [255, 255, 255, 255]), 100, 120),
+                )?;
+                let mut layers = Vec::new();
+                for (x, stroke) in [(10.0, None), (110.0, None), (10.0, Some([0, 0, 0, 255]))] {
+                    let content = edit.add_text_content(page, At::End)?;
+                    edit.set(
+                        content,
+                        &SourceText {
+                            text: Authored::user("source".to_owned()),
+                            language: None,
+                        },
+                    )?;
+                    edit.set(
+                        content,
+                        &Translation {
+                            text: Authored::user("ab".to_owned()),
+                            language: None,
+                        },
+                    )?;
+                    let layer = edit.add_text_layer(
+                        page,
+                        At::End,
+                        content,
+                        &SceneTextLayout {
+                            origin: Origin::User,
+                            kind: TextLayoutKind::Paragraph,
+                            angle_degrees: Some(0.0),
+                        },
+                    )?;
+                    edit.set(layer, &Geometry::rectangle(x, 10.0, 80.0, 40.0))?;
+                    edit.set(
+                        layer,
+                        &Typography {
+                            origin: Origin::User,
+                            preferred_font: None,
+                            font_weight: None,
+                            font_style: None,
+                            size: Some(20.0),
+                            auto_fit: false,
+                            color: Some([255, 255, 255, 255]),
+                            stroke_color: stroke,
+                            stroke_width: stroke.map(|_| 2.0),
+                            alignment: None,
+                            writing_mode: None,
+                            extensions: Default::default(),
+                        },
+                    )?;
+                    layers.push(layer);
+                }
+                // An image above the text does not hide it.
+                let cover = edit.add_entity(page, At::End)?;
+                edit.set(cover, &Geometry::rectangle(100.0, 0.0, 100.0, 120.0))?;
+                edit.set_asset(
+                    cover,
+                    &source,
+                    asset(png(100, 120, [255, 255, 255, 255]), 100, 120),
+                )?;
+                ids = Some((page, layers));
+                Ok(())
+            })
+            .unwrap();
+        let snapshot = session.commit(create).await.unwrap().snapshot;
+        let (page, layers) = ids.unwrap();
+        let font = crate::fonts::FontSystem::new().first_font().unwrap();
+        let renderer = Renderer::with_typesetting(TypesettingConfig {
+            font_families: vec![font.family_name().to_owned()],
+            kind_fonts: KindFonts::default(),
+        });
+        let frame = renderer.render(&snapshot, page).await.unwrap();
+        let flagged = frame
+            .diagnostics()
+            .iter()
+            .filter_map(|diagnostic| match diagnostic {
+                RenderDiagnostic::TextLowContrast { entity, contrast } => {
+                    assert!(*contrast < MIN_TEXT_CONTRAST);
+                    Some(*entity)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(flagged, [layers[0]]);
     }
 
     #[tokio::test]

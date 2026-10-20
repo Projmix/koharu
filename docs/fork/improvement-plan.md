@@ -85,6 +85,12 @@ within 20% for 91%, line count 72%, text colour 95%, outline 91%, all four
    balloon white, white text vanishes (p22 «Чмок»). Flag regions whose
    text colour has no contrast with the cleaned image; the ⇄ button fixes
    one in a click.
+   **Done:** text whose fill and outline both stay below a 1.5 contrast
+   ratio with the image layers under it gets the fit warning in the layer
+   list and on the canvas. On the automatic chapter it flags 9 of 227
+   blocks: the three p22 «Чмок» (1.04), four p4 notes set black on the
+   black page, and black «Ух» (p7) and «А» (p24) on dark art. The owner's
+   own chapter flags only the last two.
 2. **Six small balloons** below 0.8x the owner's size, where the owner
    lets text run past the balloon edge. Consider allowing a small overrun
    in narrow balloons when the size would otherwise drop sharply.

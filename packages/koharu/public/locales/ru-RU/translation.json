@@ -253,6 +253,7 @@
   "layers": {
     "textOverflow": "Текст не помещается в область",
     "textBelowReadableSize": "Текст ужат меньше читаемого размера",
+    "textLowContrast": "Текст почти не виден на изображении под ним",
     "collapse": "Свернуть {{name}}",
     "delete": "Удалить {{name}}",
     "edit": "Изменить {{name}}",

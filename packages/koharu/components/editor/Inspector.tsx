@@ -924,6 +924,7 @@ function LayersInspector() {
 const textFitWarningLabels = {
   overflow: 'layers.textOverflow',
   below_readable_size: 'layers.textBelowReadableSize',
+  low_contrast: 'layers.textLowContrast',
 } as const satisfies Record<TextFitWarningKind, string>
 
 function LayerRow({

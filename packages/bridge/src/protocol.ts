@@ -727,7 +727,9 @@ export type TextFitWarningKind =
 /**  The text does not fit its area even at the smallest size tried. */
 "overflow" | 
 /**  The text fits only below the readable minimum size. */
-"below_readable_size";
+"below_readable_size" | 
+/**  The text barely stands out from the image under it. */
+"low_contrast";
 
 export type TextLayoutKind = "point" | "paragraph";
 

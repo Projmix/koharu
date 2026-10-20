@@ -417,6 +417,12 @@ pub enum RenderDiagnostic {
         font_size: f32,
         minimum_font_size: f32,
     },
+    /// Neither the fill nor the outline stands out from the images under the
+    /// text, as a contrast ratio from 1 (identical) to 21 (black on white).
+    TextLowContrast {
+        entity: EntityId,
+        contrast: f32,
+    },
 }
 
 #[derive(Copy, Clone, Debug, Default, PartialEq)]

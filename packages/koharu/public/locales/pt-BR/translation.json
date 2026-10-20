@@ -253,6 +253,7 @@
   "layers": {
     "textOverflow": "O texto não cabe na área",
     "textBelowReadableSize": "O texto foi reduzido abaixo do tamanho legível",
+    "textLowContrast": "O texto quase não se destaca da imagem por baixo",
     "collapse": "Recolher {{name}}",
     "delete": "Excluir {{name}}",
     "edit": "Editar {{name}}",

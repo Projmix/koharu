@@ -61,6 +61,8 @@ pub enum TextFitWarningKind {
     Overflow,
     /// The text fits only below the readable minimum size.
     BelowReadableSize,
+    /// The text barely stands out from the image under it.
+    LowContrast,
 }
 
 #[derive(Default)]
@@ -574,7 +576,8 @@ fn frame_transform(original: Frame, preview: Frame) -> [f64; 6] {
 
 const RESIZE_EPSILON: f32 = 0.01;
 
-/// One warning per text element; overflow wins because the text is cut off.
+/// One warning per text element, the one hiding the most text: overflow cuts
+/// it off, low contrast hides it in place, and a small size only strains it.
 fn text_fit_warnings(diagnostics: &[RenderDiagnostic]) -> Vec<TextFitWarning> {
     let mut warnings = Vec::<TextFitWarning>::new();
     for diagnostic in diagnostics {
@@ -585,13 +588,21 @@ fn text_fit_warnings(diagnostics: &[RenderDiagnostic]) -> Vec<TextFitWarning> {
             RenderDiagnostic::TextBelowReadableSize { entity, .. } => {
                 (*entity, TextFitWarningKind::BelowReadableSize)
             }
+            RenderDiagnostic::TextLowContrast { entity, .. } => {
+                (*entity, TextFitWarningKind::LowContrast)
+            }
             RenderDiagnostic::MissingAsset { .. } => continue,
+        };
+        let rank = |kind| match kind {
+            TextFitWarningKind::Overflow => 2,
+            TextFitWarningKind::LowContrast => 1,
+            TextFitWarningKind::BelowReadableSize => 0,
         };
         match warnings
             .iter_mut()
             .find(|warning| warning.element == element)
         {
-            Some(warning) if kind == TextFitWarningKind::Overflow => warning.kind = kind,
+            Some(warning) if rank(kind) > rank(warning.kind) => warning.kind = kind,
             Some(_) => {}
             None => warnings.push(TextFitWarning { element, kind }),
         }
@@ -650,7 +661,7 @@ mod tests {
     };
 
     #[test]
-    fn overflow_outranks_a_small_size_for_the_same_text() {
+    fn the_warning_hiding_the_most_text_wins_for_the_same_text() {
         let first = EntityId::new();
         let second = EntityId::new();
         let below = |entity| RenderDiagnostic::TextBelowReadableSize {
@@ -666,7 +677,19 @@ mod tests {
             font_size: 9.0,
         };
 
-        let warnings = text_fit_warnings(&[below(first), overflow(first), below(second)]);
+        let low_contrast = |entity| RenderDiagnostic::TextLowContrast {
+            entity,
+            contrast: 1.1,
+        };
+
+        let warnings = text_fit_warnings(&[
+            below(first),
+            low_contrast(first),
+            overflow(first),
+            low_contrast(first),
+            below(second),
+            low_contrast(second),
+        ]);
 
         assert_eq!(
             warnings,
@@ -677,7 +700,7 @@ mod tests {
                 },
                 TextFitWarning {
                     element: second,
-                    kind: TextFitWarningKind::BelowReadableSize
+                    kind: TextFitWarningKind::LowContrast
                 },
             ]
         );

@@ -253,6 +253,7 @@
   "layers": {
     "textOverflow": "Metin alanına sığmıyor",
     "textBelowReadableSize": "Metin okunabilir boyutun altına küçültüldü",
+    "textLowContrast": "Metin altındaki görüntüden neredeyse ayırt edilemiyor",
     "collapse": "{{name}} grubunu daralt",
     "delete": "{{name}} öğesini sil",
     "edit": "{{name}} öğesini düzenle",
