@@ -14,7 +14,7 @@ mod shape;
 mod text_renderer;
 mod types;
 
-pub use config::TypesettingConfig;
+pub use config::{KindFonts, TypesettingConfig};
 pub use error::{Error, Result};
 pub use frame::{
     Frame, ImageKind, ImageMetadata, Layer, LayerKind, Presentation, RasterImage, RenderBounds,
@@ -22,6 +22,7 @@ pub use frame::{
 };
 pub use layout::WritingMode;
 pub use renderer::Renderer;
+pub use text_renderer::measured_stroke_width;
 pub use types::{FontFace, FontFamily, FontMetadata, FontRange, FontSource, FontStyle, TextAlign};
 
 pub(crate) use layout::{HyphenationPolicy, LayoutRun, TextLayout};

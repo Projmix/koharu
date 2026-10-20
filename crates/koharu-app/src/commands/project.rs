@@ -9,13 +9,16 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use image::{DynamicImage, ImageFormat, RgbaImage};
 use koharu_desktop::Frame;
 use koharu_scene::{
-    AssetInput, AssetMetadata, AssetRole, At, Authored, BubbleRegion, Commit, EntityId,
-    EntityOrigin, FitsTo, FlowsIn, Geometry as SceneGeometry, Group as SceneGroup, Inside, Origin,
-    PageDraft, Point as ScenePoint, Presents, RasterLayer as SceneRasterLayer, RasterLayerKind,
-    RecognizedFrom, Region as SceneRegion, RegionSpec, RemovePolicy, Revision, Session, Snapshot,
-    SourceText as SceneSourceText, TextGroup as SceneTextGroup, TextLayout as SceneTextLayout,
+    AssetInput, AssetMetadata, AssetRole, At, Authored, BubbleRegion, Character, CharacterId,
+    CharacterList, Commit, EntityId, EntityOrigin, FitsTo, FlowsIn, Gender,
+    Geometry as SceneGeometry, Group as SceneGroup, Inside, Origin, PageDraft, PageMarkup,
+    PageMarkupMissing, PageMarkupStatus, Point as ScenePoint, Presents,
+    RasterLayer as SceneRasterLayer, RasterLayerKind, RecognizedFrom, Region as SceneRegion,
+    RegionSpec, RemovePolicy, Revision, Session, Snapshot, SourceText as SceneSourceText,
+    SpeechKind, SpeechMarkup, TextGroup as SceneTextGroup, TextLayout as SceneTextLayout,
     TextLayoutKind, TextRegion, TextRole as SceneTextRole, Translation as SceneTranslation,
-    Typography as SceneTypography, Visibility as SceneVisibility,
+    TranslationReview as SceneTranslationReview, TranslationReviewReason,
+    Typography as SceneTypography, UnboxedText, UnboxedTextReview, Visibility as SceneVisibility,
 };
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -72,6 +75,8 @@ pub struct PageSummary {
     #[specta(type = f64)]
     pub layer_count: usize,
     pub warning: Option<PageWarning>,
+    /// Why scene markup could not label this page, when it tried and failed.
+    pub markup_missing: Option<PageMarkupMissing>,
 }
 
 #[derive(Clone, Debug, Serialize, Type)]
@@ -81,6 +86,8 @@ pub struct Page {
     pub size: PageSize,
     pub layers: Vec<Layer>,
     pub regions: Vec<AnalysisRegion>,
+    /// Lettering scene markup saw outside every text region, still unresolved.
+    pub unboxed_text: Vec<UnboxedText>,
 }
 
 #[derive(Clone, Debug, Serialize, Type)]
@@ -139,8 +146,37 @@ pub struct TextContent {
     pub id: EntityId,
     pub source: Option<SourceText>,
     pub translation: Option<Translation>,
+    /// Present only while the review still applies to `translation`.
+    pub translation_review: Option<TranslationReview>,
+    /// The source text is a local OCR draft no API read has confirmed yet.
+    pub ocr_unverified: bool,
+    pub markup: Option<TextMarkup>,
     pub role: Option<String>,
     pub source_region: Option<EntityId>,
+}
+
+/// Scene markup of a text: its kind and the speaker's character id. A speaker
+/// the character list no longer contains is reported as no speaker.
+#[derive(Clone, Debug, Serialize, Type)]
+pub struct TextMarkup {
+    pub kind: SpeechKind,
+    pub speaker: Option<CharacterId>,
+    pub user: bool,
+}
+
+/// A character to save. A new character has no id yet; native code assigns it.
+#[derive(Clone, Debug, Deserialize, Type)]
+pub struct CharacterInput {
+    pub id: Option<CharacterId>,
+    pub name: String,
+    pub gender: Gender,
+    pub notes: String,
+}
+
+#[derive(Clone, Debug, Serialize, Type)]
+pub struct TranslationReview {
+    pub reason: TranslationReviewReason,
+    pub reference: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Type)]
@@ -173,6 +209,8 @@ pub struct SourceText {
 pub struct Translation {
     pub text: String,
     pub language: Option<String>,
+    /// Written by the pipeline rather than typed by the user.
+    pub generated: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize, Type)]
@@ -290,6 +328,16 @@ impl ProjectLibrary {
     pub(crate) async fn open(&self, name: &str) -> Result<Project> {
         let (name, path) = self.resolve(name)?;
         Project::open(name, path).await
+    }
+
+    /// The character list of another project, read from its newest valid
+    /// state. Opening takes the project's lock and never writes its state.
+    pub(crate) async fn characters(&self, name: &str) -> Result<Vec<Character>> {
+        let (_, path) = self.resolve(name)?;
+        let session = Session::open(&path)
+            .await
+            .with_context(|| format!("failed to open {}", path.display()))?;
+        Project::characters(&session.snapshot())
     }
 
     pub(crate) fn delete(&self, name: &str) -> Result<()> {
@@ -423,6 +471,13 @@ impl Project {
                     source_asset,
                     layer_count,
                     warning: None,
+                    markup_missing: match snapshot
+                        .component::<PageMarkup>(page.id())?
+                        .map(|markup| markup.status)
+                    {
+                        Some(PageMarkupStatus::Missing(reason)) => Some(reason),
+                        _ => None,
+                    },
                 })
             })
             .collect()
@@ -1307,9 +1362,17 @@ impl Project {
         let language = snapshot
             .component::<SceneTranslation>(content)?
             .and_then(|translation| translation.language);
+        let reviewed = snapshot
+            .component::<SceneTranslationReview>(content)?
+            .is_some();
         let patch = snapshot.patch(|edit| {
             edit.promote_entity_to_user(layer)?;
             edit.promote_entity_to_user(content)?;
+            // Writing the translation by hand is the review's answer, including
+            // keeping the reviewed text unchanged.
+            if reviewed {
+                edit.remove::<SceneTranslationReview>(content)?;
+            }
             match text {
                 Some(text) => edit.set(
                     content,
@@ -1324,15 +1387,196 @@ impl Project {
         self.commit(patch).await
     }
 
+    pub(crate) fn characters(snapshot: &Snapshot) -> Result<Vec<Character>> {
+        Ok(snapshot
+            .project_component::<CharacterList>()?
+            .map(|list| list.characters)
+            .unwrap_or_default())
+    }
+
+    pub(crate) async fn set_speech_markup(
+        &mut self,
+        layer: EntityId,
+        kind: SpeechKind,
+        speaker: Option<CharacterId>,
+    ) -> Result<Commit> {
+        let snapshot = self.snapshot();
+        let content = Self::text_content(&snapshot, layer)?;
+        if let Some(speaker) = &speaker {
+            let known = snapshot
+                .project_component::<CharacterList>()?
+                .is_some_and(|list| list.character(speaker).is_some());
+            if !known {
+                bail!("character {speaker} is not in the character list");
+            }
+        }
+        let patch = snapshot.patch(|edit| {
+            edit.promote_entity_to_user(layer)?;
+            edit.promote_entity_to_user(content)?;
+            edit.set(
+                content,
+                &SpeechMarkup {
+                    origin: Origin::User,
+                    kind,
+                    speaker,
+                },
+            )
+        })?;
+        self.commit(patch).await
+    }
+
+    /// Drops one unboxed-text flag the user judged not to be lettering. The
+    /// webview's copy of the box can differ in the last bit after a JSON round
+    /// trip, so the stored flag it names is the one recorded.
+    pub(crate) async fn dismiss_unboxed_text(
+        &mut self,
+        page: EntityId,
+        flag: UnboxedText,
+    ) -> Result<Commit> {
+        let snapshot = self.snapshot();
+        let close = |a: f64, b: f64| (a - b).abs() <= 1e-6 * a.abs().max(1.0);
+        let flag = koharu_pipeline::open_unboxed_text(&snapshot, page)?
+            .into_iter()
+            .find(|open| {
+                open.kind == flag.kind
+                    && close(open.x, flag.x)
+                    && close(open.y, flag.y)
+                    && close(open.width, flag.width)
+                    && close(open.height, flag.height)
+            })
+            .context("the unboxed text flag is no longer on the page")?;
+        let mut review =
+            snapshot
+                .component::<UnboxedTextReview>(page)?
+                .unwrap_or(UnboxedTextReview {
+                    origin: Origin::User,
+                    dismissed: Vec::new(),
+                });
+        review.dismissed.push(flag);
+        let patch = snapshot.patch(|edit| edit.set(page, &review))?;
+        self.commit(patch).await
+    }
+
+    /// Save the character list as the user's. A character that is no longer
+    /// listed is also cleared from every text that names it as the speaker,
+    /// in the same patch, so the edit undoes as one step.
+    pub(crate) async fn set_characters(
+        &mut self,
+        characters: Vec<CharacterInput>,
+    ) -> Result<Commit> {
+        let snapshot = self.snapshot();
+        let characters = characters
+            .into_iter()
+            .map(|input| {
+                let id = match input.id {
+                    Some(id) => id,
+                    None => CharacterId::new(format!("c-{}", uuid::Uuid::now_v7().simple()))?,
+                };
+                Ok(Character {
+                    id,
+                    name: input.name.trim().to_owned(),
+                    gender: input.gender,
+                    notes: input.notes.trim().to_owned(),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let removed = Self::characters(&snapshot)?
+            .into_iter()
+            .map(|character| character.id)
+            .filter(|id| characters.iter().all(|character| &character.id != id))
+            .collect::<Vec<_>>();
+        let mut cleared = Vec::new();
+        if !removed.is_empty() {
+            for layer in snapshot.text_layers()? {
+                let content = layer.content()?.id();
+                if let Some(markup) = snapshot.component::<SpeechMarkup>(content)?
+                    && markup
+                        .speaker
+                        .as_ref()
+                        .is_some_and(|speaker| removed.contains(speaker))
+                {
+                    cleared.push((content, markup));
+                }
+            }
+        }
+        let patch = snapshot.patch(|edit| {
+            edit.set_project(&CharacterList {
+                origin: Origin::User,
+                characters,
+            })?;
+            for (content, markup) in cleared {
+                edit.set(
+                    content,
+                    &SpeechMarkup {
+                        speaker: None,
+                        ..markup
+                    },
+                )?;
+            }
+            Ok(())
+        })?;
+        self.commit(patch).await
+    }
+
+    /// Add characters carried over from another project as the user's, so
+    /// scene markup keeps them. A character whose id or name is already
+    /// listed is skipped. Returns how many were added; the import is one
+    /// undo step.
+    pub(crate) async fn import_characters(
+        &mut self,
+        imported: Vec<Character>,
+    ) -> Result<(Commit, usize)> {
+        let snapshot = self.snapshot();
+        let mut characters = Self::characters(&snapshot)?;
+        let before = characters.len();
+        for character in imported {
+            if characters
+                .iter()
+                .all(|known| known.id != character.id && known.name.trim() != character.name.trim())
+            {
+                characters.push(character);
+            }
+        }
+        let added = characters.len() - before;
+        let patch = snapshot.patch(|edit| {
+            if added > 0 {
+                edit.set_project(&CharacterList {
+                    origin: Origin::User,
+                    characters,
+                })?;
+            }
+            Ok(())
+        })?;
+        Ok((self.commit(patch).await?, added))
+    }
+
+    /// `laid_out_size` is the font size the presented page drew a layer at.
+    /// A user edit pins detected typography as the user's, so an outline the
+    /// edit leaves untouched is stored at the capped width the renderer drew
+    /// rather than the raw measurement.
     pub(crate) async fn set_typography(
         &mut self,
         updates: Vec<TypographyUpdate>,
+        laid_out_size: impl Fn(EntityId) -> Option<f32>,
     ) -> Result<Commit> {
         let snapshot = self.snapshot();
         let updates = updates
             .into_iter()
-            .map(|update| {
+            .map(|mut update| {
                 let content = Self::text_content(&snapshot, update.layer)?;
+                if let Some(previous) = snapshot.component::<SceneTypography>(update.layer)?
+                    && matches!(previous.origin, Origin::Generated(_))
+                    && let Some(width) = previous.stroke_width
+                    && update.typography.stroke_width == Some(width)
+                    && let Some(size) = if update.typography.auto_fit {
+                        laid_out_size(update.layer)
+                    } else {
+                        update.typography.size
+                    }
+                {
+                    update.typography.stroke_width =
+                        Some(koharu_renderer::measured_stroke_width(width, size));
+                }
                 Ok((update, content))
             })
             .collect::<Result<Vec<_>>>()?;
@@ -2012,6 +2256,7 @@ impl Project {
             },
             layers,
             regions,
+            unboxed_text: koharu_pipeline::open_unboxed_text(snapshot, page)?,
         })
     }
 
@@ -2032,14 +2277,35 @@ impl Project {
         if let Some(layout) = snapshot.component::<SceneTextLayout>(layer)? {
             let text_layer = snapshot.text_layer(layer)?;
             let content = text_layer.content()?;
+            let ocr_unverified = koharu_pipeline::ocr_unverified(content)?;
             let source = content.source()?.map(|source| SourceText {
                 text: source.text.value,
                 language: source.language.map(|language| language.to_string()),
             });
             let translation = content.translation()?.map(|translation| Translation {
+                generated: matches!(translation.text.origin, koharu_scene::Origin::Generated(_)),
                 text: translation.text.value,
                 language: translation.language.map(|language| language.to_string()),
             });
+            let translation_review =
+                content
+                    .translation_review()?
+                    .map(|review| TranslationReview {
+                        reason: review.reason,
+                        reference: review.reference,
+                    });
+            let characters = snapshot.project_component::<CharacterList>()?;
+            let markup = snapshot
+                .component::<SpeechMarkup>(content.id())?
+                .map(|markup| TextMarkup {
+                    kind: markup.kind,
+                    speaker: markup.speaker.filter(|speaker| {
+                        characters
+                            .as_ref()
+                            .is_some_and(|list| list.character(speaker).is_some())
+                    }),
+                    user: markup.origin == Origin::User,
+                });
             let role = content.role()?.map(|role| role.role);
             let source_region = content.source_region()?.map(|region| region.id());
             let automatic_region = text_layer.automatic_target()?.map(|region| region.id());
@@ -2056,6 +2322,9 @@ impl Project {
                     id: content.id(),
                     source,
                     translation,
+                    translation_review,
+                    ocr_unverified,
+                    markup,
                     role,
                     source_region,
                 }),
@@ -2472,6 +2741,82 @@ mod tests {
         assert_eq!(
             Project::typography_view(typography).writing_mode,
             Some(WritingMode::Vertical)
+        );
+    }
+
+    #[tokio::test]
+    async fn removing_a_character_clears_it_as_speaker_in_the_same_edit() {
+        let mut session = Session::memory().await.unwrap();
+        let mut setup = session.snapshot().edit();
+        let page = setup
+            .add_page(PageDraft::new("page", 100.0, 100.0), At::End)
+            .unwrap();
+        let content = setup.add_text_content(page, At::End).unwrap();
+        let layer = setup
+            .add_text_layer(
+                page,
+                At::End,
+                content,
+                &SceneTextLayout {
+                    origin: Origin::User,
+                    kind: TextLayoutKind::Paragraph,
+                    angle_degrees: None,
+                },
+            )
+            .unwrap();
+        session.commit(setup.finish().unwrap()).await.unwrap();
+        let mut project = Project::new(session, "test".to_owned());
+        let input = |id: Option<CharacterId>, name: &str| CharacterInput {
+            id,
+            name: name.to_owned(),
+            gender: Gender::Male,
+            notes: String::new(),
+        };
+
+        project
+            .set_characters(vec![input(None, "Izuku"), input(None, "Katsuki")])
+            .await
+            .unwrap();
+        let characters = Project::characters(&project.snapshot()).unwrap();
+        let (izuku, katsuki) = (characters[0].id.clone(), characters[1].id.clone());
+        assert!(
+            project
+                .set_speech_markup(
+                    layer,
+                    SpeechKind::Speech,
+                    Some(CharacterId::new("nobody").unwrap())
+                )
+                .await
+                .is_err()
+        );
+        project
+            .set_speech_markup(layer, SpeechKind::Thought, Some(izuku))
+            .await
+            .unwrap();
+
+        project
+            .set_characters(vec![input(Some(katsuki.clone()), "Katsuki")])
+            .await
+            .unwrap();
+
+        let snapshot = project.snapshot();
+        let markup = snapshot
+            .component::<SpeechMarkup>(content)
+            .unwrap()
+            .unwrap();
+        assert_eq!(markup.kind, SpeechKind::Thought);
+        assert_eq!(markup.speaker, None);
+        let list = snapshot
+            .project_component::<CharacterList>()
+            .unwrap()
+            .unwrap();
+        assert_eq!(list.origin, Origin::User);
+        assert_eq!(
+            list.characters
+                .iter()
+                .map(|character| &character.id)
+                .collect::<Vec<_>>(),
+            vec![&katsuki]
         );
     }
 
@@ -3462,6 +3807,81 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn editing_detected_typography_keeps_the_drawn_outline_width() {
+        let mut session = Session::memory().await.unwrap();
+        let mut setup = session.snapshot().edit();
+        let page = setup
+            .add_page(PageDraft::new("page", 100.0, 100.0), At::End)
+            .unwrap();
+        let content = setup.add_text_content(page, At::End).unwrap();
+        let layer = setup
+            .add_text_layer(
+                page,
+                At::End,
+                content,
+                &SceneTextLayout {
+                    origin: Origin::User,
+                    kind: TextLayoutKind::Paragraph,
+                    angle_degrees: None,
+                },
+            )
+            .unwrap();
+        let detected = SceneTypography {
+            origin: Origin::Generated(Generation::new(
+                ProducerId::new("dev.koharu.pipeline.detection").expect("valid producer"),
+            )),
+            preferred_font: None,
+            font_weight: None,
+            font_style: None,
+            size: None,
+            auto_fit: true,
+            color: Some([0, 0, 0, 255]),
+            stroke_color: Some([255, 255, 255, 255]),
+            stroke_width: Some(12.0),
+            alignment: None,
+            writing_mode: None,
+            extensions: Default::default(),
+        };
+        session.commit(setup.finish().unwrap()).await.unwrap();
+        let mut detection = session.snapshot().edit_as(Generation::new(
+            ProducerId::new("dev.koharu.pipeline.detection").expect("valid producer"),
+        ));
+        detection.set(layer, &detected).unwrap();
+        session.commit(detection.finish().unwrap()).await.unwrap();
+        let mut project = Project::new(session, "test".to_owned());
+        let recolored = |stroke_width| TypographyUpdate {
+            layer,
+            typography: Typography {
+                color: Some([200, 0, 0, 255]),
+                stroke_width,
+                ..Project::typography_view(detected.clone())
+            },
+        };
+        let stored_width = |project: &Project| {
+            project
+                .snapshot()
+                .component::<SceneTypography>(layer)
+                .unwrap()
+                .unwrap()
+                .stroke_width
+        };
+
+        let commit = project
+            .set_typography(vec![recolored(Some(12.0))], |_| Some(20.0))
+            .await
+            .unwrap();
+        project.record_commit(&commit);
+        assert_eq!(stored_width(&project), Some(2.0));
+
+        let commit = project
+            .set_typography(vec![recolored(Some(5.0))], |_| Some(20.0))
+            .await
+            .unwrap();
+        project.record_commit(&commit);
+        assert_eq!(stored_width(&project), Some(5.0));
+    }
+
+    #[tokio::test]
     async fn changing_an_ocr_text_role_is_undoable_and_rejects_unknown_roles() {
         let mut session = Session::memory().await.unwrap();
         let mut setup = session.snapshot().edit();
@@ -3565,5 +3985,80 @@ mod tests {
             &[ScenePoint { x: 2.0, y: 2.0 }],
         );
         assert_eq!(white.get_pixel(2, 2).0, [255, 255, 255, 255]);
+    }
+
+    #[tokio::test]
+    async fn importing_characters_adds_missing_ones_without_touching_the_source() {
+        let root = tempfile::tempdir().unwrap();
+        let library = ProjectLibrary {
+            root: root.path().to_owned(),
+        };
+        let input = |name: &str, gender: Gender| CharacterInput {
+            id: None,
+            name: name.to_owned(),
+            gender,
+            notes: format!("{name} notes"),
+        };
+        {
+            let mut source = library.create("chapter-1").await.unwrap();
+            source
+                .set_characters(vec![
+                    input("Izuku", Gender::Male),
+                    input("Ochaco", Gender::Female),
+                ])
+                .await
+                .unwrap();
+        }
+        let source_files = |name: &str| {
+            ["state-a.khr", "state-b.khr"].map(|file| {
+                std::fs::read(root.path().join(format!("{name}.khrproj")).join(file)).ok()
+            })
+        };
+        let before = source_files("chapter-1");
+        let mut target = library.create("chapter-2").await.unwrap();
+        target
+            .set_characters(vec![input("Ochaco", Gender::Unknown)])
+            .await
+            .unwrap();
+        let undo_steps = target.undo.len();
+
+        let imported = library.characters("chapter-1").await.unwrap();
+        let (commit, added) = target.import_characters(imported.clone()).await.unwrap();
+        target.record_commit(&commit);
+
+        assert_eq!(added, 1);
+        assert_eq!(target.undo.len(), undo_steps + 1);
+        let list = target
+            .snapshot()
+            .project_component::<CharacterList>()
+            .unwrap()
+            .unwrap();
+        assert_eq!(list.origin, Origin::User);
+        assert_eq!(
+            list.characters
+                .iter()
+                .map(|character| (character.name.as_str(), character.gender))
+                .collect::<Vec<_>>(),
+            [("Ochaco", Gender::Unknown), ("Izuku", Gender::Male)]
+        );
+        assert_eq!(list.characters[1], imported[0]);
+
+        let revision = target.revision();
+        let (commit, added) = target.import_characters(imported).await.unwrap();
+        target.record_commit(&commit);
+        assert_eq!(added, 0);
+        assert_eq!(target.revision(), revision);
+        assert_eq!(target.undo.len(), undo_steps + 1);
+        assert_eq!(source_files("chapter-1"), before);
+
+        target.undo().await.unwrap();
+        assert_eq!(
+            Project::characters(&target.snapshot())
+                .unwrap()
+                .iter()
+                .map(|character| character.name.as_str())
+                .collect::<Vec<_>>(),
+            ["Ochaco"]
+        );
     }
 }

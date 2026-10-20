@@ -31,11 +31,16 @@ pub(crate) struct TextNodeDescriptor {
     pub(crate) font_style: Option<FontStyle>,
     pub(crate) font_size: Option<f32>,
     pub(crate) minimum_font_size: f32,
+    /// Largest automatic size, scaled to the page by the renderer.
+    pub(crate) automatic_ceiling: f32,
     pub(crate) auto_fit: bool,
     pub(crate) alignment: TextAlign,
     pub(crate) writing_mode: WritingMode,
     pub(crate) foreground_color: [u8; 4],
     pub(crate) stroke: Option<StrokeOptions>,
+    /// The outline width was measured on the source lettering by detection,
+    /// not chosen for this text; see `measured_stroke_width`.
+    pub(crate) measured_stroke: bool,
     pub(crate) line_height: f32,
     pub(crate) letter_spacing: f32,
     pub(crate) word_spacing: f32,
@@ -57,6 +62,18 @@ pub(crate) struct RenderedTextMetadata {
     pub(crate) post_script_fonts: Vec<String>,
     pub(crate) font_size: f32,
     pub(crate) color: [u8; 4],
+}
+
+/// Fork divergence: detection measures the outline of the source lettering,
+/// which is often 6-17 px around large Japanese glyphs; copied onto the
+/// translated text it swallows the art and spills out of panels. The owner
+/// outlines at a median 0.1 of the font size (at most 0.21 on the test
+/// chapter), so a measured outline is drawn no wider than that median.
+/// Editing the style of such text pins the capped width; see
+/// `Project::set_typography`.
+#[must_use]
+pub fn measured_stroke_width(width_px: f32, font_size: f32) -> f32 {
+    width_px.min(font_size * 0.1)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -222,7 +239,7 @@ impl TextRenderer {
         if let Some(language) = &descriptor.language {
             layout = layout.with_hyphenation_language_tag(language.as_str());
         }
-        if is_bubble_text && descriptor.writing_mode == WritingMode::Horizontal {
+        if !descriptor.point_text && descriptor.writing_mode == WritingMode::Horizontal {
             layout = layout.with_hyphenation_policy(HyphenationPolicy::LastResort);
         }
         let layout = if descriptor.auto_fit && !descriptor.point_text {
@@ -254,7 +271,10 @@ impl TextRenderer {
         };
         let mut scene = PreparedScene::default();
         let mut resources = Vec::new();
-        if let Some(stroke) = descriptor.stroke {
+        if let Some(mut stroke) = descriptor.stroke {
+            if descriptor.measured_stroke {
+                stroke.width_px = measured_stroke_width(stroke.width_px, layout.font_size);
+            }
             options.stroke = Some(stroke);
         }
         self.render(
@@ -288,7 +308,7 @@ impl TextRenderer {
             width: layout.width,
             height: layout.height,
         };
-        let stroke_padding = descriptor
+        let stroke_padding = options
             .stroke
             .map_or(0.0, |stroke| stroke.width_px.max(0.0));
         Ok(RenderedTextNode {
@@ -330,8 +350,9 @@ fn automatic_maximum(
         } else {
             bounds.width
         }
+        .min(descriptor.automatic_ceiling)
     } else {
-        24.0
+        descriptor.automatic_ceiling
     }
 }
 
@@ -442,7 +463,7 @@ mod tests {
     use koharu_scene::EntityId;
 
     use super::*;
-    use crate::fonts::FontSystem;
+    use crate::fonts::{FontRequest, FontSystem};
 
     #[test]
     fn automatic_size_preserves_free_text_default_and_balloon_extent() {
@@ -459,11 +480,13 @@ mod tests {
             font_style: None,
             font_size: Some(6.0),
             minimum_font_size: 9.0,
+            automatic_ceiling: 24.0,
             auto_fit: true,
             alignment: TextAlign::Center,
             writing_mode: WritingMode::Horizontal,
             foreground_color: [0, 0, 0, 255],
             stroke: None,
+            measured_stroke: false,
             line_height: 1.2,
             letter_spacing: 0.0,
             word_spacing: 0.0,
@@ -478,7 +501,71 @@ mod tests {
         };
 
         assert_eq!(automatic_maximum(&descriptor, bounds, false), 24.0);
-        assert_eq!(automatic_maximum(&descriptor, bounds, true), 240.0);
+        assert_eq!(automatic_maximum(&descriptor, bounds, true), 24.0);
+        let narrow = LayoutBox {
+            width: 18.0,
+            ..bounds
+        };
+        assert_eq!(automatic_maximum(&descriptor, narrow, true), 18.0);
+    }
+
+    #[tokio::test]
+    async fn a_measured_outline_is_capped_by_the_laid_out_font_size() {
+        let family = FontSystem::new()
+            .first_font()
+            .unwrap()
+            .family_name()
+            .to_owned();
+        let fonts = Fonts::new();
+        fonts
+            .prepare(&[FontRequest {
+                family: family.clone(),
+                weight: None,
+                style: None,
+            }])
+            .await
+            .unwrap();
+        let padding = |font_size: f32, measured_stroke: bool| {
+            let descriptor = TextNodeDescriptor {
+                entity: EntityId::new(),
+                text: "Hi".to_owned(),
+                language: None,
+                width: 400.0,
+                height: 200.0,
+                balloon_contour: None,
+                preferred_font: Some(family.clone()),
+                font_families: vec![family.clone()],
+                font_weight: None,
+                font_style: None,
+                font_size: Some(font_size),
+                minimum_font_size: 9.0,
+                automatic_ceiling: 24.0,
+                auto_fit: false,
+                alignment: TextAlign::Center,
+                writing_mode: WritingMode::Horizontal,
+                foreground_color: [0, 0, 0, 255],
+                stroke: Some(StrokeOptions {
+                    color: [255, 255, 255, 255],
+                    width_px: 12.0,
+                }),
+                measured_stroke,
+                line_height: 1.2,
+                letter_spacing: 0.0,
+                word_spacing: 0.0,
+                text_inset: [0.0; 4],
+                point_text: false,
+            };
+            let rendered = TextRenderer::new()
+                .render_descriptor(&descriptor, &fonts)
+                .unwrap();
+            (rendered.local_bounds.width - rendered.metadata.rendered_bounds.width) * 0.5
+        };
+
+        for font_size in [12.0, 20.0, 40.0, 90.0] {
+            let cap = font_size * 0.1;
+            assert!((padding(font_size, true) - cap.min(12.0)).abs() < 1e-3);
+            assert!((padding(font_size, false) - 12.0).abs() < 1e-3);
+        }
     }
 
     #[test]

@@ -58,13 +58,30 @@
     "empty": "請選擇頁面以開始。",
     "fit": "適應視窗",
     "surface": "Koharu 畫布",
-    "unavailable": "WebGPU 畫布無法使用"
+    "unavailable": "WebGPU 畫布無法使用",
+    "unboxedText": {
+      "create": "在此建立文字區塊",
+      "dismiss": "不是文字"
+    }
   },
   "colorPicker": {
     "brushColor": "筆刷顏色",
     "hexCode": "十六進位色彩代碼",
     "sampleCanvas": "從畫布選取色彩",
     "transparent": "透明"
+  },
+  "chapterCheck": {
+    "title": "匯出前檢查",
+    "checking": "正在檢查頁面…",
+    "issueCount": "有 {{count}} 個文字區塊需要查看。選擇即可開啟。",
+    "issueCount_one": "有 {{count}} 個文字區塊需要查看。選擇即可開啟。",
+    "issueCount_other": "有 {{count}} 個文字區塊需要查看。選擇即可開啟。",
+    "emptyTranslation": "沒有譯文",
+    "japaneseText": "譯文中仍有日文字元",
+    "unboxedText": "可能漏偵測的文字：{{count}} 處",
+    "unboxedText_one": "可能漏偵測的文字：{{count}} 處",
+    "unboxedText_other": "可能漏偵測的文字：{{count}} 處",
+    "exportAnyway": "仍然匯出"
   },
   "common": {
     "back": "返回",
@@ -201,9 +218,12 @@
     "horizontal": "橫排",
     "increaseBorderWidth": "增加描邊寬度",
     "increaseFontSize": "字型大小增加 1 點",
+    "invertBorder": "交換文字色彩與描邊色彩",
     "opacity": "不透明度",
     "placement": "位置",
     "resetAutoFit": "重設為自動符合",
+    "drawArea": "繪製此文字適配的區域",
+    "drawAreaShort": "繪製區域",
     "selectPage": "選擇頁面以檢查其圖層。",
     "size": "字級",
     "source": "原文",
@@ -211,11 +231,31 @@
     "textColor": "文字色彩",
     "textDirection": "文字方向",
     "translation": "譯文",
+    "translationReview": "譯文可能弱化了粗口",
+    "shortenTranslation": "縮短",
+    "shortenTranslationHint": "將此譯文改寫得更短以便放下；再次點擊可進一步縮短",
+    "translationReviewKeep": "保留",
+    "translationReviewKeepHint": "保留此譯文並清除提醒",
+    "translationReviewReference": "機器翻譯",
     "type": "排版",
     "unplaced": "未放置",
     "vertical": "直排",
     "weight": "字重",
-    "width": "寬度"
+    "width": "寬度",
+    "speechKind": "類型",
+    "speechKindLabel": "{{name}} 的類型",
+    "speechKinds": {
+      "speech": "對白",
+      "thought": "心聲",
+      "narration": "旁白",
+      "sound-effect": "音效",
+      "sign": "標牌文字",
+      "aside": "旁註"
+    },
+    "speaker": "說話者",
+    "speakerLabel": "{{name}} 的說話者",
+    "noSpeaker": "無",
+    "unmarked": "未標註"
   },
   "languages": {
     "en-US": "English",
@@ -230,6 +270,10 @@
     "zh-TW": "繁體中文"
   },
   "layers": {
+    "textOverflow": "文字放不進區域",
+    "textBelowReadableSize": "文字縮小到可讀大小以下",
+    "textLowContrast": "文字與下方影像幾乎無法區分",
+    "ocrUnverified": "OCR 未經核對：請重新執行 OCR",
     "collapse": "收合 {{name}}",
     "delete": "刪除 {{name}}",
     "edit": "編輯 {{name}}",
@@ -344,7 +388,14 @@
     "rename": "重新命名",
     "renameDescription": "為此頁面選擇新名稱。",
     "renameTitle": "重新命名頁面",
-    "selected": "已選擇 {{count}}"
+    "selected": "已選擇 {{count}}",
+    "markupMissing": {
+      "refused": "場景標註：模型拒絕了此頁",
+      "content-filter": "場景標註：遭供應商的內容過濾器攔截",
+      "empty": "場景標註：模型沒有回傳內容",
+      "invalid": "場景標註：回覆無效，已捨棄",
+      "failed": "場景標註：請求失敗"
+    }
   },
   "outputPicker": {
     "instructions": "翻譯指示",
@@ -356,18 +407,21 @@
     "detection": "偵測",
     "inpainting": "修補",
     "ocr": "OCR",
+    "markup": "場景標註",
     "translation": "翻譯"
   },
   "phaseShort": {
     "detection": "偵測",
     "inpainting": "修復",
     "ocr": "OCR",
+    "markup": "標註",
     "translation": "翻譯"
   },
   "phaseDescription": {
     "detection": "找出頁面上的文字。",
     "inpainting": "重建移除文字後的畫面。",
     "ocr": "讀取每個區域中的文字。",
+    "markup": "為翻譯標註每段文字的類型、說話者與接續關係。",
     "translation": "將原文翻譯為目標語言。"
   },
   "providerDescriptions": {
@@ -455,7 +509,14 @@
         "localModel": "本機 OCR 模型",
         "method": "OCR 方法",
         "hybrid": "本機 + API",
-        "hybridDescription": "先完成整章所有頁面的本機 OCR，再將每張裁剪影像及其辨識文字傳送給所選 API。結果自動套用。"
+        "hybridDescription": "先完成整章所有頁面的本機 OCR，再由所選 API 核對辨識文字。結果自動套用。",
+        "crossCheck": "用第二個本機模型交叉核對",
+        "crossCheckDescription": "每張裁剪影像也用第二個本機模型辨識，只將兩者結果不一致的傳送給 API。關閉後全部傳送：費用約為三倍，手寫文字略為準確。"
+      },
+      "markup": {
+        "model": "標註模型",
+        "instructions": "附加說明",
+        "instructionsDescription": "附加到標註請求中，例如角色提示。"
       },
       "inpainting": {
         "apiModel": "影像編輯模型",
@@ -491,6 +552,10 @@
         "ocr": {
           "description": "讀取偵測區域內的原文。",
           "title": "OCR"
+        },
+        "markup": {
+          "title": "場景標註",
+          "description": "視覺模型為每段文字標註類型、說話者與其接續的台詞，不會修改文字。"
         }
       },
       "title": "流程"
@@ -557,12 +622,17 @@
     },
     "typesetting": {
       "addFamily": "新增字型家族",
+      "clearKindFont": "{{kind}} 使用預設字型",
       "defaultFamilies": "預設字型家族",
       "description": "設定文字圖層未指定字型家族時使用的有序字型堆疊。",
       "empty": "沒有預設字型家族。Koharu 將使用系統後備字型。",
       "familyLabel": "預設字型家族 {{index}}",
       "fontFallback": "後備字型",
       "fontFallbackDescription": "Koharu 使用第一個支援該文字的可用字型家族。",
+      "kindFontDefault": "預設字型",
+      "kindFontLabel": "字型：{{kind}}",
+      "kindFonts": "依文字類型設定字型",
+      "kindFontsDescription": "依場景標註的文字類型，優先於預設字型使用。文字圖層上選擇的字型仍然優先。",
       "loadError": "無法載入字型。仍可移除現有字型家族。",
       "loadingFonts": "正在載入字型…",
       "removeFamily": "移除 {{family}}",
@@ -663,5 +733,26 @@
     "failed": "無法處理預覽：{{error}}",
     "cleanupLayers": "原圖 + 可見的繪圖圖層。傳送單張 PNG，不包含文字圖層、遮色片和選取控制點。",
     "restorationLayers": "原圖 + 按圖層順序合成的可見清理與繪圖圖層，僅傳送選取區域。傳送單張 PNG，不包含文字圖層、遮色片和選取控制點。"
+  },
+  "characters": {
+    "tab": "角色",
+    "title": "角色",
+    "description": "場景標註與翻譯使用的姓名和性別。編輯後清單歸你所有，場景標註不會再修改它。",
+    "empty": "還沒有角色。場景標註會填寫此清單，也可以在這裡新增。",
+    "name": "姓名",
+    "gender": "性別",
+    "genders": {
+      "male": "男",
+      "female": "女",
+      "unknown": "未知"
+    },
+    "notes": "備註",
+    "notesPlaceholder": "備註，例如說話方式",
+    "remove": "移除 {{name}}",
+    "newName": "新角色姓名",
+    "add": "新增",
+    "import": "從專案匯入…",
+    "importNone": "沒有其他專案",
+    "imported": "已新增角色：{{count}}"
   }
 }

@@ -35,7 +35,7 @@ use specta::Type;
 use super::{StageInput, StageProcessor, finish, generation};
 use crate::{DetectionModel, ModelCell};
 
-const OUTPUT_MODEL_ID: &str = "mayocream/koharu-layout-rfdetr-seg-2xl-1152#postprocess-2";
+const OUTPUT_MODEL_ID: &str = "mayocream/koharu-layout-rfdetr-seg-2xl-1152#postprocess-6";
 #[cfg(test)]
 const LEGACY_OUTPUT_MODEL_ID: &str = "mayocream/koharu-layout-rfdetr-seg-2xl-1152";
 const MODEL_NAME: &str = "koharu-layout-rfdetr-seg-2xl";
@@ -43,7 +43,14 @@ const PRODUCER: &str = "dev.koharu.pipeline.detection";
 const ANGLE_SNAP_DEGREES: f32 = 3.0;
 const ANGLE_SEARCH_HALF_STEPS: i32 = 90;
 const ANGLE_SEARCH_STEP_DEGREES: f64 = 0.5;
-const TYPOGRAPHY_SAMPLE_MARGIN: f32 = 2.0;
+// The background ring must clear outlines drawn past the glyph box (up to
+// about 13 px on the owner's chapter); otherwise the outline itself is taken
+// as the background and the stroke is lost.
+const TYPOGRAPHY_SAMPLE_MARGIN: f32 = 14.0;
+const HALFTONE_SAMPLE_RADIUS: u32 = 2;
+const GROUND_RING_INNER: u8 = 2;
+const GROUND_RING_OUTER: u8 = 4;
+const GLYPH_GROUND_MIN_DISTANCE_SQUARED: u32 = 96 * 96;
 const COLOR_SNAP_DARK_LUMINANCE: u32 = 64 * 256;
 const COLOR_SNAP_LIGHT_LUMINANCE: u32 = 191 * 256;
 const COLOR_CLUSTER_MIN_DISTANCE_SQUARED: u32 = 32 * 32;
@@ -54,6 +61,23 @@ const DIALOGUE_MASK_CONTAINMENT_THRESHOLD: f32 = 0.9;
 const TEXT_DUPLICATE_IOU_THRESHOLD: f32 = 0.95;
 const TEXT_DUPLICATE_AREA_RATIO_THRESHOLD: f32 = 0.9;
 const NESTED_TEXT_CONTAINMENT_THRESHOLD: f32 = 0.8;
+const SPURIOUS_ONOMATOPOEIA_MAX_SCORE: f32 = 0.5;
+const SPURIOUS_ONOMATOPOEIA_CONTAINMENT: f32 = 0.5;
+const SPURIOUS_ONOMATOPOEIA_PAGE_FRACTION: f32 = 0.2;
+const PAGE_NUMBER_EDGE_FRACTION: f32 = 0.012;
+const PAGE_NUMBER_MAX_WIDTH_FRACTION: f32 = 0.016;
+const PAGE_NUMBER_MAX_HEIGHT_FRACTION: f32 = 0.035;
+const PAGE_NUMBER_MARGIN_FRACTION: f32 = 0.15;
+const DARK_BALLOON_LUMINANCE: u8 = 96;
+const DARK_BALLOON_CORE_FRACTION: f32 = 0.5;
+const DARK_BALLOON_TEXT_SPAN: f32 = 0.8;
+const DARK_BALLOON_MIN_LETTERING: f32 = 0.03;
+/// Light lettering on a dark fill is where the layout model is least sure: it
+/// scores such text below its class threshold. Text candidates down to this
+/// score are kept when they are lettering inside a closed dark balloon; the
+/// rest of the page keeps the model's thresholds, because lowering them
+/// everywhere admits screentone, hair and speed lines as text.
+const INVERTED_TEXT_MIN_SCORE: f32 = 0.1;
 const FREE_TEXT_ROLE: &str = "dev.koharu.text.free-text";
 const DIALOGUE_ROLE: &str = "dev.koharu.text.dialogue";
 const ONOMATOPOEIA_ROLE: &str = "dev.koharu.text.onomatopoeia";
@@ -258,10 +282,34 @@ impl Model {
             let network = network
                 .lock()
                 .map_err(|_| anyhow!("layout model lock is poisoned"))?;
-            network.inference_with_thresholds(&image, thresholds)
+            let mut lowered = thresholds;
+            lowered.text = lowered.text.min(INVERTED_TEXT_MIN_SCORE);
+            lowered.onomatopoeia = lowered.onomatopoeia.min(INVERTED_TEXT_MIN_SCORE);
+            let mut output = network.inference_with_thresholds(&image, lowered)?;
+            keep_confident_or_inverted(&mut output.detections, thresholds, &image);
+            Ok(output)
         })
         .await
     }
+}
+
+/// Keeps detections at their class threshold, and text below it only where
+/// it is light lettering inside a closed dark balloon.
+fn keep_confident_or_inverted(
+    detections: &mut Vec<KoharuLayoutDetection>,
+    thresholds: KoharuLayoutThresholds,
+    image: &DynamicImage,
+) {
+    let mut rgb = None;
+    detections.retain(|detection| {
+        let threshold = match detection.label.as_str() {
+            "text" => thresholds.text,
+            "onomatopoeia" => thresholds.onomatopoeia,
+            _ => return true,
+        };
+        detection.score >= threshold
+            || dark_balloon(rgb.get_or_insert_with(|| image.to_rgb8()), detection.bbox).is_some()
+    });
 }
 
 struct DetectedRegion<'a> {
@@ -277,6 +325,7 @@ struct DetectedText<'a> {
     content: EntityId,
     layer: EntityId,
     role: &'static str,
+    typography: Typography,
 }
 
 enum RegionOutput<'a> {
@@ -373,11 +422,16 @@ async fn write_page(
     if let Some(region) = input.region {
         detections.retain(|detection| intersects(detection.bbox, region));
     }
+    clamp_to_image(&mut detections, size);
     non_maximum_suppression(&mut detections, 0.5);
+    remove_spurious_onomatopoeia(&mut detections, size);
+    remove_page_numbers(&mut detections, size);
     remove_nested_text_detections(&mut detections);
+    let image = image.to_rgb8();
+    let dark = dark_balloons(&image, &detections);
+    detections.extend(dark);
     sort_by_layout(&mut detections, source_language);
 
-    let image = image.to_rgb8();
     let regions = write_regions(&input.scene, edit, page, &image, &detections, generation)
         .context("failed to write detected regions")?;
     link_dialogue_regions(edit, &regions, generation)
@@ -452,7 +506,13 @@ fn write_region<'a>(
     } else if text_role.is_some() {
         inferred.map_or_else(
             || rectangle_geometry(detection.bbox),
-            |typography| rotated_rectangle_geometry(detection.bbox, typography.angle_degrees),
+            |typography| {
+                if typography.angle_degrees == 0.0 {
+                    rectangle_geometry(detection.bbox)
+                } else {
+                    rotated_rectangle_geometry(typography.oriented_extent, typography.angle_degrees)
+                }
+            },
         )
     } else {
         rectangle_geometry(detection.bbox)
@@ -504,26 +564,22 @@ fn write_region<'a>(
     )?;
     write_text_role(edit, content, text_role, generation)
         .context("failed to set the detected text role")?;
-    edit.set(
-        layer,
-        &Typography {
-            origin: Origin::Generated(generation.clone()),
-            preferred_font: None,
-            font_weight: None,
-            font_style: None,
-            size: None,
-            auto_fit: true,
-            color: inferred.map(|value| [value.color[0], value.color[1], value.color[2], u8::MAX]),
-            stroke_color: inferred
-                .and_then(|value| value.stroke_color)
-                .map(|color| [color[0], color[1], color[2], u8::MAX]),
-            stroke_width: inferred.and_then(|value| value.stroke_width),
-            alignment: None,
-            writing_mode: inferred.map(|value| value.writing_mode),
-            extensions: Default::default(),
-        },
-    )
-    .context("failed to set detected typography")?;
+    let typography = Typography {
+        origin: Origin::Generated(generation.clone()),
+        preferred_font: None,
+        font_weight: None,
+        font_style: None,
+        size: None,
+        auto_fit: true,
+        color: inferred.map(|value| [value.color[0], value.color[1], value.color[2], u8::MAX]),
+        stroke_color: inferred
+            .and_then(|value| value.stroke_color)
+            .map(|color| [color[0], color[1], color[2], u8::MAX]),
+        stroke_width: inferred.and_then(|value| value.stroke_width),
+        alignment: None,
+        writing_mode: inferred.map(|value| value.writing_mode),
+        extensions: Default::default(),
+    };
     edit.relate::<RecognizedFrom>(content, entity)
         .context("failed to associate detected text content with its region")?;
 
@@ -534,6 +590,7 @@ fn write_region<'a>(
         content,
         layer,
         role: text_role,
+        typography,
     }))
 }
 
@@ -542,9 +599,43 @@ fn link_dialogue_regions(
     regions: &PageRegions<'_>,
     generation: &Generation,
 ) -> Result<()> {
-    for text in &regions.texts {
+    let containing = regions
+        .texts
+        .iter()
+        .map(|text| containing_bubble(&regions.bubbles, text).map(|bubble| bubble.entity))
+        .collect::<Vec<_>>();
+    for (text, bubble_entity) in regions.texts.iter().zip(&containing) {
+        // Fork divergence: the measured outline is the rim of the source
+        // lettering. A balloon already separates its text from the art, so text
+        // inside one, sound effects and dark balloons included, gets no outline.
+        let mut typography = text.typography.clone();
+        if bubble_entity.is_some() {
+            typography.stroke_color = None;
+            typography.stroke_width = None;
+        }
+        edit.set(text.layer, &typography)
+            .context("failed to set detected typography")?;
         if text.role == ONOMATOPOEIA_ROLE {
-            edit.relate::<FitsTo>(text.layer, text.entity)?;
+            // Fork divergence: a sound effect that is the only text in a balloon
+            // (often a dark balloon with light lettering) lays out in that balloon,
+            // keeping its role. One sharing a balloon with dialogue stays fitted to
+            // its own region so it does not take a share of the speech.
+            let alone = bubble_entity.is_some_and(|bubble| {
+                containing
+                    .iter()
+                    .filter(|other| **other == Some(bubble))
+                    .count()
+                    == 1
+            });
+            match bubble_entity {
+                Some(bubble) if alone => {
+                    edit.relate::<Inside>(text.entity, *bubble)?;
+                    edit.relate::<FlowsIn>(text.layer, *bubble)?;
+                }
+                _ => {
+                    edit.relate::<FitsTo>(text.layer, text.entity)?;
+                }
+            }
             continue;
         }
         let bubble = containing_bubble(&regions.bubbles, text);
@@ -594,6 +685,9 @@ struct InferredTypography {
     stroke_color: Option<[u8; 3]>,
     stroke_width: Option<f32>,
     angle_degrees: f32,
+    /// `[min_u, min_v, max_u, max_v]` of the mask in the frame rotated by
+    /// `angle_degrees`, where u = x cos + y sin and v = y cos - x sin.
+    oriented_extent: [f64; 4],
     writing_mode: WritingMode,
 }
 
@@ -664,7 +758,7 @@ fn infer_typography(
                 || y < top + background_margin
                 || y + background_margin >= bottom
             {
-                background.push(color);
+                background.push(halftone_mean(image, x, y));
             }
         }
     }
@@ -678,19 +772,84 @@ fn infer_typography(
         median_color(&background)
     };
     let (angle_degrees, vertical) = mask_angle(&points, detection.bbox);
+    let oriented_extent = oriented_extent(&points, angle_degrees);
+    let ground = local_ground(image, &pixels, [left, top], local_width, local_height);
     let (color, stroke_color, stroke_width) =
-        infer_text_paint(&pixels, background, local_width, local_height);
+        infer_text_paint(&pixels, background, ground, local_width, local_height);
     Some(InferredTypography {
         color,
         stroke_color,
         stroke_width,
         angle_degrees,
+        oriented_extent,
         writing_mode: if vertical {
             WritingMode::Vertical
         } else {
             WritingMode::Horizontal
         },
     })
+}
+
+/// Median shade two to four pixels outside the text mask: the ground the
+/// glyphs sit on, past their anti-aliased edge.
+fn local_ground(
+    image: &RgbImage,
+    pixels: &[MaskPixel],
+    [left, top]: [u32; 2],
+    width: u32,
+    height: u32,
+) -> Option<[u8; 3]> {
+    let index = |x: u32, y: u32| y as usize * width as usize + x as usize;
+    let mut distance = vec![u8::MAX; width as usize * height as usize];
+    for pixel in pixels.iter().filter(|pixel| pixel.inside_mask) {
+        distance[index(pixel.x, pixel.y)] = 0;
+    }
+    for step in 1..=GROUND_RING_OUTER {
+        let previous = distance.clone();
+        for y in 0..height {
+            for x in 0..width {
+                if previous[index(x, y)] != u8::MAX {
+                    continue;
+                }
+                let near = (y.saturating_sub(1)..=(y + 1).min(height - 1)).any(|ny| {
+                    (x.saturating_sub(1)..=(x + 1).min(width - 1))
+                        .any(|nx| previous[index(nx, ny)] == step - 1)
+                });
+                if near {
+                    distance[index(x, y)] = step;
+                }
+            }
+        }
+    }
+    let ring = pixels
+        .iter()
+        .filter(|pixel| {
+            let d = distance[index(pixel.x, pixel.y)];
+            (GROUND_RING_INNER..=GROUND_RING_OUTER).contains(&d)
+        })
+        .map(|pixel| halftone_mean(image, pixel.x - 1 + left, pixel.y - 1 + top))
+        .collect::<Vec<_>>();
+    (!ring.is_empty()).then(|| median_color(&ring))
+}
+
+/// Fork divergence: a screentone is black dots on white paper, so a per-pixel
+/// median of the sample border reads as paper white and a white text outline on
+/// tone looks like background. Averaging a small neighbourhood first gives the
+/// tone's printed shade; flat paper and flat fills are unchanged.
+fn halftone_mean(image: &RgbImage, x: u32, y: u32) -> [u8; 3] {
+    let radius = HALFTONE_SAMPLE_RADIUS;
+    let mut sum = [0u32; 3];
+    let mut count = 0u32;
+    for sample_y in y.saturating_sub(radius)..=(y + radius).min(image.height() - 1) {
+        for sample_x in x.saturating_sub(radius)..=(x + radius).min(image.width() - 1) {
+            let color = image.get_pixel(sample_x, sample_y).0;
+            for channel in 0..3 {
+                sum[channel] += u32::from(color[channel]);
+            }
+            count += 1;
+        }
+    }
+    sum.map(|value| (value / count) as u8)
 }
 
 fn mask_window([left, top, right, bottom]: [f32; 4], width: u32, height: u32) -> Option<[u32; 4]> {
@@ -816,11 +975,23 @@ fn histogram_median(histogram: &[u32; 256], count: usize) -> u8 {
 fn infer_text_paint(
     pixels: &[MaskPixel],
     background_seed: [u8; 3],
+    ground: Option<[u8; 3]>,
     width: u32,
     height: u32,
 ) -> ([u8; 3], Option<[u8; 3]>, Option<f32>) {
     let clusters = color_clusters(pixels, background_seed);
-    if let Some(outline) = infer_outline(&clusters, background_seed, width, height) {
+    let (mut outline, enclosed_glyphs) = infer_outline(&clusters, background_seed, width, height);
+    // Fork divergence: a sound effect at a panel edge has gutter paper on its
+    // sample border, so a light outline on a dark panel reads as background.
+    // The ground right around the glyphs is then the panel; search again
+    // against it.
+    if outline.is_none()
+        && let Some(ground) = ground
+        && color_distance_squared(ground, background_seed) >= GLYPH_GROUND_MIN_DISTANCE_SQUARED
+    {
+        outline = infer_outline(&clusters, ground, width, height).0;
+    }
+    if let Some(outline) = outline {
         return (
             outline.fill_color,
             Some(outline.stroke_color),
@@ -842,6 +1013,24 @@ fn infer_text_paint(
         );
     }
 
+    // A glyph that the outline search found enclosed by its ground is read
+    // against the ground right around the text rather than the sample border,
+    // which for a dark balloon is its light border or the art outside it.
+    if let Some(ground) = ground
+        && let Some((glyph, _)) = enclosed_glyphs
+            .iter()
+            .copied()
+            .filter(|(glyph, _)| {
+                let luminance = color_luminance(*glyph);
+                (luminance <= COLOR_SNAP_DARK_LUMINANCE || luminance >= COLOR_SNAP_LIGHT_LUMINANCE)
+                    && color_distance_squared(*glyph, ground) >= GLYPH_GROUND_MIN_DISTANCE_SQUARED
+            })
+            .max_by_key(|(glyph, enclosed)| {
+                u64::from(color_distance_squared(*glyph, ground)) * *enclosed as u64
+            })
+    {
+        return (normalize_text_color(glyph), None, None);
+    }
     let background_index = nonempty
         .iter()
         .copied()
@@ -871,21 +1060,29 @@ fn infer_outline(
     background: [u8; 3],
     width: u32,
     height: u32,
-) -> Option<OutlinePaint> {
+) -> (Option<OutlinePaint>, Vec<([u8; 3], usize)>) {
     let mut assignments = vec![usize::MAX; width as usize * height as usize];
+    let mut colors = vec![[0_u8; 3]; width as usize * height as usize];
     for (index, cluster) in clusters.iter().enumerate() {
         for pixel in &cluster.pixels {
-            assignments[pixel.y as usize * width as usize + pixel.x as usize] = index;
+            let position = pixel.y as usize * width as usize + pixel.x as usize;
+            assignments[position] = index;
+            colors[position] = pixel.color;
         }
     }
 
-    let background_index = clusters
+    let Some(background_index) = clusters
         .iter()
         .enumerate()
         .filter(|(_, cluster)| !cluster.pixels.is_empty())
         .min_by_key(|(_, cluster)| color_distance_squared(cluster.color, background))
-        .map(|(index, _)| index)?;
+        .map(|(index, _)| index)
+    else {
+        return (None, Vec::new());
+    };
     let mut best = None;
+    let mut enclosed_by: [Option<Vec<bool>>; COLOR_CLUSTER_COUNT] = Default::default();
+    let mut enclosed_glyphs = Vec::new();
     for (stroke_index, stroke_cluster) in clusters.iter().enumerate() {
         if stroke_cluster.pixels.len() < 8 || stroke_index == background_index {
             continue;
@@ -918,6 +1115,49 @@ fn infer_outline(
 
             let fill_color = median_pixel_color(&enclosed_fill);
             let stroke_color = median_pixel_color(&stroke_pixels);
+            // Fork divergence: dark glyphs on paper enclose their paper-coloured
+            // counters, and light glyphs in a dark balloon with a light border sit
+            // inside a band of balloon colour. Either looks like a dark outline around
+            // a light fill, but such an outline is not surrounded by something much
+            // closer to its fill than to itself. Dark text outlined in light on a
+            // dark ground keeps its outline.
+            if color_luminance(fill_color) > color_luminance(stroke_color)
+                && band_exterior_mean(
+                    &colors,
+                    &assignments,
+                    stroke_index,
+                    &stroke_pixels,
+                    &outside,
+                    width,
+                    height,
+                )
+                .is_some_and(|exterior| {
+                    color_distance_squared(exterior, fill_color) * 9
+                        < color_distance_squared(exterior, stroke_color)
+                })
+            {
+                continue;
+            }
+            // Fork divergence: light glyphs in a dark balloon enclose dark counters,
+            // and the balloon itself sits in a light border band, so either reading
+            // looks like an outline. A real outline is never mostly enclosed by its
+            // fill; a glyph read as the "outline" of its own ground is. Such a glyph
+            // is kept for plain-text inference.
+            let ground = enclosed_by[fill_index].get_or_insert_with(|| {
+                reachable_without_cluster(&assignments, fill_index, width, height)
+            });
+            let (in_mask, enclosed) = stroke_cluster
+                .pixels
+                .iter()
+                .filter(|pixel| pixel.inside_mask)
+                .fold((0_usize, 0_usize), |(total, enclosed), pixel| {
+                    let position = pixel.y as usize * width as usize + pixel.x as usize;
+                    (total + 1, enclosed + usize::from(!ground[position]))
+                });
+            if enclosed * 3 > in_mask {
+                enclosed_glyphs.push((stroke_color, enclosed));
+                continue;
+            }
             let contrast = color_distance_squared(fill_color, stroke_color);
             if contrast < COLOR_CLUSTER_MIN_DISTANCE_SQUARED
                 || color_distance_squared(fill_color, background)
@@ -927,6 +1167,17 @@ fn infer_outline(
                 || color_lies_between(stroke_color, fill_color, background)
                 || color_lies_between(fill_color, stroke_color, background)
             {
+                continue;
+            }
+            // A colour between the fill and another ink is anti-aliasing at
+            // their edge, not a drawn outline (white glyphs on a dark balloon).
+            if clusters.iter().enumerate().any(|(index, cluster)| {
+                index != fill_index
+                    && index != stroke_index
+                    && !cluster.pixels.is_empty()
+                    && (color_lies_between(stroke_color, fill_color, cluster.color)
+                        || color_lies_between(fill_color, stroke_color, cluster.color))
+            }) {
                 continue;
             }
             let normalized_fill = normalize_text_color(fill_color);
@@ -956,7 +1207,7 @@ fn infer_outline(
             }
         }
     }
-    best
+    (best, enclosed_glyphs)
 }
 
 fn reachable_without_cluster(
@@ -1070,6 +1321,60 @@ fn push_reachable(
         reachable[index] = true;
         queue.push_back((x, y));
     }
+}
+
+/// Mean colour of the non-enclosed pixels two to three pixels out from a band,
+/// past its anti-aliased edge. A mean rather than a median keeps a screentone at
+/// its printed shade instead of its paper.
+fn band_exterior_mean(
+    colors: &[[u8; 3]],
+    assignments: &[usize],
+    band_cluster: usize,
+    band: &[MaskPixel],
+    outside: &[bool],
+    width: u32,
+    height: u32,
+) -> Option<[u8; 3]> {
+    let mut seen = vec![false; assignments.len()];
+    let mut ring = band
+        .iter()
+        .map(|pixel| pixel.y as usize * width as usize + pixel.x as usize)
+        .collect::<Vec<_>>();
+    for &index in &ring {
+        seen[index] = true;
+    }
+    let mut sum = [0_u64; 3];
+    let mut count = 0_u64;
+    for step in 0..3 {
+        let mut next = Vec::new();
+        for index in ring {
+            let (x, y) = (
+                (index % width as usize) as u32,
+                (index / width as usize) as u32,
+            );
+            for next_y in y.saturating_sub(1)..=(y + 1).min(height - 1) {
+                for next_x in x.saturating_sub(1)..=(x + 1).min(width - 1) {
+                    let next_index = next_y as usize * width as usize + next_x as usize;
+                    if seen[next_index]
+                        || !outside[next_index]
+                        || assignments[next_index] == band_cluster
+                    {
+                        continue;
+                    }
+                    seen[next_index] = true;
+                    next.push(next_index);
+                    if step > 0 {
+                        for (total, channel) in sum.iter_mut().zip(colors[next_index]) {
+                            *total += u64::from(channel);
+                        }
+                        count += 1;
+                    }
+                }
+            }
+        }
+        ring = next;
+    }
+    (count > 0).then(|| sum.map(|total| (total / count) as u8))
 }
 
 fn enclosing_cluster_pixels(
@@ -1406,26 +1711,48 @@ fn rectangle_geometry([left, top, right, bottom]: [f32; 4]) -> Geometry {
     )
 }
 
+/// The tightest rectangle at `angle_degrees` around the mask pixels. Rotating
+/// the axis-aligned box instead would grow it past the text by up to its full
+/// diagonal, past the page edge, and over neighboring dialogue.
+fn oriented_extent(points: &[MaskPoint], angle_degrees: f32) -> [f64; 4] {
+    let (sin, cos) = f64::from(angle_degrees).to_radians().sin_cos();
+    points.iter().fold(
+        [
+            f64::INFINITY,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::NEG_INFINITY,
+        ],
+        |[min_u, min_v, max_u, max_v], point| {
+            let u = point.x * cos + point.y * sin;
+            let v = point.y * cos - point.x * sin;
+            // Points are pixel centers; extend by half a pixel to cover them.
+            [
+                min_u.min(u - 0.5),
+                min_v.min(v - 0.5),
+                max_u.max(u + 0.5),
+                max_v.max(v + 0.5),
+            ]
+        },
+    )
+}
+
 fn rotated_rectangle_geometry(
-    [left, top, right, bottom]: [f32; 4],
+    [min_u, min_v, max_u, max_v]: [f64; 4],
     angle_degrees: f32,
 ) -> Geometry {
-    let width = f64::from((right - left).max(1.0));
-    let height = f64::from((bottom - top).max(1.0));
-    let center_x = f64::from(left + right) * 0.5;
-    let center_y = f64::from(top + bottom) * 0.5;
     let (sin, cos) = f64::from(angle_degrees).to_radians().sin_cos();
     Geometry {
         origin: Origin::User,
         points: [
-            (-width * 0.5, -height * 0.5),
-            (width * 0.5, -height * 0.5),
-            (width * 0.5, height * 0.5),
-            (-width * 0.5, height * 0.5),
+            (min_u, min_v),
+            (max_u, min_v),
+            (max_u, max_v),
+            (min_u, max_v),
         ]
-        .map(|(x, y)| Point {
-            x: center_x + x * cos - y * sin,
-            y: center_y + x * sin + y * cos,
+        .map(|(u, v)| Point {
+            x: u * cos - v * sin,
+            y: u * sin + v * cos,
         })
         .into(),
     }
@@ -1578,42 +1905,73 @@ fn matches_mask_label(detection: &KoharuLayoutDetection, label: &str) -> bool {
     }
 }
 
+/// Closes the text masks so cleanup covers anti-aliasing and stray strokes.
+/// The closing halo of text that sits inside a bubble is clipped to that
+/// bubble's mask: a halo crossing the rim would hand the outline to the
+/// inpainter, which repaints it with the fill on either side. The text's own
+/// pixels are kept wherever they lie, so lettering that crosses the rim is
+/// still cleaned.
 fn closed_mask_for(
     detections: &[KoharuLayoutDetection],
     label: &str,
     size: ImageSize,
     radius: u8,
 ) -> GrayImage {
-    let masks = detections
+    let bubbles = detections
+        .iter()
+        .filter(|detection| detection.label == "bubble" && valid_mask(&detection.mask))
+        .collect::<Vec<_>>();
+    let texts = detections
         .iter()
         .filter(|detection| matches_mask_label(detection, label))
-        .map(|detection| &detection.mask)
-        .filter(|mask| valid_mask(mask) && mask.width > 0 && mask.height > 0)
+        .filter(|detection| {
+            let mask = &detection.mask;
+            valid_mask(mask) && mask.width > 0 && mask.height > 0
+        })
+        .map(|detection| {
+            let bubble = bubbles
+                .iter()
+                .filter(|bubble| {
+                    mask_containment(&bubble.mask, &detection.mask, detection.bbox)
+                        >= DIALOGUE_MASK_CONTAINMENT_THRESHOLD
+                })
+                .min_by_key(|bubble| bubble.area)
+                .map(|bubble| &bubble.mask);
+            (&detection.mask, bubble)
+        })
         .collect::<Vec<_>>();
     let mut output = GrayImage::new(size.width, size.height);
-    if masks.is_empty() {
+    if texts.is_empty() {
         return output;
     }
 
     // Two dilations can make instances interact before the final erosion.
     // Conservatively group their expanded bounds, then retain a third-radius
     // halo so the local erosion observes the same zero/page-edge neighborhood
-    // as a full-page operation.
+    // as a full-page operation. Text clipped to different bubbles never
+    // shares a closing, so each halo stays inside its own bubble.
     let interaction_radius = u32::from(radius) * 2;
-    let mut parents = (0..masks.len()).collect::<Vec<_>>();
-    for left in 0..masks.len() {
-        for right in left + 1..masks.len() {
-            if rectangles_touch(
-                expand_mask_bounds(masks[left], interaction_radius, size),
-                expand_mask_bounds(masks[right], interaction_radius, size),
-            ) {
+    let mut parents = (0..texts.len()).collect::<Vec<_>>();
+    for left in 0..texts.len() {
+        for right in left + 1..texts.len() {
+            let same_bubble = match (texts[left].1, texts[right].1) {
+                (Some(left), Some(right)) => std::ptr::eq(left, right),
+                (None, None) => true,
+                _ => false,
+            };
+            if same_bubble
+                && rectangles_touch(
+                    expand_mask_bounds(texts[left].0, interaction_radius, size),
+                    expand_mask_bounds(texts[right].0, interaction_radius, size),
+                )
+            {
                 union(&mut parents, left, right);
             }
         }
     }
 
     let mut groups = BTreeMap::<usize, Vec<usize>>::new();
-    for index in 0..masks.len() {
+    for index in 0..texts.len() {
         let root = find(&mut parents, index);
         groups.entry(root).or_default().push(index);
     }
@@ -1622,20 +1980,27 @@ fn closed_mask_for(
         .collect::<Vec<_>>()
         .into_par_iter()
         .filter_map(|group| {
-            let mut bounds = mask_bounds(masks[group[0]], size);
+            let mut bounds = mask_bounds(texts[group[0]].0, size);
             for &index in &group[1..] {
-                bounds = union_bounds(bounds, mask_bounds(masks[index], size));
+                bounds = union_bounds(bounds, mask_bounds(texts[index].0, size));
             }
             bounds = expand_bounds(bounds, u32::from(radius) * 3, size);
             let [left, top, right, bottom] = bounds;
             if left >= right || top >= bottom {
                 return None;
             }
-            let mut local = GrayImage::new(right - left, bottom - top);
+            let mut raw = GrayImage::new(right - left, bottom - top);
             for &index in &group {
-                stamp_mask(&mut local, masks[index], left, top);
+                stamp_mask(&mut raw, texts[index].0, left, top);
             }
-            let local = close(&dilate(&local, Norm::L2, radius), Norm::L2, radius);
+            let mut local = close(&dilate(&raw, Norm::L2, radius), Norm::L2, radius);
+            if let Some(bubble) = texts[group[0]].1 {
+                for (x, y, pixel) in local.enumerate_pixels_mut() {
+                    if raw.get_pixel(x, y).0[0] == 0 && !bubble.contains(left + x, top + y) {
+                        *pixel = Luma([0]);
+                    }
+                }
+            }
             Some((left, top, local))
         })
         .collect::<Vec<_>>();
@@ -1647,6 +2012,211 @@ fn closed_mask_for(
         }
     }
     output
+}
+
+/// Balloons with a dark fill and light lettering that the layout model did
+/// not report. The dark pixels in the middle of a text box are grown by flood
+/// fill over dark pixels; the fill must close inside a window around the text,
+/// or it is page background rather than a balloon. Seeds come from the middle
+/// of the box because a narrow balloon's rim crosses the box's own edge, and a
+/// seed beyond the rim would leak into the page. Light balloons are left to
+/// the model, since a light fill cannot be told from the page's own paper.
+fn dark_balloons(
+    image: &RgbImage,
+    detections: &[KoharuLayoutDetection],
+) -> Vec<KoharuLayoutDetection> {
+    let bubbles = detections
+        .iter()
+        .filter(|detection| detection.label == "bubble")
+        .collect::<Vec<_>>();
+    let mut found = Vec::<KoharuLayoutDetection>::new();
+    for text in detections
+        .iter()
+        .filter(|detection| matches!(detection.label.as_str(), "text" | "onomatopoeia"))
+    {
+        let inside = |bubble: &KoharuLayoutDetection| {
+            mask_containment(&bubble.mask, &text.mask, text.bbox)
+                >= DIALOGUE_MASK_CONTAINMENT_THRESHOLD
+        };
+        if bubbles.iter().any(|bubble| inside(bubble)) || found.iter().any(inside) {
+            continue;
+        }
+        if let Some(balloon) = dark_balloon(image, text.bbox) {
+            found.push(balloon);
+        }
+    }
+    found
+}
+
+fn dark_balloon(image: &RgbImage, bbox: [f32; 4]) -> Option<KoharuLayoutDetection> {
+    let (width, height) = image.dimensions();
+    let [left, top, right, bottom] = mask_window(bbox, width, height)?;
+    let side = (right - left).max(bottom - top);
+    let reach = side + side / 2;
+    let window = [
+        left.saturating_sub(reach),
+        top.saturating_sub(reach),
+        right.saturating_add(reach).min(width),
+        bottom.saturating_add(reach).min(height),
+    ];
+    let [window_left, window_top, window_right, window_bottom] = window;
+    let local_width = window_right - window_left;
+    let local_height = window_bottom - window_top;
+    let dark = |x: u32, y: u32| {
+        let [red, green, blue] = image.get_pixel(x, y).0;
+        let luminance =
+            (u32::from(red) * 299 + u32::from(green) * 587 + u32::from(blue) * 114) / 1000;
+        luminance < u32::from(DARK_BALLOON_LUMINANCE)
+    };
+
+    let core_left = left + (right - left) / 4;
+    let core_right = right - (right - left) / 4;
+    let core_top = top + (bottom - top) / 4;
+    let core_bottom = bottom - (bottom - top) / 4;
+    let mut seeds = Vec::new();
+    let mut core_pixels = 0_u32;
+    for y in core_top..core_bottom {
+        for x in core_left..core_right {
+            core_pixels += 1;
+            if dark(x, y) {
+                seeds.push((x, y));
+            }
+        }
+    }
+    if core_pixels == 0 {
+        return None;
+    }
+    // Light lettering on a dark fill leaves the middle of the box mostly
+    // dark. The share stands in for a model confidence.
+    let score = seeds.len() as f32 / core_pixels as f32;
+    if score < DARK_BALLOON_CORE_FRACTION {
+        return None;
+    }
+
+    let index = |x: u32, y: u32| ((y - window_top) * local_width + (x - window_left)) as usize;
+    let mut filled = vec![0_u8; (local_width * local_height) as usize];
+    let mut stack = seeds;
+    for &(x, y) in &stack {
+        filled[index(x, y)] = 1;
+    }
+    while let Some((x, y)) = stack.pop() {
+        // Reaching the window edge means the dark area keeps going: it is a
+        // dark panel or background, not a closed balloon.
+        if (x == window_left && x > 0)
+            || (y == window_top && y > 0)
+            || (x + 1 == window_right && window_right < width)
+            || (y + 1 == window_bottom && window_bottom < height)
+            || x == 0
+            || y == 0
+            || x + 1 == width
+            || y + 1 == height
+        {
+            return None;
+        }
+        for (next_x, next_y) in [(x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)] {
+            let slot = index(next_x, next_y);
+            if filled[slot] == 0 && dark(next_x, next_y) {
+                filled[slot] = 1;
+                stack.push((next_x, next_y));
+            }
+        }
+    }
+
+    let (mut min_x, mut min_y, mut max_x, mut max_y) = (u32::MAX, u32::MAX, 0, 0);
+    for local_y in 0..local_height {
+        for local_x in 0..local_width {
+            if filled[(local_y * local_width + local_x) as usize] != 0 {
+                min_x = min_x.min(local_x);
+                min_y = min_y.min(local_y);
+                max_x = max_x.max(local_x);
+                max_y = max_y.max(local_y);
+            }
+        }
+    }
+    let mask_width = max_x - min_x + 1;
+    let mask_height = max_y - min_y + 1;
+    let x = window_left + min_x;
+    let y = window_top + min_y;
+    // The balloon must span the text; a dark blob beside the lettering does
+    // not.
+    let span_width = right.min(x + mask_width).saturating_sub(left.max(x));
+    let span_height = bottom.min(y + mask_height).saturating_sub(top.max(y));
+    if ((span_width * span_height) as f32)
+        < ((right - left) * (bottom - top)) as f32 * DARK_BALLOON_TEXT_SPAN
+    {
+        return None;
+    }
+
+    // The lettering is a hole in the fill: everything the mask's border cannot
+    // reach without crossing the fill belongs to the balloon.
+    let mut pixels = (min_y..=max_y)
+        .flat_map(|local_y| {
+            let filled = &filled;
+            (min_x..=max_x).map(move |local_x| filled[(local_y * local_width + local_x) as usize])
+        })
+        .collect::<Vec<_>>();
+    let mut outside = vec![false; pixels.len()];
+    let mut stack = Vec::new();
+    for mask_y in 0..mask_height {
+        for mask_x in 0..mask_width {
+            let border =
+                mask_x == 0 || mask_y == 0 || mask_x + 1 == mask_width || mask_y + 1 == mask_height;
+            let slot = (mask_y * mask_width + mask_x) as usize;
+            if border && pixels[slot] == 0 {
+                outside[slot] = true;
+                stack.push((mask_x, mask_y));
+            }
+        }
+    }
+    while let Some((mask_x, mask_y)) = stack.pop() {
+        let neighbors = [
+            (mask_x.wrapping_sub(1), mask_y),
+            (mask_x + 1, mask_y),
+            (mask_x, mask_y.wrapping_sub(1)),
+            (mask_x, mask_y + 1),
+        ];
+        for (next_x, next_y) in neighbors {
+            if next_x >= mask_width || next_y >= mask_height {
+                continue;
+            }
+            let slot = (next_y * mask_width + next_x) as usize;
+            if pixels[slot] == 0 && !outside[slot] {
+                outside[slot] = true;
+                stack.push((next_x, next_y));
+            }
+        }
+    }
+    let mut lettering = 0_u32;
+    for (pixel, outside) in pixels.iter_mut().zip(outside) {
+        if !outside && *pixel == 0 {
+            *pixel = 1;
+            lettering += 1;
+        }
+    }
+    let area = pixels.iter().map(|&pixel| u32::from(pixel)).sum::<u32>();
+    // A solid black mark, such as an anger symbol, has no light lettering.
+    if (lettering as f32) < area as f32 * DARK_BALLOON_MIN_LETTERING {
+        return None;
+    }
+    Some(KoharuLayoutDetection {
+        label_id: 0,
+        label: "bubble".to_owned(),
+        score,
+        bbox: [
+            x as f32,
+            y as f32,
+            (x + mask_width) as f32,
+            (y + mask_height) as f32,
+        ],
+        area,
+        mask: KoharuLayoutMask {
+            x,
+            y,
+            width: mask_width,
+            height: mask_height,
+            pixels,
+        },
+    })
 }
 
 fn valid_mask(mask: &KoharuLayoutMask) -> bool {
@@ -1782,6 +2352,92 @@ fn non_maximum_suppression(detections: &mut Vec<KoharuLayoutDetection>, threshol
         }
     }
     *detections = kept;
+}
+
+/// The detector can return boxes that extend past the page. Clip them so that
+/// region geometry, OCR crops and inpainting stay on the image, and drop boxes
+/// that lie entirely outside it.
+fn clamp_to_image(detections: &mut Vec<KoharuLayoutDetection>, size: ImageSize) {
+    let (width, height) = (size.width as f32, size.height as f32);
+    for detection in detections.iter_mut() {
+        let [left, top, right, bottom] = detection.bbox;
+        detection.bbox = [
+            left.clamp(0.0, width),
+            top.clamp(0.0, height),
+            right.clamp(0.0, width),
+            bottom.clamp(0.0, height),
+        ];
+    }
+    detections.retain(|detection| area(detection.bbox) > 0.0);
+}
+
+/// On real pages the detector returns low-confidence onomatopoeia boxes that
+/// span several lines of dialogue, several smaller effects, or a large part of
+/// the page. Below `SPURIOUS_ONOMATOPOEIA_MAX_SCORE`, a box is dropped when it
+/// encloses at least half of two text or onomatopoeia boxes scored at least as
+/// high as itself, or when it covers more than
+/// `SPURIOUS_ONOMATOPOEIA_PAGE_FRACTION` of the page and encloses one. Box
+/// containment is used, not masks: such a box's mask covers its own strokes,
+/// not the dialogue it spans. A confident effect, or a large one that covers
+/// no other text, such as a title, is kept.
+fn remove_spurious_onomatopoeia(detections: &mut Vec<KoharuLayoutDetection>, size: ImageSize) {
+    let page_area = size.width as f32 * size.height as f32;
+    let spurious = detections
+        .iter()
+        .enumerate()
+        .map(|(index, candidate)| {
+            if candidate.label != "onomatopoeia"
+                || candidate.score >= SPURIOUS_ONOMATOPOEIA_MAX_SCORE
+            {
+                return false;
+            }
+            let enclosed = detections
+                .iter()
+                .enumerate()
+                .filter(|&(other_index, other)| {
+                    let other_area = area(other.bbox);
+                    other_index != index
+                        && is_text_detection(other)
+                        && other.score >= candidate.score
+                        && other_area > 0.0
+                        && intersection_area(candidate.bbox, other.bbox) / other_area
+                            >= SPURIOUS_ONOMATOPOEIA_CONTAINMENT
+                })
+                .count();
+            enclosed >= 2
+                || enclosed >= 1
+                    && area(candidate.bbox) > page_area * SPURIOUS_ONOMATOPOEIA_PAGE_FRACTION
+        })
+        .collect::<Vec<_>>();
+    let mut index = 0usize;
+    detections.retain(|_| {
+        let keep = !spurious[index];
+        index += 1;
+        keep
+    });
+}
+
+/// Scanned chapters print the page number as a narrow column of digits
+/// against the left or right page edge, in the top or bottom margin, and the
+/// detector reports it as text. It is not part of the work, so a text box that
+/// touches a side edge within `PAGE_NUMBER_EDGE_FRACTION` of the page width,
+/// is narrower than `PAGE_NUMBER_MAX_WIDTH_FRACTION` of it, is shorter than
+/// `PAGE_NUMBER_MAX_HEIGHT_FRACTION` of the page height, and sits in the outer
+/// `PAGE_NUMBER_MARGIN_FRACTION` of the height is dropped.
+fn remove_page_numbers(detections: &mut Vec<KoharuLayoutDetection>, size: ImageSize) {
+    let (width, height) = (size.width as f32, size.height as f32);
+    detections.retain(|detection| {
+        let [left, top, right, bottom] = detection.bbox;
+        let center_y = (top + bottom) / 2.0;
+        let page_number = detection.label == "text"
+            && (left <= width * PAGE_NUMBER_EDGE_FRACTION
+                || right >= width * (1.0 - PAGE_NUMBER_EDGE_FRACTION))
+            && right - left < width * PAGE_NUMBER_MAX_WIDTH_FRACTION
+            && bottom - top < height * PAGE_NUMBER_MAX_HEIGHT_FRACTION
+            && (center_y < height * PAGE_NUMBER_MARGIN_FRACTION
+                || center_y > height * (1.0 - PAGE_NUMBER_MARGIN_FRACTION));
+        !page_number
+    });
 }
 
 fn remove_nested_text_detections(detections: &mut Vec<KoharuLayoutDetection>) {
@@ -2331,26 +2987,29 @@ fn area(bounds: [f32; 4]) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use image::{Rgb, RgbImage};
+    use image::{DynamicImage, Rgb, RgbImage};
     use imageproc::{
         distance_transform::Norm,
         morphology::{close, dilate},
     };
-    use koharu_ml::koharu_layout_rfdetr_seg_2xl::{KoharuLayoutDetection, KoharuLayoutMask};
+    use koharu_ml::koharu_layout_rfdetr_seg_2xl::{
+        KoharuLayoutDetection, KoharuLayoutMask, KoharuLayoutThresholds,
+    };
     use koharu_scene::{
-        At, BubbleRegion, FitsTo, FlowsIn, Geometry, Inside, Origin, PageDraft, Region, RegionSpec,
-        Session, TextLayout, TextLayoutKind, TextRegion, TextRole, Typography, WritingMode,
+        At, BubbleRegion, FitsTo, FlowsIn, Geometry, Inside, Origin, PageDraft, Session,
+        TextLayout, TextLayoutKind, TextRegion, TextRole, Typography, WritingMode,
     };
     use koharu_translator::Language;
 
     use super::{
         DIALOGUE_MASK_CONTAINMENT_THRESHOLD, DetectedRegion, DetectedText, DetectionModel,
-        FREE_TEXT_ROLE, ImageSize, KoharuLayoutRFDetrSeg2XLConfig, LayoutItem, LayoutKind,
-        MaskPixel, ONOMATOPOEIA_ROLE, PageRegions, Processor, RecognizedFrom, RegionOutput,
-        StageInput, StageProcessor, best_container, closed_mask_for, color_palette, generation,
-        infer_typography, layout_order, link_dialogue_regions, mask_containment, mask_for,
-        mask_geometry, non_maximum_suppression, normalize_text_color,
-        remove_nested_text_detections, write_region,
+        FREE_TEXT_ROLE, ImageSize, InferredTypography, KoharuLayoutRFDetrSeg2XLConfig, LayoutItem,
+        LayoutKind, MaskPixel, ONOMATOPOEIA_ROLE, PageRegions, Processor, RecognizedFrom,
+        RegionOutput, StageInput, StageProcessor, best_container, clamp_to_image, closed_mask_for,
+        color_palette, dark_balloons, generation, infer_typography, keep_confident_or_inverted,
+        layout_order, link_dialogue_regions, mask_containment, mask_for, mask_geometry,
+        non_maximum_suppression, normalize_text_color, remove_nested_text_detections,
+        remove_page_numbers, remove_spurious_onomatopoeia, write_region,
     };
 
     #[test]
@@ -2650,6 +3309,20 @@ mod tests {
                             content,
                             layer,
                             role: FREE_TEXT_ROLE,
+                            typography: Typography {
+                                origin: Origin::Generated(generation.clone()),
+                                preferred_font: None,
+                                font_weight: None,
+                                font_style: None,
+                                size: None,
+                                auto_fit: true,
+                                color: None,
+                                stroke_color: None,
+                                stroke_width: None,
+                                alignment: None,
+                                writing_mode: None,
+                                extensions: Default::default(),
+                            },
                         }],
                     },
                     &generation,
@@ -2684,26 +3357,35 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn onomatopoeia_is_ocr_text_but_not_balloon_dialogue() {
+    async fn a_measured_outline_is_kept_only_for_text_outside_a_balloon() {
         let mut session = Session::memory().await.unwrap();
-        let detected = |label: &str| KoharuLayoutDetection {
+        let detected = |label: &str, x: u32| KoharuLayoutDetection {
             label_id: 0,
             label: label.to_owned(),
             score: 1.0,
-            bbox: [10.0, 10.0, 20.0, 20.0],
+            bbox: [x as f32, 0.0, x as f32 + 1.0, 1.0],
             area: 1,
             mask: KoharuLayoutMask {
-                x: 0,
+                x,
                 y: 0,
                 width: 1,
                 height: 1,
                 pixels: vec![u8::MAX],
             },
         };
-        let bubble_detection = detected("bubble");
-        let sound_effect_detection = detected("onomatopoeia");
+        let outlined = InferredTypography {
+            color: [0, 0, 0],
+            stroke_color: Some([255, 255, 255]),
+            stroke_width: Some(4.0),
+            angle_degrees: 0.0,
+            oriented_extent: [0.0, 0.0, 1.0, 1.0],
+            writing_mode: WritingMode::Horizontal,
+        };
+        let bubble_detection = detected("bubble", 0);
+        let inside = [detected("text", 0), detected("onomatopoeia", 0)];
+        let outside = detected("onomatopoeia", 50);
         let generation = generation(super::PRODUCER, super::OUTPUT_MODEL_ID).unwrap();
-        let mut ids = None;
+        let mut layers = Vec::new();
         let patch = session
             .snapshot()
             .patch(|edit| {
@@ -2713,17 +3395,21 @@ mod tests {
                 else {
                     panic!("expected a bubble region");
                 };
-                let RegionOutput::Text(text) =
-                    write_region(edit, page, &sound_effect_detection, None, &generation).unwrap()
-                else {
-                    panic!("expected an OCR text region");
-                };
-                ids = Some((text.entity, text.content, text.layer));
+                let mut texts = Vec::new();
+                for detection in inside.iter().chain([&outside]) {
+                    let RegionOutput::Text(text) =
+                        write_region(edit, page, detection, Some(outlined), &generation).unwrap()
+                    else {
+                        panic!("expected an OCR text region");
+                    };
+                    layers.push(text.layer);
+                    texts.push(text);
+                }
                 link_dialogue_regions(
                     edit,
                     &PageRegions {
                         bubbles: vec![bubble],
-                        texts: vec![text],
+                        texts,
                     },
                     &generation,
                 )
@@ -2732,30 +3418,104 @@ mod tests {
             })
             .unwrap();
         let snapshot = session.commit(patch).await.unwrap().snapshot;
-        let (region, content, layer) = ids.unwrap();
 
-        assert_eq!(
-            snapshot.component::<Region>(region).unwrap().unwrap().kind,
-            TextRegion::kind()
-        );
-        assert_eq!(
-            snapshot
-                .component::<TextRole>(content)
+        let outlines = layers
+            .iter()
+            .map(|layer| {
+                let typography = snapshot.component::<Typography>(*layer).unwrap().unwrap();
+                assert_eq!(typography.color, Some([0, 0, 0, u8::MAX]));
+                typography.stroke_width
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(outlines, [None, None, Some(4.0)]);
+    }
+
+    #[tokio::test]
+    async fn onomatopoeia_flows_in_a_balloon_only_when_it_is_the_balloons_only_text() {
+        for with_dialogue in [false, true] {
+            let mut session = Session::memory().await.unwrap();
+            let detected = |label: &str| KoharuLayoutDetection {
+                label_id: 0,
+                label: label.to_owned(),
+                score: 1.0,
+                bbox: [0.0, 0.0, 1.0, 1.0],
+                area: 1,
+                mask: KoharuLayoutMask {
+                    x: 0,
+                    y: 0,
+                    width: 1,
+                    height: 1,
+                    pixels: vec![u8::MAX],
+                },
+            };
+            let bubble_detection = detected("bubble");
+            let sound_effect_detection = detected("onomatopoeia");
+            let dialogue_detection = detected("text");
+            let generation = generation(super::PRODUCER, super::OUTPUT_MODEL_ID).unwrap();
+            let mut ids = None;
+            let patch = session
+                .snapshot()
+                .patch(|edit| {
+                    let page = edit.add_page(PageDraft::new("page", 100.0, 100.0), At::End)?;
+                    let RegionOutput::Bubble(bubble) =
+                        write_region(edit, page, &bubble_detection, None, &generation).unwrap()
+                    else {
+                        panic!("expected a bubble region");
+                    };
+                    let RegionOutput::Text(text) =
+                        write_region(edit, page, &sound_effect_detection, None, &generation)
+                            .unwrap()
+                    else {
+                        panic!("expected an OCR text region");
+                    };
+                    ids = Some((text.entity, text.content, text.layer, bubble.entity));
+                    let mut texts = vec![text];
+                    if with_dialogue {
+                        let RegionOutput::Text(dialogue) =
+                            write_region(edit, page, &dialogue_detection, None, &generation)
+                                .unwrap()
+                        else {
+                            panic!("expected an OCR text region");
+                        };
+                        texts.push(dialogue);
+                    }
+                    link_dialogue_regions(
+                        edit,
+                        &PageRegions {
+                            bubbles: vec![bubble],
+                            texts,
+                        },
+                        &generation,
+                    )
+                    .unwrap();
+                    Ok(())
+                })
+                .unwrap();
+            let snapshot = session.commit(patch).await.unwrap().snapshot;
+            let (region, content, layer, bubble) = ids.unwrap();
+
+            assert_eq!(
+                snapshot
+                    .component::<TextRole>(content)
+                    .unwrap()
+                    .unwrap()
+                    .role,
+                ONOMATOPOEIA_ROLE
+            );
+            let flows_in = snapshot
+                .relation_from::<FlowsIn>(layer)
                 .unwrap()
-                .unwrap()
-                .role,
-            ONOMATOPOEIA_ROLE
-        );
-        assert!(snapshot.relation_from::<FlowsIn>(layer).unwrap().is_none());
-        assert_eq!(
-            snapshot
+                .map(|relation| relation.value().target);
+            let fits_to = snapshot
                 .relation_from::<FitsTo>(layer)
                 .unwrap()
-                .unwrap()
-                .value()
-                .target,
-            region
-        );
+                .map(|relation| relation.value().target);
+            if with_dialogue {
+                assert_eq!((flows_in, fits_to), (None, Some(region)));
+            } else {
+                assert_eq!((flows_in, fits_to), (Some(bubble), None));
+            }
+        }
     }
 
     fn detection(label: &str, score: f32, bbox: [f32; 4]) -> KoharuLayoutDetection {
@@ -2996,36 +3756,24 @@ mod tests {
 
     #[tokio::test]
     async fn detected_typography_preserves_the_measured_outline() {
-        let mut session = Session::memory().await.unwrap();
-        let mut page = None;
-        let create = session
-            .snapshot()
-            .patch(|edit| {
-                page = Some(edit.add_page(PageDraft::new("page", 96.0, 96.0), At::End)?);
-                Ok(())
-            })
-            .unwrap();
-        let snapshot = session.commit(create).await.unwrap().snapshot;
-        let page = page.unwrap();
+        let session = Session::memory().await.unwrap();
         let (image, detection) = outlined_text(3, [0, 0, 0], [255, 255, 255]);
         let inferred = infer_typography(&image, &detection);
         let generation = generation(super::PRODUCER, super::OUTPUT_MODEL_ID).unwrap();
-        let mut layer = None;
-        let patch = snapshot
+        let mut typography = None;
+        session
+            .snapshot()
             .patch(|edit| {
+                let page = edit.add_page(PageDraft::new("page", 96.0, 96.0), At::End)?;
                 let output = write_region(edit, page, &detection, inferred, &generation).unwrap();
                 let RegionOutput::Text(text) = output else {
                     panic!("expected a text region");
                 };
-                layer = Some(text.layer);
+                typography = Some(text.typography);
                 Ok(())
             })
             .unwrap();
-        let snapshot = session.commit(patch).await.unwrap().snapshot;
-        let typography = snapshot
-            .component::<Typography>(layer.unwrap())
-            .unwrap()
-            .unwrap();
+        let typography = typography.unwrap();
 
         assert_eq!(typography.color, Some([0, 0, 0, 255]));
         assert_eq!(typography.stroke_color, Some([255, 255, 255, 255]));
@@ -3090,6 +3838,103 @@ mod tests {
         non_maximum_suppression(&mut detections, 0.5);
 
         assert_eq!(detections.len(), 2);
+    }
+
+    #[test]
+    fn boxes_are_clipped_to_the_page_and_outside_boxes_dropped() {
+        let mut detections = vec![
+            detection("onomatopoeia", 0.4, [-40.0, -238.0, 1325.0, 816.0]),
+            detection("text", 0.9, [1300.0, 10.0, 1320.0, 40.0]),
+        ];
+
+        clamp_to_image(
+            &mut detections,
+            ImageSize {
+                width: 1280,
+                height: 1280,
+            },
+        );
+
+        assert_eq!(detections.len(), 1);
+        assert_eq!(detections[0].bbox, [0.0, 0.0, 1280.0, 816.0]);
+    }
+
+    #[test]
+    fn spurious_onomatopoeia_boxes_are_removed() {
+        // Raw boxes from real 1280-pixel-wide pages: a 0.25 effect over a line
+        // of dialogue and two better-scored effects, a 0.38 effect over 42% of
+        // a page and a line of dialogue, a 0.81 effect that overlaps one line,
+        // a 0.37 effect around two weaker fragments, and a 0.23 title over 25%
+        // of a short page that covers nothing else. The last three must stay.
+        let page = ImageSize {
+            width: 1280,
+            height: 1280,
+        };
+        let mut detections = vec![
+            detection("onomatopoeia", 0.25, [626.0, 380.0, 849.0, 608.0]),
+            detection("text", 0.9, [828.0, 366.0, 859.0, 426.0]),
+            detection("onomatopoeia", 0.48, [706.0, 416.0, 727.0, 460.0]),
+            detection("onomatopoeia", 0.33, [770.0, 490.0, 786.0, 541.0]),
+            detection("onomatopoeia", 0.38, [18.0, 12.0, 1267.0, 566.0]),
+            detection("text", 0.9, [100.0, 100.0, 140.0, 300.0]),
+            detection("onomatopoeia", 0.81, [433.0, 735.0, 712.0, 967.0]),
+            detection("text", 0.9, [624.0, 709.0, 659.0, 792.0]),
+            detection("onomatopoeia", 0.37, [1121.0, 831.0, 1154.0, 889.0]),
+            detection("onomatopoeia", 0.2, [1125.0, 835.0, 1150.0, 850.0]),
+            detection("onomatopoeia", 0.2, [1125.0, 860.0, 1150.0, 880.0]),
+        ];
+
+        remove_spurious_onomatopoeia(&mut detections, page);
+
+        let scores = detections
+            .iter()
+            .filter(|detection| detection.label == "onomatopoeia")
+            .map(|detection| detection.score)
+            .collect::<Vec<_>>();
+        assert_eq!(scores, [0.48, 0.33, 0.81, 0.37, 0.2, 0.2]);
+
+        let mut title = vec![detection(
+            "onomatopoeia",
+            0.23,
+            [203.0, 123.0, 1250.0, 300.0],
+        )];
+        remove_spurious_onomatopoeia(
+            &mut title,
+            ImageSize {
+                width: 1280,
+                height: 568,
+            },
+        );
+        assert_eq!(title.len(), 1);
+    }
+
+    #[test]
+    fn page_numbers_at_the_side_edge_are_removed() {
+        // Page numbers from a real 1280-pixel chapter (already clipped to the
+        // page), then a short line of text at the edge mid-page, a wider
+        // caption in the bottom margin, and an effect where a number would be.
+        let page = ImageSize {
+            width: 1280,
+            height: 1280,
+        };
+        let mut detections = vec![
+            detection("text", 0.45, [0.0, 1115.0, 10.0, 1147.0]),
+            detection("text", 0.61, [1268.0, 1114.0, 1280.0, 1146.0]),
+            detection("text", 0.25, [1269.0, 1115.0, 1280.0, 1146.0]),
+            detection("text", 0.9, [2.0, 600.0, 18.0, 640.0]),
+            detection("text", 0.9, [1180.0, 1110.0, 1278.0, 1150.0]),
+            detection("onomatopoeia", 0.4, [1268.0, 1114.0, 1280.0, 1146.0]),
+        ];
+
+        remove_page_numbers(&mut detections, page);
+
+        assert_eq!(
+            detections
+                .iter()
+                .map(|detection| detection.bbox[1])
+                .collect::<Vec<_>>(),
+            [600.0, 1110.0, 1114.0]
+        );
     }
 
     #[test]
@@ -3429,6 +4274,63 @@ mod tests {
     }
 
     #[test]
+    fn bubble_text_halo_stays_inside_the_bubble_but_keeps_its_own_pixels() {
+        let size = ImageSize {
+            width: 48,
+            height: 48,
+        };
+        let region = |label: &str, x, y, width, height, pixels: Vec<u8>| KoharuLayoutDetection {
+            label_id: 0,
+            label: label.to_owned(),
+            score: 1.0,
+            bbox: [x as f32, y as f32, (x + width) as f32, (y + height) as f32],
+            area: pixels.iter().filter(|value| **value != 0).count() as u32,
+            mask: KoharuLayoutMask {
+                x,
+                y,
+                width,
+                height,
+                pixels,
+            },
+        };
+        // Lettering against the right side of a 20x20 bubble; one stroke pixel
+        // in its last column lies on the rim beyond the bubble.
+        let mut pixels = vec![0; 5 * 5];
+        for row in 0..5 {
+            for column in 0..5 {
+                let inside = column < 4 && row < 4;
+                pixels[row * 5 + column] = if inside {
+                    u8::MAX
+                } else {
+                    u8::from(row == 4 && column == 4) * u8::MAX
+                };
+            }
+        }
+        let text = region("text", 26, 18, 5, 5, pixels);
+        let bubble = region("bubble", 10, 10, 20, 20, vec![u8::MAX; 20 * 20]);
+        let detections = vec![bubble.clone(), text.clone()];
+
+        let mask = closed_mask_for(&detections, "text", size, 3);
+
+        assert!(mask_containment(&bubble.mask, &text.mask, text.bbox) >= 0.9);
+        for (x, y, pixel) in mask.enumerate_pixels() {
+            if pixel.0[0] != 0 {
+                assert!(
+                    bubble.mask.contains(x, y) || text.mask.contains(x, y),
+                    "halo at ({x}, {y}) crosses the rim"
+                );
+            }
+            if text.mask.contains(x, y) {
+                assert_ne!(pixel.0[0], 0, "text pixel ({x}, {y}) is not cleaned");
+            }
+        }
+        assert_ne!(mask.get_pixel(23, 19).0[0], 0, "no halo inside the bubble");
+
+        let free = closed_mask_for(&[text.clone()], "text", size, 3);
+        assert_ne!(free.get_pixel(32, 19).0[0], 0, "free text lost its halo");
+    }
+
+    #[test]
     fn layout_order_follows_ltr_panels_then_bubbles_then_their_text() {
         let detections = vec![
             detection("text", 0.63, [20.0, 30.0, 70.0, 70.0]),
@@ -3629,6 +4531,398 @@ mod tests {
     }
 
     #[test]
+    fn antialiased_edges_of_light_text_are_not_an_outline() {
+        // White strokes on a dark balloon: a grey blend rings the dark core of
+        // the gap between strokes, but it is anti-aliasing, not an outline.
+        let width = 120;
+        let height = 120;
+        let [left, top, right, bottom] = [36, 30, 84, 90];
+        let mut image = RgbImage::from_pixel(width, height, Rgb([24, 32, 32]));
+        for y in 33..87 {
+            for x in 39..81 {
+                image.put_pixel(x, y, Rgb([170, 177, 177]));
+            }
+        }
+        for y in 34..86 {
+            for x in (40..60).chain(64..80) {
+                image.put_pixel(x, y, Rgb([250, 252, 252]));
+            }
+        }
+        for y in 36..84 {
+            for x in 61..63 {
+                image.put_pixel(x, y, Rgb([6, 12, 12]));
+            }
+        }
+        let mut pixels = vec![0; width as usize * height as usize];
+        for y in top..bottom {
+            for x in left..right {
+                pixels[y as usize * width as usize + x as usize] = u8::MAX;
+            }
+        }
+        let detection = KoharuLayoutDetection {
+            label_id: 0,
+            label: "text".to_owned(),
+            score: 1.0,
+            bbox: [left as f32, top as f32, right as f32, bottom as f32],
+            area: pixels.iter().filter(|value| **value != 0).count() as u32,
+            mask: KoharuLayoutMask {
+                x: 0,
+                y: 0,
+                width,
+                height,
+                pixels,
+            },
+        };
+
+        let inferred = infer_typography(&image, &detection).unwrap();
+
+        assert_eq!(inferred.color, [255, 255, 255]);
+        assert_eq!(inferred.stroke_color, None);
+    }
+
+    fn text_detection(bbox: [u32; 4]) -> KoharuLayoutDetection {
+        let [left, top, right, bottom] = bbox;
+        KoharuLayoutDetection {
+            label_id: 0,
+            label: "text".to_owned(),
+            score: 1.0,
+            bbox: [left as f32, top as f32, right as f32, bottom as f32],
+            area: (right - left) * (bottom - top),
+            mask: KoharuLayoutMask {
+                x: left,
+                y: top,
+                width: right - left,
+                height: bottom - top,
+                pixels: vec![1; ((right - left) * (bottom - top)) as usize],
+            },
+        }
+    }
+
+    #[test]
+    fn dark_balloon_with_light_text_becomes_a_bubble() {
+        // A black ellipse with a white rim on white paper, white text inside.
+        let mut image = RgbImage::from_pixel(200, 200, Rgb([255, 255, 255]));
+        for y in 0..200_u32 {
+            for x in 0..200_u32 {
+                let dx = (x as f32 - 100.0) / 60.0;
+                let dy = (y as f32 - 100.0) / 40.0;
+                if dx * dx + dy * dy <= 1.0 {
+                    image.put_pixel(x, y, Rgb([20, 20, 20]));
+                }
+            }
+        }
+        for x in (80..120).step_by(8) {
+            for y in 90..110 {
+                for stroke in x..x + 3 {
+                    image.put_pixel(stroke, y, Rgb([250, 250, 250]));
+                }
+            }
+        }
+        let balloons = dark_balloons(&image, &[text_detection([78, 88, 122, 112])]);
+        assert_eq!(balloons.len(), 1);
+        let [left, top, right, bottom] = balloons[0].bbox;
+        assert!((left - 40.0).abs() <= 2.0 && (right - 160.0).abs() <= 2.0);
+        assert!((top - 60.0).abs() <= 2.0 && (bottom - 140.0).abs() <= 2.0);
+        assert!(balloons[0].mask.contains(100, 70));
+        assert!(!balloons[0].mask.contains(45, 65));
+    }
+
+    #[test]
+    fn narrow_dark_balloon_whose_rim_crosses_the_text_box_becomes_a_bubble() {
+        // A narrow black balloon with a white rim on a dark page. The text box
+        // is wider than the balloon near its tips, so its corners lie on the
+        // page beyond the rim.
+        let mut image = RgbImage::from_pixel(200, 200, Rgb([40, 40, 40]));
+        for y in 0..200_u32 {
+            for x in 0..200_u32 {
+                let dx = (x as f32 - 100.0) / 20.0;
+                let dy = (y as f32 - 100.0) / 50.0;
+                let distance = dx * dx + dy * dy;
+                if distance <= 1.0 {
+                    image.put_pixel(x, y, Rgb([20, 20, 20]));
+                } else if distance <= 1.4 {
+                    image.put_pixel(x, y, Rgb([255, 255, 255]));
+                }
+            }
+        }
+        for y in (80..120).step_by(10) {
+            for x in 94..106 {
+                for stroke in y..y + 3 {
+                    image.put_pixel(x, stroke, Rgb([250, 250, 250]));
+                }
+            }
+        }
+        let balloons = dark_balloons(&image, &[text_detection([82, 62, 118, 138])]);
+        assert_eq!(balloons.len(), 1);
+        let [left, top, right, bottom] = balloons[0].bbox;
+        assert!((left - 80.0).abs() <= 2.0 && (right - 120.0).abs() <= 2.0);
+        assert!((top - 50.0).abs() <= 2.0 && (bottom - 150.0).abs() <= 2.0);
+        assert!(balloons[0].mask.contains(100, 100));
+        assert!(!balloons[0].mask.contains(83, 63));
+    }
+
+    #[test]
+    fn unsure_text_is_kept_only_as_light_lettering_in_a_dark_balloon() {
+        // The black ellipse with white lettering from the balloon test on the
+        // left, the same lettering in black on plain paper on the right.
+        let mut image = RgbImage::from_pixel(400, 200, Rgb([255, 255, 255]));
+        for y in 0..200_u32 {
+            for x in 0..200_u32 {
+                let dx = (x as f32 - 100.0) / 60.0;
+                let dy = (y as f32 - 100.0) / 40.0;
+                if dx * dx + dy * dy <= 1.0 {
+                    image.put_pixel(x, y, Rgb([20, 20, 20]));
+                }
+            }
+        }
+        for x in (80..120).step_by(8) {
+            for y in 90..110 {
+                for stroke in x..x + 3 {
+                    image.put_pixel(stroke, y, Rgb([250, 250, 250]));
+                    image.put_pixel(stroke + 200, y, Rgb([20, 20, 20]));
+                }
+            }
+        }
+        let thresholds = KoharuLayoutThresholds {
+            text: 0.25,
+            onomatopoeia: 0.2,
+            bubble: 0.5,
+            panel: 0.5,
+        };
+        let mut detections = vec![
+            detection("onomatopoeia", 0.12, [78.0, 88.0, 122.0, 112.0]),
+            detection("text", 0.12, [278.0, 88.0, 322.0, 112.0]),
+            detection("text", 0.3, [278.0, 88.0, 322.0, 112.0]),
+            detection("bubble", 0.6, [40.0, 60.0, 160.0, 140.0]),
+        ];
+        keep_confident_or_inverted(&mut detections, thresholds, &DynamicImage::ImageRgb8(image));
+        let kept = detections
+            .iter()
+            .map(|detection| (detection.label.as_str(), detection.score))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            kept,
+            [("onomatopoeia", 0.12), ("text", 0.3), ("bubble", 0.6)]
+        );
+    }
+
+    #[test]
+    fn dark_background_and_light_paper_are_not_balloons() {
+        let night = RgbImage::from_pixel(200, 200, Rgb([10, 10, 10]));
+        assert!(dark_balloons(&night, &[text_detection([80, 90, 120, 110])]).is_empty());
+        let mut paper = RgbImage::from_pixel(200, 200, Rgb([255, 255, 255]));
+        assert!(dark_balloons(&paper, &[text_detection([80, 90, 120, 110])]).is_empty());
+        // A solid black mark with no light lettering inside.
+        for y in 85..115 {
+            for x in 75..125 {
+                paper.put_pixel(x, y, Rgb([10, 10, 10]));
+            }
+        }
+        assert!(dark_balloons(&paper, &[text_detection([80, 90, 120, 110])]).is_empty());
+    }
+
+    #[test]
+    fn dark_text_with_white_outline_on_halftone_keeps_the_outline() {
+        // Segmentation boxes the glyphs, so the white outline extends past the
+        // box into the screentone, as on real pages.
+        let width = 120;
+        let height = 120;
+        let [left, top, right, bottom] = [30, 30, 90, 90];
+        let outline = 6;
+        let mut image = RgbImage::from_fn(width, height, |x, y| {
+            if x % 4 < 2 && y % 4 < 2 {
+                Rgb([0, 0, 0])
+            } else {
+                Rgb([150, 150, 150])
+            }
+        });
+        for y in top - outline..bottom + outline {
+            for x in left - outline..right + outline {
+                image.put_pixel(x, y, Rgb([255, 255, 255]));
+            }
+        }
+        for bar in [left, left + 18, left + 36, left + 54] {
+            for y in top..bottom {
+                for x in bar..bar + 6 {
+                    image.put_pixel(x, y, Rgb([0, 0, 0]));
+                }
+            }
+        }
+        let mut pixels = vec![0; width as usize * height as usize];
+        for y in top..bottom {
+            for x in left..right {
+                pixels[y as usize * width as usize + x as usize] = u8::MAX;
+            }
+        }
+        let detection = KoharuLayoutDetection {
+            label_id: 0,
+            label: "text".to_owned(),
+            score: 1.0,
+            bbox: [left as f32, top as f32, right as f32, bottom as f32],
+            area: pixels.iter().filter(|value| **value != 0).count() as u32,
+            mask: KoharuLayoutMask {
+                x: 0,
+                y: 0,
+                width,
+                height,
+                pixels,
+            },
+        };
+
+        let inferred = infer_typography(&image, &detection).unwrap();
+
+        assert_eq!(inferred.color, [0, 0, 0]);
+        assert_eq!(inferred.stroke_color, Some([255, 255, 255]));
+    }
+
+    fn boxed_detection(
+        width: u32,
+        height: u32,
+        [left, top, right, bottom]: [u32; 4],
+    ) -> KoharuLayoutDetection {
+        let mut pixels = vec![0; width as usize * height as usize];
+        for y in top..bottom {
+            for x in left..right {
+                pixels[y as usize * width as usize + x as usize] = u8::MAX;
+            }
+        }
+        KoharuLayoutDetection {
+            label_id: 0,
+            label: "text".to_owned(),
+            score: 1.0,
+            bbox: [left as f32, top as f32, right as f32, bottom as f32],
+            area: pixels.iter().filter(|value| **value != 0).count() as u32,
+            mask: KoharuLayoutMask {
+                x: 0,
+                y: 0,
+                width,
+                height,
+                pixels,
+            },
+        }
+    }
+
+    /// A light screentone: sparse black dots with a grey scanned edge on white
+    /// paper, so most of its pixels are paper white.
+    fn light_screentone(width: u32, height: u32) -> RgbImage {
+        RgbImage::from_fn(width, height, |x, y| match (x % 4, y % 4) {
+            (0..2, 0..2) => Rgb([0, 0, 0]),
+            (2, 0..2) => Rgb([170, 170, 170]),
+            _ => Rgb([255, 255, 255]),
+        })
+    }
+
+    #[test]
+    fn light_text_in_a_dark_balloon_on_screentone_is_light_without_outline() {
+        let (width, height) = (140, 160);
+        let [left, top, right, bottom] = [40, 40, 100, 120];
+        let mut image = light_screentone(width, height);
+        let fill = |image: &mut RgbImage, inset: u32, color: [u8; 3]| {
+            for y in top - inset..bottom + inset {
+                for x in left - inset..right + inset {
+                    image.put_pixel(x, y, Rgb(color));
+                }
+            }
+        };
+        // A white border band around a black balloon a few pixels past the text.
+        fill(&mut image, 10, [255, 255, 255]);
+        fill(&mut image, 6, [0, 0, 0]);
+        for bar in [left + 4, left + 24, left + 44] {
+            for y in top + 4..bottom - 4 {
+                for x in bar..bar + 10 {
+                    image.put_pixel(x, y, Rgb([255, 255, 255]));
+                }
+            }
+        }
+        // A dark counter inside one glyph.
+        for y in top + 30..top + 40 {
+            for x in left + 27..left + 31 {
+                image.put_pixel(x, y, Rgb([0, 0, 0]));
+            }
+        }
+        let detection = boxed_detection(width, height, [left, top, right, bottom]);
+
+        let inferred = infer_typography(&image, &detection).unwrap();
+
+        assert_eq!(inferred.color, [255, 255, 255]);
+        assert_eq!(inferred.stroke_color, None);
+    }
+
+    #[test]
+    fn dark_text_with_white_outline_on_light_screentone_keeps_the_outline() {
+        let (width, height) = (120, 120);
+        let [left, top, right, bottom] = [30, 30, 90, 90];
+        let outline = 6;
+        let mut image = light_screentone(width, height);
+        for y in top - outline..bottom + outline {
+            for x in left - outline..right + outline {
+                image.put_pixel(x, y, Rgb([255, 255, 255]));
+            }
+        }
+        for bar in [left, left + 18, left + 36, left + 54] {
+            for y in top..bottom {
+                for x in bar..bar + 6 {
+                    image.put_pixel(x, y, Rgb([0, 0, 0]));
+                }
+            }
+        }
+        let detection = boxed_detection(width, height, [left, top, right, bottom]);
+
+        let inferred = infer_typography(&image, &detection).unwrap();
+
+        assert_eq!(inferred.color, [0, 0, 0]);
+        assert_eq!(inferred.stroke_color, Some([255, 255, 255]));
+    }
+
+    #[test]
+    fn white_outline_on_a_dark_panel_framed_by_paper_keeps_the_outline() {
+        // The sample border lies mostly on the gutter paper around a dark
+        // panel, while the text with its white outline sits on the panel.
+        // Sweep the outline width the measurement has to resolve.
+        let (width, height) = (200, 140);
+        let [left, top, right, bottom] = [40, 40, 160, 100];
+        for outline in 3..=8 {
+            let mut image = RgbImage::from_pixel(width, height, Rgb([255, 255, 255]));
+            let fill = |image: &mut RgbImage, inset: u32, color: [u8; 3]| {
+                for y in top - inset..bottom + inset {
+                    for x in left - inset..right + inset {
+                        image.put_pixel(x, y, Rgb(color));
+                    }
+                }
+            };
+            fill(&mut image, 5, [90, 96, 95]);
+            // The panel continues past the sample window below the text.
+            for y in bottom + 5..height {
+                for x in left + 50..left + 70 {
+                    image.put_pixel(x, y, Rgb([90, 96, 95]));
+                }
+            }
+            for bar in [left + 10, left + 50, left + 90] {
+                for y in top + 4..bottom - 4 {
+                    for x in bar - outline..bar + 12 + outline {
+                        image.put_pixel(x, y, Rgb([255, 255, 255]));
+                    }
+                }
+                for y in top + 4 + outline..bottom - 4 - outline {
+                    for x in bar..bar + 12 {
+                        image.put_pixel(x, y, Rgb([0, 0, 0]));
+                    }
+                }
+            }
+            let detection = boxed_detection(width, height, [left, top, right, bottom]);
+
+            let inferred = infer_typography(&image, &detection).unwrap();
+
+            assert_eq!(inferred.color, [0, 0, 0], "outline {outline}");
+            assert_eq!(
+                inferred.stroke_color,
+                Some([255, 255, 255]),
+                "outline {outline}"
+            );
+        }
+    }
+
+    #[test]
     fn typography_comes_from_horizontal_text_mask() {
         let (image, detection) = masked_text(52.0, 12.0, 12.0, [24, 80, 160]);
 
@@ -3693,6 +4987,18 @@ mod tests {
 
         assert_eq!(inferred.writing_mode, WritingMode::Horizontal);
         assert!((inferred.angle_degrees - 8.0).abs() < 1.0);
+
+        // The region hugs the rotated lines instead of rotating the full box,
+        // which would push its corners off the image.
+        let geometry =
+            super::rotated_rectangle_geometry(inferred.oriented_extent, inferred.angle_degrees);
+        for point in &geometry.points {
+            assert!((0.0..=f64::from(width)).contains(&point.x), "{point:?}");
+            assert!((0.0..=f64::from(height)).contains(&point.y), "{point:?}");
+        }
+        let [min_u, min_v, max_u, max_v] = inferred.oriented_extent;
+        assert!((max_u - min_u - 31.0).abs() < 3.0);
+        assert!((max_v - min_v - 53.0).abs() < 3.0);
     }
 
     #[test]

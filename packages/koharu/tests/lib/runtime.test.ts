@@ -55,6 +55,17 @@ const preferences: Preferences = {
       page: translationProfile(),
       chapter: translationProfile(),
     },
+    markup: {
+      model: {
+        provider: 'openrouter',
+        model: 'google/gemini-3.7-flash',
+        quantization: null,
+        vision: true,
+        reasoning: false,
+      },
+      generation: { temperature: 0, max_tokens: 8192, vision: true, reasoning: false },
+      instructions: null,
+    },
     inpainting: {
       method: 'local',
       preview_before_send: false,
@@ -109,6 +120,7 @@ const startupState = (): StartupState => ({
     generation: 0,
     size: [0, 0],
     element_frames: [],
+    text_fit_warnings: [],
   },
 })
 

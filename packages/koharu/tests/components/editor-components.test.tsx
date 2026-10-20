@@ -137,7 +137,10 @@ const textLayer: Layer = {
   content: {
     id: 'content',
     source: { text: 'こんにちは', language: 'ja' },
-    translation: { text: 'Hello', language: null },
+    translation: { text: 'Hello', language: null, generated: true },
+    translation_review: null,
+    ocr_unverified: false,
+    markup: null,
     role: null,
     source_region: null,
   },
@@ -163,7 +166,7 @@ const secondLayer: Layer = {
   content: {
     ...textLayer.content,
     id: 'second-content',
-    translation: { text: 'Second', language: null },
+    translation: { text: 'Second', language: null, generated: true },
   },
 }
 
@@ -173,7 +176,7 @@ const thirdLayer: Layer = {
   content: {
     ...textLayer.content,
     id: 'third-content',
-    translation: { text: 'Third', language: null },
+    translation: { text: 'Third', language: null, generated: true },
   },
 }
 
@@ -222,6 +225,17 @@ const preferences: Preferences = {
       page: translationProfile(),
       chapter: translationProfile(),
     },
+    markup: {
+      model: {
+        provider: 'openrouter',
+        model: 'google/gemini-3.7-flash',
+        quantization: null,
+        vision: true,
+        reasoning: false,
+      },
+      generation: { temperature: 0, max_tokens: 8192, vision: true, reasoning: false },
+      instructions: null,
+    },
     inpainting: {
       method: 'local',
       preview_before_send: false,
@@ -249,6 +263,7 @@ const preferences: Preferences = {
       {
         name: 'openrouter',
         supports_ocr: true,
+        supports_markup: true,
         supports_translation: true,
         config: { provider: 'openrouter', settings: {} },
         credential: emptyCredential(),
@@ -256,6 +271,7 @@ const preferences: Preferences = {
       {
         name: 'deepseek',
         supports_ocr: false,
+        supports_markup: false,
         supports_translation: true,
         config: { provider: 'deepseek', settings: {} },
         credential: emptyCredential(),
@@ -263,6 +279,7 @@ const preferences: Preferences = {
       {
         name: 'Qwen OCR (Alibaba Cloud)',
         supports_ocr: true,
+        supports_markup: false,
         supports_translation: false,
         config: {
           provider: 'qwen-ocr',
@@ -273,6 +290,7 @@ const preferences: Preferences = {
       {
         name: 'Local',
         supports_ocr: false,
+        supports_markup: false,
         supports_translation: true,
         config: { provider: 'local', settings: {} },
         credential: null,
@@ -280,6 +298,7 @@ const preferences: Preferences = {
       {
         name: 'OpenAI-compatible',
         supports_ocr: true,
+        supports_markup: true,
         supports_translation: true,
         config: {
           provider: 'openai-compatible',
@@ -290,6 +309,7 @@ const preferences: Preferences = {
       {
         name: 'LM Studio',
         supports_ocr: false,
+        supports_markup: false,
         supports_translation: true,
         config: {
           provider: 'lm-studio',
@@ -300,6 +320,7 @@ const preferences: Preferences = {
       {
         name: 'DeepL',
         supports_ocr: false,
+        supports_markup: false,
         supports_translation: true,
         config: { provider: 'deepl', settings: { base_url: null } },
         credential: emptyCredential(),
@@ -322,6 +343,7 @@ function installProject() {
     size: { width: 1000, height: 1500 },
     layers: [textLayer],
     regions: [],
+    unboxed_text: [],
   }
   queryClient.setQueryData(projectKey, {
     name: 'Book',
@@ -623,6 +645,7 @@ describe('greenfield editor', () => {
       const user = userEvent.setup()
       installProject()
       let finishExport: (() => void) | undefined
+      vi.spyOn(commands, 'checkChapter').mockResolvedValue({ texts: [], unboxed_text: [] })
       const exportProject = vi.spyOn(commands, 'export').mockImplementation(
         () =>
           new Promise<null>((resolve) => {
@@ -669,6 +692,7 @@ describe('greenfield editor', () => {
       const user = userEvent.setup()
       installProject()
       let fail: ((error: Error) => void) | undefined
+      vi.spyOn(commands, 'checkChapter').mockResolvedValue({ texts: [], unboxed_text: [] })
       vi.spyOn(commands, command).mockImplementation(
         () =>
           new Promise<null>((_resolve, reject) => {
@@ -797,6 +821,7 @@ describe('greenfield editor', () => {
         size: { width: 1000, height: 1500 },
         layers: [],
         regions: [],
+        unboxed_text: [],
       },
       {
         id: 'page-2',
@@ -804,6 +829,7 @@ describe('greenfield editor', () => {
         size: { width: 1000, height: 1500 },
         layers: [],
         regions: [],
+        unboxed_text: [],
       },
       {
         id: 'page-3',
@@ -811,6 +837,7 @@ describe('greenfield editor', () => {
         size: { width: 1000, height: 1500 },
         layers: [],
         regions: [],
+        unboxed_text: [],
       },
     ]
     queryClient.setQueryData(
@@ -914,6 +941,7 @@ describe('greenfield editor', () => {
       size: { width: 1000, height: 1500 },
       layers: [],
       regions: [],
+      unboxed_text: [],
     }
     queryClient.setQueryData(pagesKey, [
       ...(queryClient.getQueryData<PageSummary[]>(pagesKey) ?? []),
@@ -947,6 +975,7 @@ describe('greenfield editor', () => {
       size: { width: 1000, height: 1500 },
       layers: [],
       regions: [],
+      unboxed_text: [],
     }
     queryClient.setQueryData(pagesKey, [
       ...(queryClient.getQueryData<PageSummary[]>(pagesKey) ?? []),
@@ -1156,6 +1185,52 @@ describe('greenfield editor', () => {
           typography: expect.objectContaining({
             stroke_color: [255, 0, 0, 255],
             stroke_width: 1.5,
+          }),
+        }),
+      ]),
+    )
+  })
+
+  it('inverts the text and border colors in one edit', async () => {
+    const user = userEvent.setup()
+    installProject()
+    const setTypography = vi.spyOn(commands, 'setTypography').mockResolvedValue(null)
+    render(<Inspector />)
+
+    await user.click(screen.getByRole('button', { name: 'Swap text and border colors' }))
+    await waitFor(() =>
+      expect(setTypography).toHaveBeenCalledWith([
+        expect.objectContaining({
+          layer: 'element',
+          typography: expect.objectContaining({
+            color: [255, 255, 255, 255],
+            stroke_color: [0, 0, 0, 255],
+            stroke_width: 1.5,
+          }),
+        }),
+      ]),
+    )
+
+    const outlined: Layer = {
+      ...textLayer,
+      typography: {
+        ...textLayer.typography!,
+        color: [255, 255, 255, 255],
+        stroke_color: [200, 0, 0, 255],
+        stroke_width: 3,
+      },
+    }
+    act(() => {
+      queryClient.setQueryData(pageKey, (page: object) => ({ ...page, layers: [outlined] }))
+    })
+    await user.click(screen.getByRole('button', { name: 'Swap text and border colors' }))
+    await waitFor(() =>
+      expect(setTypography).toHaveBeenLastCalledWith([
+        expect.objectContaining({
+          typography: expect.objectContaining({
+            color: [200, 0, 0, 255],
+            stroke_color: [255, 255, 255, 255],
+            stroke_width: 3,
           }),
         }),
       ]),
@@ -1379,6 +1454,72 @@ describe('greenfield editor', () => {
     await user.click(restore)
     expect(restore).toHaveAttribute('data-active', 'true')
     expect(remove).toHaveAttribute('data-active', 'false')
+  })
+
+  it('flags text the renderer could not fit in the layer list', () => {
+    installProject()
+    queryClient.setQueryData(pageKey, (page: Page) => ({ ...page, layers: [textLayer] }))
+    useKoharuStore.setState({ textFitWarnings: { element: 'overflow' } })
+    render(<Inspector />)
+
+    expect(screen.getByTestId('text-warning-element')).toHaveAccessibleName(
+      'Text does not fit its area',
+    )
+  })
+
+  it('folds unverified OCR into the one layer warning marker', () => {
+    installProject()
+    const unverified = {
+      ...textLayer,
+      content: { ...textLayer.content, ocr_unverified: true },
+    }
+    queryClient.setQueryData(pageKey, (page: Page) => ({ ...page, layers: [unverified] }))
+    useKoharuStore.setState({ textFitWarnings: { element: 'overflow' } })
+    render(<Inspector />)
+
+    expect(screen.getAllByRole('img', { name: /OCR not verified/ })).toHaveLength(1)
+    expect(screen.getByTestId('text-warning-element')).toHaveAccessibleName(
+      'Text does not fit its area · OCR not verified: run OCR again',
+    )
+  })
+
+  it('offers shortening only for a generated translation too long for its area', async () => {
+    installProject()
+    const process = vi.spyOn(commands, 'process').mockResolvedValue('job')
+    const inspector = (
+      <TooltipProvider>
+        <Inspector />
+      </TooltipProvider>
+    )
+    const typed = {
+      ...textLayer,
+      content: {
+        ...textLayer.content,
+        translation: { text: 'Hello', language: null, generated: false },
+      },
+    } satisfies Layer
+    for (const [layer, warning] of [
+      [textLayer, 'low_contrast'],
+      [typed, 'overflow'],
+    ] as const) {
+      queryClient.setQueryData(pageKey, (page: Page) => ({ ...page, layers: [layer] }))
+      useKoharuStore.setState({ textFitWarnings: { element: warning } })
+      const { unmount } = render(inspector)
+      expect(screen.getByTestId('edit-translation-element')).toBeInTheDocument()
+      expect(screen.queryByTestId('shorten-translation-element')).not.toBeInTheDocument()
+      unmount()
+    }
+
+    queryClient.setQueryData(pageKey, (page: Page) => ({ ...page, layers: [textLayer] }))
+    useKoharuStore.setState({ textFitWarnings: { element: 'overflow' } })
+    render(inspector)
+    fireEvent.click(screen.getByTestId('shorten-translation-element'))
+    await waitFor(() =>
+      expect(process).toHaveBeenCalledWith(
+        { scope: 'entities', value: ['element'] },
+        { operation: 'shorten' },
+      ),
+    )
   })
 
   it('collapses and expands the text group without changing its visibility', () => {
@@ -3332,6 +3473,7 @@ describe('greenfield editor', () => {
         {
           name: 'DeepL',
           supports_ocr: false,
+          supports_markup: false,
           supports_translation: true,
           config: { provider: 'deepl' as const, settings: { base_url: null } },
           credential: { configured: true, value: null, clear: false },
@@ -3503,6 +3645,7 @@ describe('greenfield editor', () => {
           {
             name: 'OpenRouter',
             supports_ocr: true,
+            supports_markup: true,
             supports_translation: true,
             config: { provider: 'openrouter', settings: {} },
             credential: emptyCredential(),

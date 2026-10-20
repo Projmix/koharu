@@ -18,7 +18,7 @@ export const commands = {
 	active_page: EntityId | null,
 	can_undo: boolean,
 	can_redo: boolean,
-} | null>, onImageEditPreview: Channel<ImageEditPreview[]>) => __TAURI_INVOKE<StartupState>("subscribe", { onCanvas: mapChannel(onCanvas, (v) => ({...v,revision:v.revision==null?v.revision:v.revision})), onJob, onDownload, onResources: mapChannel(onResources, (v) => ({...v,devices:v.devices.map(i=>({...i,memory_budget:i.memory_budget==null?i.memory_budget:i.memory_budget,memory_used:i.memory_used==null?i.memory_used:i.memory_used,utilization:i.utilization==null?i.utilization:i.utilization}))})), onProject, onImageEditPreview }).then((v) => (({...v,preferences:({...v.preferences,pipeline:({...v.preferences.pipeline,ocr:({...v.preferences.pipeline.ocr,api:({...v.preferences.pipeline.ocr.api,generation:({...v.preferences.pipeline.ocr.api.generation,temperature:v.preferences.pipeline.ocr.api.generation.temperature==null?v.preferences.pipeline.ocr.api.generation.temperature:v.preferences.pipeline.ocr.api.generation.temperature,top_p:v.preferences.pipeline.ocr.api.generation.top_p==null?v.preferences.pipeline.ocr.api.generation.top_p:v.preferences.pipeline.ocr.api.generation.top_p,min_p:v.preferences.pipeline.ocr.api.generation.min_p==null?v.preferences.pipeline.ocr.api.generation.min_p:v.preferences.pipeline.ocr.api.generation.min_p,repeat_penalty:v.preferences.pipeline.ocr.api.generation.repeat_penalty==null?v.preferences.pipeline.ocr.api.generation.repeat_penalty:v.preferences.pipeline.ocr.api.generation.repeat_penalty,frequency_penalty:v.preferences.pipeline.ocr.api.generation.frequency_penalty==null?v.preferences.pipeline.ocr.api.generation.frequency_penalty:v.preferences.pipeline.ocr.api.generation.frequency_penalty,presence_penalty:v.preferences.pipeline.ocr.api.generation.presence_penalty==null?v.preferences.pipeline.ocr.api.generation.presence_penalty:v.preferences.pipeline.ocr.api.generation.presence_penalty})})}),translation:({...v.preferences.pipeline.translation,page:({...v.preferences.pipeline.translation.page,generation:({...v.preferences.pipeline.translation.page.generation,temperature:v.preferences.pipeline.translation.page.generation.temperature==null?v.preferences.pipeline.translation.page.generation.temperature:v.preferences.pipeline.translation.page.generation.temperature,top_p:v.preferences.pipeline.translation.page.generation.top_p==null?v.preferences.pipeline.translation.page.generation.top_p:v.preferences.pipeline.translation.page.generation.top_p,min_p:v.preferences.pipeline.translation.page.generation.min_p==null?v.preferences.pipeline.translation.page.generation.min_p:v.preferences.pipeline.translation.page.generation.min_p,repeat_penalty:v.preferences.pipeline.translation.page.generation.repeat_penalty==null?v.preferences.pipeline.translation.page.generation.repeat_penalty:v.preferences.pipeline.translation.page.generation.repeat_penalty,frequency_penalty:v.preferences.pipeline.translation.page.generation.frequency_penalty==null?v.preferences.pipeline.translation.page.generation.frequency_penalty:v.preferences.pipeline.translation.page.generation.frequency_penalty,presence_penalty:v.preferences.pipeline.translation.page.generation.presence_penalty==null?v.preferences.pipeline.translation.page.generation.presence_penalty:v.preferences.pipeline.translation.page.generation.presence_penalty})}),chapter:({...v.preferences.pipeline.translation.chapter,generation:({...v.preferences.pipeline.translation.chapter.generation,temperature:v.preferences.pipeline.translation.chapter.generation.temperature==null?v.preferences.pipeline.translation.chapter.generation.temperature:v.preferences.pipeline.translation.chapter.generation.temperature,top_p:v.preferences.pipeline.translation.chapter.generation.top_p==null?v.preferences.pipeline.translation.chapter.generation.top_p:v.preferences.pipeline.translation.chapter.generation.top_p,min_p:v.preferences.pipeline.translation.chapter.generation.min_p==null?v.preferences.pipeline.translation.chapter.generation.min_p:v.preferences.pipeline.translation.chapter.generation.min_p,repeat_penalty:v.preferences.pipeline.translation.chapter.generation.repeat_penalty==null?v.preferences.pipeline.translation.chapter.generation.repeat_penalty:v.preferences.pipeline.translation.chapter.generation.repeat_penalty,frequency_penalty:v.preferences.pipeline.translation.chapter.generation.frequency_penalty==null?v.preferences.pipeline.translation.chapter.generation.frequency_penalty:v.preferences.pipeline.translation.chapter.generation.frequency_penalty,presence_penalty:v.preferences.pipeline.translation.chapter.generation.presence_penalty==null?v.preferences.pipeline.translation.chapter.generation.presence_penalty:v.preferences.pipeline.translation.chapter.generation.presence_penalty})})}),processor:({...v.preferences.pipeline.processor,"koharu-layout-rfdetr-seg-2xl":v.preferences.pipeline.processor["koharu-layout-rfdetr-seg-2xl"]==null?v.preferences.pipeline.processor["koharu-layout-rfdetr-seg-2xl"]:({...v.preferences.pipeline.processor["koharu-layout-rfdetr-seg-2xl"],text_threshold:v.preferences.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].text_threshold==null?v.preferences.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].text_threshold:v.preferences.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].text_threshold,bubble_threshold:v.preferences.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].bubble_threshold==null?v.preferences.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].bubble_threshold:v.preferences.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].bubble_threshold,panel_threshold:v.preferences.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].panel_threshold==null?v.preferences.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].panel_threshold:v.preferences.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].panel_threshold})})})}),jobs:v.jobs.map(i=>i),canvas:({...v.canvas,revision:v.canvas.revision==null?v.canvas.revision:v.canvas.revision})}) as typeof v)),
+} | null>, onImageEditPreview: Channel<ImageEditPreview[]>) => __TAURI_INVOKE<StartupState>("subscribe", { onCanvas: mapChannel(onCanvas, (v) => ({...v,revision:v.revision==null?v.revision:v.revision})), onJob, onDownload, onResources: mapChannel(onResources, (v) => ({...v,devices:v.devices.map(i=>({...i,memory_budget:i.memory_budget==null?i.memory_budget:i.memory_budget,memory_used:i.memory_used==null?i.memory_used:i.memory_used,utilization:i.utilization==null?i.utilization:i.utilization}))})), onProject, onImageEditPreview }).then((v) => (({...v,preferences:({...v.preferences,pipeline:({...v.preferences.pipeline,ocr:({...v.preferences.pipeline.ocr,api:({...v.preferences.pipeline.ocr.api,generation:({...v.preferences.pipeline.ocr.api.generation,temperature:v.preferences.pipeline.ocr.api.generation.temperature==null?v.preferences.pipeline.ocr.api.generation.temperature:v.preferences.pipeline.ocr.api.generation.temperature,top_p:v.preferences.pipeline.ocr.api.generation.top_p==null?v.preferences.pipeline.ocr.api.generation.top_p:v.preferences.pipeline.ocr.api.generation.top_p,min_p:v.preferences.pipeline.ocr.api.generation.min_p==null?v.preferences.pipeline.ocr.api.generation.min_p:v.preferences.pipeline.ocr.api.generation.min_p,repeat_penalty:v.preferences.pipeline.ocr.api.generation.repeat_penalty==null?v.preferences.pipeline.ocr.api.generation.repeat_penalty:v.preferences.pipeline.ocr.api.generation.repeat_penalty,frequency_penalty:v.preferences.pipeline.ocr.api.generation.frequency_penalty==null?v.preferences.pipeline.ocr.api.generation.frequency_penalty:v.preferences.pipeline.ocr.api.generation.frequency_penalty,presence_penalty:v.preferences.pipeline.ocr.api.generation.presence_penalty==null?v.preferences.pipeline.ocr.api.generation.presence_penalty:v.preferences.pipeline.ocr.api.generation.presence_penalty})})}),markup:({...v.preferences.pipeline.markup,generation:({...v.preferences.pipeline.markup.generation,temperature:v.preferences.pipeline.markup.generation.temperature==null?v.preferences.pipeline.markup.generation.temperature:v.preferences.pipeline.markup.generation.temperature,top_p:v.preferences.pipeline.markup.generation.top_p==null?v.preferences.pipeline.markup.generation.top_p:v.preferences.pipeline.markup.generation.top_p,min_p:v.preferences.pipeline.markup.generation.min_p==null?v.preferences.pipeline.markup.generation.min_p:v.preferences.pipeline.markup.generation.min_p,repeat_penalty:v.preferences.pipeline.markup.generation.repeat_penalty==null?v.preferences.pipeline.markup.generation.repeat_penalty:v.preferences.pipeline.markup.generation.repeat_penalty,frequency_penalty:v.preferences.pipeline.markup.generation.frequency_penalty==null?v.preferences.pipeline.markup.generation.frequency_penalty:v.preferences.pipeline.markup.generation.frequency_penalty,presence_penalty:v.preferences.pipeline.markup.generation.presence_penalty==null?v.preferences.pipeline.markup.generation.presence_penalty:v.preferences.pipeline.markup.generation.presence_penalty})}),translation:({...v.preferences.pipeline.translation,page:({...v.preferences.pipeline.translation.page,generation:({...v.preferences.pipeline.translation.page.generation,temperature:v.preferences.pipeline.translation.page.generation.temperature==null?v.preferences.pipeline.translation.page.generation.temperature:v.preferences.pipeline.translation.page.generation.temperature,top_p:v.preferences.pipeline.translation.page.generation.top_p==null?v.preferences.pipeline.translation.page.generation.top_p:v.preferences.pipeline.translation.page.generation.top_p,min_p:v.preferences.pipeline.translation.page.generation.min_p==null?v.preferences.pipeline.translation.page.generation.min_p:v.preferences.pipeline.translation.page.generation.min_p,repeat_penalty:v.preferences.pipeline.translation.page.generation.repeat_penalty==null?v.preferences.pipeline.translation.page.generation.repeat_penalty:v.preferences.pipeline.translation.page.generation.repeat_penalty,frequency_penalty:v.preferences.pipeline.translation.page.generation.frequency_penalty==null?v.preferences.pipeline.translation.page.generation.frequency_penalty:v.preferences.pipeline.translation.page.generation.frequency_penalty,presence_penalty:v.preferences.pipeline.translation.page.generation.presence_penalty==null?v.preferences.pipeline.translation.page.generation.presence_penalty:v.preferences.pipeline.translation.page.generation.presence_penalty})}),chapter:({...v.preferences.pipeline.translation.chapter,generation:({...v.preferences.pipeline.translation.chapter.generation,temperature:v.preferences.pipeline.translation.chapter.generation.temperature==null?v.preferences.pipeline.translation.chapter.generation.temperature:v.preferences.pipeline.translation.chapter.generation.temperature,top_p:v.preferences.pipeline.translation.chapter.generation.top_p==null?v.preferences.pipeline.translation.chapter.generation.top_p:v.preferences.pipeline.translation.chapter.generation.top_p,min_p:v.preferences.pipeline.translation.chapter.generation.min_p==null?v.preferences.pipeline.translation.chapter.generation.min_p:v.preferences.pipeline.translation.chapter.generation.min_p,repeat_penalty:v.preferences.pipeline.translation.chapter.generation.repeat_penalty==null?v.preferences.pipeline.translation.chapter.generation.repeat_penalty:v.preferences.pipeline.translation.chapter.generation.repeat_penalty,frequency_penalty:v.preferences.pipeline.translation.chapter.generation.frequency_penalty==null?v.preferences.pipeline.translation.chapter.generation.frequency_penalty:v.preferences.pipeline.translation.chapter.generation.frequency_penalty,presence_penalty:v.preferences.pipeline.translation.chapter.generation.presence_penalty==null?v.preferences.pipeline.translation.chapter.generation.presence_penalty:v.preferences.pipeline.translation.chapter.generation.presence_penalty})})}),processor:({...v.preferences.pipeline.processor,"koharu-layout-rfdetr-seg-2xl":v.preferences.pipeline.processor["koharu-layout-rfdetr-seg-2xl"]==null?v.preferences.pipeline.processor["koharu-layout-rfdetr-seg-2xl"]:({...v.preferences.pipeline.processor["koharu-layout-rfdetr-seg-2xl"],text_threshold:v.preferences.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].text_threshold==null?v.preferences.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].text_threshold:v.preferences.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].text_threshold,bubble_threshold:v.preferences.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].bubble_threshold==null?v.preferences.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].bubble_threshold:v.preferences.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].bubble_threshold,panel_threshold:v.preferences.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].panel_threshold==null?v.preferences.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].panel_threshold:v.preferences.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].panel_threshold})})})}),jobs:v.jobs.map(i=>i),canvas:({...v.canvas,revision:v.canvas.revision==null?v.canvas.revision:v.canvas.revision})}) as typeof v)),
 	getProject: () => __TAURI_INVOKE<{
 	name: string,
 	revision: Revision,
@@ -33,35 +33,46 @@ export const commands = {
 	size: PageSize,
 	layers: Layer[],
 	regions: AnalysisRegion[],
-} | null>("get_page").then((v) => (v==null?v:({...v,layers:v.layers.map(i=>i),regions:v.regions.map(i=>({...i,geometry:({...i.geometry,points:i.geometry.points.map(i=>i)})}))}) as typeof v)),
+	/**  Lettering scene markup saw outside every text region, still unresolved. */
+	unboxed_text: UnboxedText[],
+} | null>("get_page").then((v) => (v==null?v:({...v,layers:v.layers.map(i=>i),regions:v.regions.map(i=>({...i,geometry:({...i.geometry,points:i.geometry.points.map(i=>i)})})),unboxed_text:v.unboxed_text.map(i=>i)}) as typeof v)),
 	listProjects: () => __TAURI_INVOKE<ProjectSummary[]>("list_projects"),
 	createProject: (name: string) => __TAURI_INVOKE<null>("create_project", { name }),
 	openProject: (name: string) => __TAURI_INVOKE<null>("open_project", { name }),
 	deleteProject: (name: string) => __TAURI_INVOKE<null>("delete_project", { name }),
 	closeProject: () => __TAURI_INVOKE<null>("close_project"),
 	import: (source: PageImportSource) => __TAURI_INVOKE<null>("import", { source }),
-	selectPage: (page: EntityId) => __TAURI_INVOKE<PageSelection>("select_page", { page }).then((v) => (({...v,page:({...v.page,layers:v.page.layers.map(i=>i),regions:v.page.regions.map(i=>({...i,geometry:({...i.geometry,points:i.geometry.points.map(i=>i)})}))})}) as typeof v)),
+	selectPage: (page: EntityId) => __TAURI_INVOKE<PageSelection>("select_page", { page }).then((v) => (({...v,page:({...v.page,layers:v.page.layers.map(i=>i),regions:v.page.regions.map(i=>({...i,geometry:({...i.geometry,points:i.geometry.points.map(i=>i)})})),unboxed_text:v.page.unboxed_text.map(i=>i)})}) as typeof v)),
+	getCharacters: () => __TAURI_INVOKE<Character[]>("get_characters"),
 	listProjectVersions: () => __TAURI_INVOKE<ProjectVersion[]>("list_project_versions").then((v) => (v.map(i=>i) as typeof v)),
 	saveProjectVersion: (name: string) => __TAURI_INVOKE<ProjectVersion>("save_project_version", { name }),
 	restoreProjectVersion: (id: VersionId) => __TAURI_INVOKE<ProjectInfo>("restore_project_version", { id }),
 	deleteProjectVersion: (id: VersionId) => __TAURI_INVOKE<null>("delete_project_version", { id }),
 	renamePage: (page: EntityId, label: string) => __TAURI_INVOKE<null>("rename_page", { page, label }),
 	deletePages: (pages: EntityId[]) => __TAURI_INVOKE<null>("delete_pages", { pages }),
-	duplicatePages: (pages: EntityId[]) => __TAURI_INVOKE<DuplicatePagesResult>("duplicate_pages", { pages }).then((v) => (({...v,page:({...v.page,regions:v.page.regions.map(i=>({...i,geometry:({...i.geometry,points:i.geometry.points.map(i=>i)})}))})}) as typeof v)),
+	duplicatePages: (pages: EntityId[]) => __TAURI_INVOKE<DuplicatePagesResult>("duplicate_pages", { pages }).then((v) => (({...v,page:({...v.page,layers:v.page.layers.map(i=>i),regions:v.page.regions.map(i=>({...i,geometry:({...i.geometry,points:i.geometry.points.map(i=>i)})})),unboxed_text:v.page.unboxed_text.map(i=>i)})}) as typeof v)),
 	pasteTextBlocks: (targetPage: EntityId, payload: TextClipboardPayload, position: {
 	x: number,
 	y: number,
-} | null) => __TAURI_INVOKE<TextTransferResult>("paste_text_blocks", { targetPage, payload: ({...payload,layers:payload.layers.map(i=>({...i,geometry:i.geometry==null?i.geometry:({...i.geometry,points:i.geometry.points.map(i=>i)}),typography:i.typography==null?i.typography:({...i.typography,size:i.typography.size==null?i.typography.size:i.typography.size,stroke_width:i.typography.stroke_width==null?i.typography.stroke_width:i.typography.stroke_width}),source_region:i.source_region==null?i.source_region:({...i.source_region,geometry:({...i.source_region.geometry,points:i.source_region.geometry.points.map(i=>i)})}),automatic_region:i.automatic_region==null?i.automatic_region:({...i.automatic_region,geometry:({...i.automatic_region.geometry,points:i.automatic_region.geometry.points.map(i=>i)})})}))}), position: position==null?position:position }).then((v) => (({...v,page:({...v.page,regions:v.page.regions.map(i=>({...i,geometry:({...i.geometry,points:i.geometry.points.map(i=>i)})}))})}) as typeof v)),
+} | null) => __TAURI_INVOKE<TextTransferResult>("paste_text_blocks", { targetPage, payload: ({...payload,layers:payload.layers.map(i=>({...i,geometry:i.geometry==null?i.geometry:({...i.geometry,points:i.geometry.points.map(i=>i)}),angle_degrees:i.angle_degrees==null?i.angle_degrees:i.angle_degrees,typography:i.typography==null?i.typography:({...i.typography,size:i.typography.size==null?i.typography.size:i.typography.size,stroke_width:i.typography.stroke_width==null?i.typography.stroke_width:i.typography.stroke_width}),source_region:i.source_region==null?i.source_region:({...i.source_region,geometry:({...i.source_region.geometry,points:i.source_region.geometry.points.map(i=>i)})}),automatic_region:i.automatic_region==null?i.automatic_region:({...i.automatic_region,geometry:({...i.automatic_region.geometry,points:i.automatic_region.geometry.points.map(i=>i)})})}))}), position: position==null?position:position }).then((v) => (({...v,page:({...v.page,layers:v.page.layers.map(i=>i),regions:v.page.regions.map(i=>({...i,geometry:({...i.geometry,points:i.geometry.points.map(i=>i)})})),unboxed_text:v.page.unboxed_text.map(i=>i)})}) as typeof v)),
 	movePage: (page: EntityId, index: number) => __TAURI_INVOKE<null>("move_page", { page, index }),
 	setSourceText: (layer: EntityId, text: string) => __TAURI_INVOKE<null>("set_source_text", { layer, text }),
 	setTextRole: (layer: EntityId, role: string) => __TAURI_INVOKE<null>("set_text_role", { layer, role }),
 	setTranslation: (layer: EntityId, text: string | null) => __TAURI_INVOKE<null>("set_translation", { layer, text }),
+	setSpeechMarkup: (layer: EntityId, kind: SpeechKind, speaker: string | null) => __TAURI_INVOKE<null>("set_speech_markup", { layer, kind, speaker }),
+	dismissUnboxedText: (page: EntityId, flag: UnboxedText) => __TAURI_INVOKE<null>("dismiss_unboxed_text", { page, flag }),
+	setCharacters: (characters: CharacterInput[]) => __TAURI_INVOKE<null>("set_characters", { characters }),
+	/**
+	 *  Add another project's characters to the open project. Returns how many
+	 *  were new.
+	 */
+	importCharacters: (source: string) => __TAURI_INVOKE<number>("import_characters", { source }),
 	setTypography: (updates: TypographyUpdate[]) => __TAURI_INVOKE<null>("set_typography", { updates: updates.map(i=>({...i,typography:({...i.typography,size:i.typography.size==null?i.typography.size:i.typography.size,stroke_width:i.typography.stroke_width==null?i.typography.stroke_width:i.typography.stroke_width})})) }),
 	setGeometry: (updates: GeometryUpdate[]) => __TAURI_INVOKE<null>("set_geometry", { updates: updates.map(i=>({...i,points:i.points==null?i.points:i.points.map(i=>i)})) }),
 	setVisibility: (layers: EntityId[], visible: boolean | null, opacity: number | null) => __TAURI_INVOKE<null>("set_visibility", { layers, visible, opacity: opacity==null?opacity:opacity }),
 	deleteLayers: (layers: EntityId[]) => __TAURI_INVOKE<null>("delete_layers", { layers }),
-	moveLayer: (layer: EntityId, parent: EntityId, index: number) => __TAURI_INVOKE<Page>("move_layer", { layer, parent, index }).then((v) => (({...v,layers:v.layers.map(i=>i),regions:v.regions.map(i=>({...i,geometry:({...i.geometry,points:i.geometry.points.map(i=>i)})}))}) as typeof v)),
-	reorderLayers: (parent: EntityId, order: EntityId[]) => __TAURI_INVOKE<Page>("reorder_layers", { parent, order }).then((v) => (({...v,layers:v.layers.map(i=>i),regions:v.regions.map(i=>({...i,geometry:({...i.geometry,points:i.geometry.points.map(i=>i)})}))}) as typeof v)),
+	moveLayer: (layer: EntityId, parent: EntityId, index: number) => __TAURI_INVOKE<Page>("move_layer", { layer, parent, index }).then((v) => (({...v,layers:v.layers.map(i=>i),regions:v.regions.map(i=>({...i,geometry:({...i.geometry,points:i.geometry.points.map(i=>i)})})),unboxed_text:v.unboxed_text.map(i=>i)}) as typeof v)),
+	reorderLayers: (parent: EntityId, order: EntityId[]) => __TAURI_INVOKE<Page>("reorder_layers", { parent, order }).then((v) => (({...v,layers:v.layers.map(i=>i),regions:v.regions.map(i=>({...i,geometry:({...i.geometry,points:i.geometry.points.map(i=>i)})})),unboxed_text:v.unboxed_text.map(i=>i)}) as typeof v)),
 	undo: () => __TAURI_INVOKE<null>("undo"),
 	redo: () => __TAURI_INVOKE<null>("redo"),
 	process: (scope: Scope, operation: Operation) => __TAURI_INVOKE<JobId>("process", { scope, operation }),
@@ -69,12 +80,13 @@ export const commands = {
 	resolveImageEditPreview: (id: string, prompt: string | null) => __TAURI_INVOKE<null>("resolve_image_edit_preview", { id, prompt }),
 	exportChapterTranslation: () => __TAURI_INVOKE<boolean>("export_chapter_translation"),
 	importChapterTranslation: () => __TAURI_INVOKE<boolean>("import_chapter_translation"),
+	checkChapter: () => __TAURI_INVOKE<ChapterCheck>("check_chapter"),
 	export: (format: ExportFormat) => __TAURI_INVOKE<null>("export", { format }),
 	getThumbnail: (page: EntityId) => __TAURI_INVOKE<ThumbnailBytes>("get_thumbnail", { page }),
 	getFonts: () => __TAURI_INVOKE<FontFamily[]>("get_fonts"),
 	getFontPreview: (familyName: string) => __TAURI_INVOKE<FontPreviewBytes>("get_font_preview", { familyName }),
-	savePreferences: (pipeline: PipelineConfig, providers: ProviderPreferences, typesetting: TypesettingConfig) => __TAURI_INVOKE<Preferences>("save_preferences", { pipeline: ({...pipeline,ocr:({...pipeline.ocr,api:({...pipeline.ocr.api,generation:({...pipeline.ocr.api.generation,temperature:pipeline.ocr.api.generation.temperature==null?pipeline.ocr.api.generation.temperature:pipeline.ocr.api.generation.temperature,top_p:pipeline.ocr.api.generation.top_p==null?pipeline.ocr.api.generation.top_p:pipeline.ocr.api.generation.top_p,min_p:pipeline.ocr.api.generation.min_p==null?pipeline.ocr.api.generation.min_p:pipeline.ocr.api.generation.min_p,repeat_penalty:pipeline.ocr.api.generation.repeat_penalty==null?pipeline.ocr.api.generation.repeat_penalty:pipeline.ocr.api.generation.repeat_penalty,frequency_penalty:pipeline.ocr.api.generation.frequency_penalty==null?pipeline.ocr.api.generation.frequency_penalty:pipeline.ocr.api.generation.frequency_penalty,presence_penalty:pipeline.ocr.api.generation.presence_penalty==null?pipeline.ocr.api.generation.presence_penalty:pipeline.ocr.api.generation.presence_penalty})})}),translation:({...pipeline.translation,page:({...pipeline.translation.page,generation:({...pipeline.translation.page.generation,temperature:pipeline.translation.page.generation.temperature==null?pipeline.translation.page.generation.temperature:pipeline.translation.page.generation.temperature,top_p:pipeline.translation.page.generation.top_p==null?pipeline.translation.page.generation.top_p:pipeline.translation.page.generation.top_p,min_p:pipeline.translation.page.generation.min_p==null?pipeline.translation.page.generation.min_p:pipeline.translation.page.generation.min_p,repeat_penalty:pipeline.translation.page.generation.repeat_penalty==null?pipeline.translation.page.generation.repeat_penalty:pipeline.translation.page.generation.repeat_penalty,frequency_penalty:pipeline.translation.page.generation.frequency_penalty==null?pipeline.translation.page.generation.frequency_penalty:pipeline.translation.page.generation.frequency_penalty,presence_penalty:pipeline.translation.page.generation.presence_penalty==null?pipeline.translation.page.generation.presence_penalty:pipeline.translation.page.generation.presence_penalty})}),chapter:({...pipeline.translation.chapter,generation:({...pipeline.translation.chapter.generation,temperature:pipeline.translation.chapter.generation.temperature==null?pipeline.translation.chapter.generation.temperature:pipeline.translation.chapter.generation.temperature,top_p:pipeline.translation.chapter.generation.top_p==null?pipeline.translation.chapter.generation.top_p:pipeline.translation.chapter.generation.top_p,min_p:pipeline.translation.chapter.generation.min_p==null?pipeline.translation.chapter.generation.min_p:pipeline.translation.chapter.generation.min_p,repeat_penalty:pipeline.translation.chapter.generation.repeat_penalty==null?pipeline.translation.chapter.generation.repeat_penalty:pipeline.translation.chapter.generation.repeat_penalty,frequency_penalty:pipeline.translation.chapter.generation.frequency_penalty==null?pipeline.translation.chapter.generation.frequency_penalty:pipeline.translation.chapter.generation.frequency_penalty,presence_penalty:pipeline.translation.chapter.generation.presence_penalty==null?pipeline.translation.chapter.generation.presence_penalty:pipeline.translation.chapter.generation.presence_penalty})})}),processor:({...pipeline.processor,"koharu-layout-rfdetr-seg-2xl":pipeline.processor["koharu-layout-rfdetr-seg-2xl"]==null?pipeline.processor["koharu-layout-rfdetr-seg-2xl"]:({...pipeline.processor["koharu-layout-rfdetr-seg-2xl"],text_threshold:pipeline.processor["koharu-layout-rfdetr-seg-2xl"].text_threshold==null?pipeline.processor["koharu-layout-rfdetr-seg-2xl"].text_threshold:pipeline.processor["koharu-layout-rfdetr-seg-2xl"].text_threshold,bubble_threshold:pipeline.processor["koharu-layout-rfdetr-seg-2xl"].bubble_threshold==null?pipeline.processor["koharu-layout-rfdetr-seg-2xl"].bubble_threshold:pipeline.processor["koharu-layout-rfdetr-seg-2xl"].bubble_threshold,panel_threshold:pipeline.processor["koharu-layout-rfdetr-seg-2xl"].panel_threshold==null?pipeline.processor["koharu-layout-rfdetr-seg-2xl"].panel_threshold:pipeline.processor["koharu-layout-rfdetr-seg-2xl"].panel_threshold})})}), providers, typesetting }).then((v) => (({...v,pipeline:({...v.pipeline,ocr:({...v.pipeline.ocr,api:({...v.pipeline.ocr.api,generation:({...v.pipeline.ocr.api.generation,temperature:v.pipeline.ocr.api.generation.temperature==null?v.pipeline.ocr.api.generation.temperature:v.pipeline.ocr.api.generation.temperature,top_p:v.pipeline.ocr.api.generation.top_p==null?v.pipeline.ocr.api.generation.top_p:v.pipeline.ocr.api.generation.top_p,min_p:v.pipeline.ocr.api.generation.min_p==null?v.pipeline.ocr.api.generation.min_p:v.pipeline.ocr.api.generation.min_p,repeat_penalty:v.pipeline.ocr.api.generation.repeat_penalty==null?v.pipeline.ocr.api.generation.repeat_penalty:v.pipeline.ocr.api.generation.repeat_penalty,frequency_penalty:v.pipeline.ocr.api.generation.frequency_penalty==null?v.pipeline.ocr.api.generation.frequency_penalty:v.pipeline.ocr.api.generation.frequency_penalty,presence_penalty:v.pipeline.ocr.api.generation.presence_penalty==null?v.pipeline.ocr.api.generation.presence_penalty:v.pipeline.ocr.api.generation.presence_penalty})})}),translation:({...v.pipeline.translation,page:({...v.pipeline.translation.page,generation:({...v.pipeline.translation.page.generation,temperature:v.pipeline.translation.page.generation.temperature==null?v.pipeline.translation.page.generation.temperature:v.pipeline.translation.page.generation.temperature,top_p:v.pipeline.translation.page.generation.top_p==null?v.pipeline.translation.page.generation.top_p:v.pipeline.translation.page.generation.top_p,min_p:v.pipeline.translation.page.generation.min_p==null?v.pipeline.translation.page.generation.min_p:v.pipeline.translation.page.generation.min_p,repeat_penalty:v.pipeline.translation.page.generation.repeat_penalty==null?v.pipeline.translation.page.generation.repeat_penalty:v.pipeline.translation.page.generation.repeat_penalty,frequency_penalty:v.pipeline.translation.page.generation.frequency_penalty==null?v.pipeline.translation.page.generation.frequency_penalty:v.pipeline.translation.page.generation.frequency_penalty,presence_penalty:v.pipeline.translation.page.generation.presence_penalty==null?v.pipeline.translation.page.generation.presence_penalty:v.pipeline.translation.page.generation.presence_penalty})}),chapter:({...v.pipeline.translation.chapter,generation:({...v.pipeline.translation.chapter.generation,temperature:v.pipeline.translation.chapter.generation.temperature==null?v.pipeline.translation.chapter.generation.temperature:v.pipeline.translation.chapter.generation.temperature,top_p:v.pipeline.translation.chapter.generation.top_p==null?v.pipeline.translation.chapter.generation.top_p:v.pipeline.translation.chapter.generation.top_p,min_p:v.pipeline.translation.chapter.generation.min_p==null?v.pipeline.translation.chapter.generation.min_p:v.pipeline.translation.chapter.generation.min_p,repeat_penalty:v.pipeline.translation.chapter.generation.repeat_penalty==null?v.pipeline.translation.chapter.generation.repeat_penalty:v.pipeline.translation.chapter.generation.repeat_penalty,frequency_penalty:v.pipeline.translation.chapter.generation.frequency_penalty==null?v.pipeline.translation.chapter.generation.frequency_penalty:v.pipeline.translation.chapter.generation.frequency_penalty,presence_penalty:v.pipeline.translation.chapter.generation.presence_penalty==null?v.pipeline.translation.chapter.generation.presence_penalty:v.pipeline.translation.chapter.generation.presence_penalty})})}),processor:({...v.pipeline.processor,"koharu-layout-rfdetr-seg-2xl":v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"]==null?v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"]:({...v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"],text_threshold:v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].text_threshold==null?v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].text_threshold:v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].text_threshold,bubble_threshold:v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].bubble_threshold==null?v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].bubble_threshold:v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].bubble_threshold,panel_threshold:v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].panel_threshold==null?v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].panel_threshold:v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].panel_threshold})})})}) as typeof v)),
-	getPreferences: () => __TAURI_INVOKE<Preferences>("get_preferences").then((v) => (({...v,pipeline:({...v.pipeline,ocr:({...v.pipeline.ocr,api:({...v.pipeline.ocr.api,generation:({...v.pipeline.ocr.api.generation,temperature:v.pipeline.ocr.api.generation.temperature==null?v.pipeline.ocr.api.generation.temperature:v.pipeline.ocr.api.generation.temperature,top_p:v.pipeline.ocr.api.generation.top_p==null?v.pipeline.ocr.api.generation.top_p:v.pipeline.ocr.api.generation.top_p,min_p:v.pipeline.ocr.api.generation.min_p==null?v.pipeline.ocr.api.generation.min_p:v.pipeline.ocr.api.generation.min_p,repeat_penalty:v.pipeline.ocr.api.generation.repeat_penalty==null?v.pipeline.ocr.api.generation.repeat_penalty:v.pipeline.ocr.api.generation.repeat_penalty,frequency_penalty:v.pipeline.ocr.api.generation.frequency_penalty==null?v.pipeline.ocr.api.generation.frequency_penalty:v.pipeline.ocr.api.generation.frequency_penalty,presence_penalty:v.pipeline.ocr.api.generation.presence_penalty==null?v.pipeline.ocr.api.generation.presence_penalty:v.pipeline.ocr.api.generation.presence_penalty})})}),translation:({...v.pipeline.translation,page:({...v.pipeline.translation.page,generation:({...v.pipeline.translation.page.generation,temperature:v.pipeline.translation.page.generation.temperature==null?v.pipeline.translation.page.generation.temperature:v.pipeline.translation.page.generation.temperature,top_p:v.pipeline.translation.page.generation.top_p==null?v.pipeline.translation.page.generation.top_p:v.pipeline.translation.page.generation.top_p,min_p:v.pipeline.translation.page.generation.min_p==null?v.pipeline.translation.page.generation.min_p:v.pipeline.translation.page.generation.min_p,repeat_penalty:v.pipeline.translation.page.generation.repeat_penalty==null?v.pipeline.translation.page.generation.repeat_penalty:v.pipeline.translation.page.generation.repeat_penalty,frequency_penalty:v.pipeline.translation.page.generation.frequency_penalty==null?v.pipeline.translation.page.generation.frequency_penalty:v.pipeline.translation.page.generation.frequency_penalty,presence_penalty:v.pipeline.translation.page.generation.presence_penalty==null?v.pipeline.translation.page.generation.presence_penalty:v.pipeline.translation.page.generation.presence_penalty})}),chapter:({...v.pipeline.translation.chapter,generation:({...v.pipeline.translation.chapter.generation,temperature:v.pipeline.translation.chapter.generation.temperature==null?v.pipeline.translation.chapter.generation.temperature:v.pipeline.translation.chapter.generation.temperature,top_p:v.pipeline.translation.chapter.generation.top_p==null?v.pipeline.translation.chapter.generation.top_p:v.pipeline.translation.chapter.generation.top_p,min_p:v.pipeline.translation.chapter.generation.min_p==null?v.pipeline.translation.chapter.generation.min_p:v.pipeline.translation.chapter.generation.min_p,repeat_penalty:v.pipeline.translation.chapter.generation.repeat_penalty==null?v.pipeline.translation.chapter.generation.repeat_penalty:v.pipeline.translation.chapter.generation.repeat_penalty,frequency_penalty:v.pipeline.translation.chapter.generation.frequency_penalty==null?v.pipeline.translation.chapter.generation.frequency_penalty:v.pipeline.translation.chapter.generation.frequency_penalty,presence_penalty:v.pipeline.translation.chapter.generation.presence_penalty==null?v.pipeline.translation.chapter.generation.presence_penalty:v.pipeline.translation.chapter.generation.presence_penalty})})}),processor:({...v.pipeline.processor,"koharu-layout-rfdetr-seg-2xl":v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"]==null?v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"]:({...v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"],text_threshold:v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].text_threshold==null?v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].text_threshold:v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].text_threshold,bubble_threshold:v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].bubble_threshold==null?v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].bubble_threshold:v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].bubble_threshold,panel_threshold:v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].panel_threshold==null?v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].panel_threshold:v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].panel_threshold})})})}) as typeof v)),
+	savePreferences: (pipeline: PipelineConfig, providers: ProviderPreferences, typesetting: TypesettingConfig) => __TAURI_INVOKE<Preferences>("save_preferences", { pipeline: ({...pipeline,ocr:({...pipeline.ocr,api:({...pipeline.ocr.api,generation:({...pipeline.ocr.api.generation,temperature:pipeline.ocr.api.generation.temperature==null?pipeline.ocr.api.generation.temperature:pipeline.ocr.api.generation.temperature,top_p:pipeline.ocr.api.generation.top_p==null?pipeline.ocr.api.generation.top_p:pipeline.ocr.api.generation.top_p,min_p:pipeline.ocr.api.generation.min_p==null?pipeline.ocr.api.generation.min_p:pipeline.ocr.api.generation.min_p,repeat_penalty:pipeline.ocr.api.generation.repeat_penalty==null?pipeline.ocr.api.generation.repeat_penalty:pipeline.ocr.api.generation.repeat_penalty,frequency_penalty:pipeline.ocr.api.generation.frequency_penalty==null?pipeline.ocr.api.generation.frequency_penalty:pipeline.ocr.api.generation.frequency_penalty,presence_penalty:pipeline.ocr.api.generation.presence_penalty==null?pipeline.ocr.api.generation.presence_penalty:pipeline.ocr.api.generation.presence_penalty})})}),markup:({...pipeline.markup,generation:({...pipeline.markup.generation,temperature:pipeline.markup.generation.temperature==null?pipeline.markup.generation.temperature:pipeline.markup.generation.temperature,top_p:pipeline.markup.generation.top_p==null?pipeline.markup.generation.top_p:pipeline.markup.generation.top_p,min_p:pipeline.markup.generation.min_p==null?pipeline.markup.generation.min_p:pipeline.markup.generation.min_p,repeat_penalty:pipeline.markup.generation.repeat_penalty==null?pipeline.markup.generation.repeat_penalty:pipeline.markup.generation.repeat_penalty,frequency_penalty:pipeline.markup.generation.frequency_penalty==null?pipeline.markup.generation.frequency_penalty:pipeline.markup.generation.frequency_penalty,presence_penalty:pipeline.markup.generation.presence_penalty==null?pipeline.markup.generation.presence_penalty:pipeline.markup.generation.presence_penalty})}),translation:({...pipeline.translation,page:({...pipeline.translation.page,generation:({...pipeline.translation.page.generation,temperature:pipeline.translation.page.generation.temperature==null?pipeline.translation.page.generation.temperature:pipeline.translation.page.generation.temperature,top_p:pipeline.translation.page.generation.top_p==null?pipeline.translation.page.generation.top_p:pipeline.translation.page.generation.top_p,min_p:pipeline.translation.page.generation.min_p==null?pipeline.translation.page.generation.min_p:pipeline.translation.page.generation.min_p,repeat_penalty:pipeline.translation.page.generation.repeat_penalty==null?pipeline.translation.page.generation.repeat_penalty:pipeline.translation.page.generation.repeat_penalty,frequency_penalty:pipeline.translation.page.generation.frequency_penalty==null?pipeline.translation.page.generation.frequency_penalty:pipeline.translation.page.generation.frequency_penalty,presence_penalty:pipeline.translation.page.generation.presence_penalty==null?pipeline.translation.page.generation.presence_penalty:pipeline.translation.page.generation.presence_penalty})}),chapter:({...pipeline.translation.chapter,generation:({...pipeline.translation.chapter.generation,temperature:pipeline.translation.chapter.generation.temperature==null?pipeline.translation.chapter.generation.temperature:pipeline.translation.chapter.generation.temperature,top_p:pipeline.translation.chapter.generation.top_p==null?pipeline.translation.chapter.generation.top_p:pipeline.translation.chapter.generation.top_p,min_p:pipeline.translation.chapter.generation.min_p==null?pipeline.translation.chapter.generation.min_p:pipeline.translation.chapter.generation.min_p,repeat_penalty:pipeline.translation.chapter.generation.repeat_penalty==null?pipeline.translation.chapter.generation.repeat_penalty:pipeline.translation.chapter.generation.repeat_penalty,frequency_penalty:pipeline.translation.chapter.generation.frequency_penalty==null?pipeline.translation.chapter.generation.frequency_penalty:pipeline.translation.chapter.generation.frequency_penalty,presence_penalty:pipeline.translation.chapter.generation.presence_penalty==null?pipeline.translation.chapter.generation.presence_penalty:pipeline.translation.chapter.generation.presence_penalty})})}),processor:({...pipeline.processor,"koharu-layout-rfdetr-seg-2xl":pipeline.processor["koharu-layout-rfdetr-seg-2xl"]==null?pipeline.processor["koharu-layout-rfdetr-seg-2xl"]:({...pipeline.processor["koharu-layout-rfdetr-seg-2xl"],text_threshold:pipeline.processor["koharu-layout-rfdetr-seg-2xl"].text_threshold==null?pipeline.processor["koharu-layout-rfdetr-seg-2xl"].text_threshold:pipeline.processor["koharu-layout-rfdetr-seg-2xl"].text_threshold,bubble_threshold:pipeline.processor["koharu-layout-rfdetr-seg-2xl"].bubble_threshold==null?pipeline.processor["koharu-layout-rfdetr-seg-2xl"].bubble_threshold:pipeline.processor["koharu-layout-rfdetr-seg-2xl"].bubble_threshold,panel_threshold:pipeline.processor["koharu-layout-rfdetr-seg-2xl"].panel_threshold==null?pipeline.processor["koharu-layout-rfdetr-seg-2xl"].panel_threshold:pipeline.processor["koharu-layout-rfdetr-seg-2xl"].panel_threshold})})}), providers, typesetting }).then((v) => (({...v,pipeline:({...v.pipeline,ocr:({...v.pipeline.ocr,api:({...v.pipeline.ocr.api,generation:({...v.pipeline.ocr.api.generation,temperature:v.pipeline.ocr.api.generation.temperature==null?v.pipeline.ocr.api.generation.temperature:v.pipeline.ocr.api.generation.temperature,top_p:v.pipeline.ocr.api.generation.top_p==null?v.pipeline.ocr.api.generation.top_p:v.pipeline.ocr.api.generation.top_p,min_p:v.pipeline.ocr.api.generation.min_p==null?v.pipeline.ocr.api.generation.min_p:v.pipeline.ocr.api.generation.min_p,repeat_penalty:v.pipeline.ocr.api.generation.repeat_penalty==null?v.pipeline.ocr.api.generation.repeat_penalty:v.pipeline.ocr.api.generation.repeat_penalty,frequency_penalty:v.pipeline.ocr.api.generation.frequency_penalty==null?v.pipeline.ocr.api.generation.frequency_penalty:v.pipeline.ocr.api.generation.frequency_penalty,presence_penalty:v.pipeline.ocr.api.generation.presence_penalty==null?v.pipeline.ocr.api.generation.presence_penalty:v.pipeline.ocr.api.generation.presence_penalty})})}),markup:({...v.pipeline.markup,generation:({...v.pipeline.markup.generation,temperature:v.pipeline.markup.generation.temperature==null?v.pipeline.markup.generation.temperature:v.pipeline.markup.generation.temperature,top_p:v.pipeline.markup.generation.top_p==null?v.pipeline.markup.generation.top_p:v.pipeline.markup.generation.top_p,min_p:v.pipeline.markup.generation.min_p==null?v.pipeline.markup.generation.min_p:v.pipeline.markup.generation.min_p,repeat_penalty:v.pipeline.markup.generation.repeat_penalty==null?v.pipeline.markup.generation.repeat_penalty:v.pipeline.markup.generation.repeat_penalty,frequency_penalty:v.pipeline.markup.generation.frequency_penalty==null?v.pipeline.markup.generation.frequency_penalty:v.pipeline.markup.generation.frequency_penalty,presence_penalty:v.pipeline.markup.generation.presence_penalty==null?v.pipeline.markup.generation.presence_penalty:v.pipeline.markup.generation.presence_penalty})}),translation:({...v.pipeline.translation,page:({...v.pipeline.translation.page,generation:({...v.pipeline.translation.page.generation,temperature:v.pipeline.translation.page.generation.temperature==null?v.pipeline.translation.page.generation.temperature:v.pipeline.translation.page.generation.temperature,top_p:v.pipeline.translation.page.generation.top_p==null?v.pipeline.translation.page.generation.top_p:v.pipeline.translation.page.generation.top_p,min_p:v.pipeline.translation.page.generation.min_p==null?v.pipeline.translation.page.generation.min_p:v.pipeline.translation.page.generation.min_p,repeat_penalty:v.pipeline.translation.page.generation.repeat_penalty==null?v.pipeline.translation.page.generation.repeat_penalty:v.pipeline.translation.page.generation.repeat_penalty,frequency_penalty:v.pipeline.translation.page.generation.frequency_penalty==null?v.pipeline.translation.page.generation.frequency_penalty:v.pipeline.translation.page.generation.frequency_penalty,presence_penalty:v.pipeline.translation.page.generation.presence_penalty==null?v.pipeline.translation.page.generation.presence_penalty:v.pipeline.translation.page.generation.presence_penalty})}),chapter:({...v.pipeline.translation.chapter,generation:({...v.pipeline.translation.chapter.generation,temperature:v.pipeline.translation.chapter.generation.temperature==null?v.pipeline.translation.chapter.generation.temperature:v.pipeline.translation.chapter.generation.temperature,top_p:v.pipeline.translation.chapter.generation.top_p==null?v.pipeline.translation.chapter.generation.top_p:v.pipeline.translation.chapter.generation.top_p,min_p:v.pipeline.translation.chapter.generation.min_p==null?v.pipeline.translation.chapter.generation.min_p:v.pipeline.translation.chapter.generation.min_p,repeat_penalty:v.pipeline.translation.chapter.generation.repeat_penalty==null?v.pipeline.translation.chapter.generation.repeat_penalty:v.pipeline.translation.chapter.generation.repeat_penalty,frequency_penalty:v.pipeline.translation.chapter.generation.frequency_penalty==null?v.pipeline.translation.chapter.generation.frequency_penalty:v.pipeline.translation.chapter.generation.frequency_penalty,presence_penalty:v.pipeline.translation.chapter.generation.presence_penalty==null?v.pipeline.translation.chapter.generation.presence_penalty:v.pipeline.translation.chapter.generation.presence_penalty})})}),processor:({...v.pipeline.processor,"koharu-layout-rfdetr-seg-2xl":v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"]==null?v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"]:({...v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"],text_threshold:v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].text_threshold==null?v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].text_threshold:v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].text_threshold,bubble_threshold:v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].bubble_threshold==null?v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].bubble_threshold:v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].bubble_threshold,panel_threshold:v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].panel_threshold==null?v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].panel_threshold:v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].panel_threshold})})})}) as typeof v)),
+	getPreferences: () => __TAURI_INVOKE<Preferences>("get_preferences").then((v) => (({...v,pipeline:({...v.pipeline,ocr:({...v.pipeline.ocr,api:({...v.pipeline.ocr.api,generation:({...v.pipeline.ocr.api.generation,temperature:v.pipeline.ocr.api.generation.temperature==null?v.pipeline.ocr.api.generation.temperature:v.pipeline.ocr.api.generation.temperature,top_p:v.pipeline.ocr.api.generation.top_p==null?v.pipeline.ocr.api.generation.top_p:v.pipeline.ocr.api.generation.top_p,min_p:v.pipeline.ocr.api.generation.min_p==null?v.pipeline.ocr.api.generation.min_p:v.pipeline.ocr.api.generation.min_p,repeat_penalty:v.pipeline.ocr.api.generation.repeat_penalty==null?v.pipeline.ocr.api.generation.repeat_penalty:v.pipeline.ocr.api.generation.repeat_penalty,frequency_penalty:v.pipeline.ocr.api.generation.frequency_penalty==null?v.pipeline.ocr.api.generation.frequency_penalty:v.pipeline.ocr.api.generation.frequency_penalty,presence_penalty:v.pipeline.ocr.api.generation.presence_penalty==null?v.pipeline.ocr.api.generation.presence_penalty:v.pipeline.ocr.api.generation.presence_penalty})})}),markup:({...v.pipeline.markup,generation:({...v.pipeline.markup.generation,temperature:v.pipeline.markup.generation.temperature==null?v.pipeline.markup.generation.temperature:v.pipeline.markup.generation.temperature,top_p:v.pipeline.markup.generation.top_p==null?v.pipeline.markup.generation.top_p:v.pipeline.markup.generation.top_p,min_p:v.pipeline.markup.generation.min_p==null?v.pipeline.markup.generation.min_p:v.pipeline.markup.generation.min_p,repeat_penalty:v.pipeline.markup.generation.repeat_penalty==null?v.pipeline.markup.generation.repeat_penalty:v.pipeline.markup.generation.repeat_penalty,frequency_penalty:v.pipeline.markup.generation.frequency_penalty==null?v.pipeline.markup.generation.frequency_penalty:v.pipeline.markup.generation.frequency_penalty,presence_penalty:v.pipeline.markup.generation.presence_penalty==null?v.pipeline.markup.generation.presence_penalty:v.pipeline.markup.generation.presence_penalty})}),translation:({...v.pipeline.translation,page:({...v.pipeline.translation.page,generation:({...v.pipeline.translation.page.generation,temperature:v.pipeline.translation.page.generation.temperature==null?v.pipeline.translation.page.generation.temperature:v.pipeline.translation.page.generation.temperature,top_p:v.pipeline.translation.page.generation.top_p==null?v.pipeline.translation.page.generation.top_p:v.pipeline.translation.page.generation.top_p,min_p:v.pipeline.translation.page.generation.min_p==null?v.pipeline.translation.page.generation.min_p:v.pipeline.translation.page.generation.min_p,repeat_penalty:v.pipeline.translation.page.generation.repeat_penalty==null?v.pipeline.translation.page.generation.repeat_penalty:v.pipeline.translation.page.generation.repeat_penalty,frequency_penalty:v.pipeline.translation.page.generation.frequency_penalty==null?v.pipeline.translation.page.generation.frequency_penalty:v.pipeline.translation.page.generation.frequency_penalty,presence_penalty:v.pipeline.translation.page.generation.presence_penalty==null?v.pipeline.translation.page.generation.presence_penalty:v.pipeline.translation.page.generation.presence_penalty})}),chapter:({...v.pipeline.translation.chapter,generation:({...v.pipeline.translation.chapter.generation,temperature:v.pipeline.translation.chapter.generation.temperature==null?v.pipeline.translation.chapter.generation.temperature:v.pipeline.translation.chapter.generation.temperature,top_p:v.pipeline.translation.chapter.generation.top_p==null?v.pipeline.translation.chapter.generation.top_p:v.pipeline.translation.chapter.generation.top_p,min_p:v.pipeline.translation.chapter.generation.min_p==null?v.pipeline.translation.chapter.generation.min_p:v.pipeline.translation.chapter.generation.min_p,repeat_penalty:v.pipeline.translation.chapter.generation.repeat_penalty==null?v.pipeline.translation.chapter.generation.repeat_penalty:v.pipeline.translation.chapter.generation.repeat_penalty,frequency_penalty:v.pipeline.translation.chapter.generation.frequency_penalty==null?v.pipeline.translation.chapter.generation.frequency_penalty:v.pipeline.translation.chapter.generation.frequency_penalty,presence_penalty:v.pipeline.translation.chapter.generation.presence_penalty==null?v.pipeline.translation.chapter.generation.presence_penalty:v.pipeline.translation.chapter.generation.presence_penalty})})}),processor:({...v.pipeline.processor,"koharu-layout-rfdetr-seg-2xl":v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"]==null?v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"]:({...v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"],text_threshold:v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].text_threshold==null?v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].text_threshold:v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].text_threshold,bubble_threshold:v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].bubble_threshold==null?v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].bubble_threshold:v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].bubble_threshold,panel_threshold:v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].panel_threshold==null?v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].panel_threshold:v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].panel_threshold})})})}) as typeof v)),
 	getTranslationModels: () => __TAURI_INVOKE<Model[]>("get_translation_models"),
 	getInpaintingModels: () => __TAURI_INVOKE<InpaintingModelChoice[]>("get_inpainting_models"),
 	checkUpstreamUpdate: () => __TAURI_INVOKE<{
@@ -87,7 +99,7 @@ export const commands = {
 	prepareCanvasPage: (page: EntityId) => __TAURI_INVOKE<{
 	revision: Revision,
 	page: Page,
-} | null>("prepare_canvas_page", { page }).then((v) => (v==null?v:({...v,page:({...v.page,layers:v.page.layers.map(i=>i),regions:v.page.regions.map(i=>({...i,geometry:({...i.geometry,points:i.geometry.points.map(i=>i)})}))})}) as typeof v)),
+} | null>("prepare_canvas_page", { page }).then((v) => (v==null?v:({...v,page:({...v.page,layers:v.page.layers.map(i=>i),regions:v.page.regions.map(i=>({...i,geometry:({...i.geometry,points:i.geometry.points.map(i=>i)})})),unboxed_text:v.page.unboxed_text.map(i=>i)})}) as typeof v)),
 	getCanvasPageManifest: (page: EntityId, revision: Revision) => __TAURI_INVOKE<CanvasBytes>("get_canvas_page_manifest", { page, revision }),
 	getCanvasPageResource: (page: EntityId, revision: Revision, resource: string) => __TAURI_INVOKE<CanvasBytes>("get_canvas_page_resource", { page, revision, resource }),
 	addPointText: (point: Point) => __TAURI_INVOKE<LayerCommit>("add_point_text", { point }),
@@ -160,6 +172,47 @@ export type CanvasState = {
 	generation: number,
 	size: [number, number],
 	element_frames: TransformFrame[],
+	/**  Text the renderer could not fit at a readable size on the presented page. */
+	text_fit_warnings: TextFitWarning[],
+};
+
+/**
+ *  What the final chapter check flags before export. Export is not blocked;
+ *  the lists only point at what still needs a look.
+ */
+export type ChapterCheck = {
+	texts: ChapterIssue[],
+	unboxed_text: UnboxedTextIssue[],
+};
+
+/**  A text block the final chapter check flags. */
+export type ChapterIssue = {
+	page: EntityId,
+	element: EntityId,
+	/**  The translation, or the source text when there is none, to name the block. */
+	text: string,
+	translation: TranslationIssue | null,
+	fit: TextFitWarningKind | null,
+	/**  The source text is a local OCR draft no API read has confirmed yet. */
+	ocr_unverified: boolean,
+};
+
+export type Character = {
+	id: CharacterId,
+	name: string,
+	gender: Gender,
+	notes: string,
+};
+
+/**  A project-wide identifier of a character in the [`CharacterList`]. */
+export type CharacterId = string;
+
+/**  A character to save. A new character has no id yet; native code assigns it. */
+export type CharacterInput = {
+	id: CharacterId | null,
+	name: string,
+	gender: Gender,
+	notes: string,
 };
 
 export type ClaudeConfig = Record<string, never>;
@@ -272,6 +325,8 @@ export type Frame = {
 
 export type GeminiConfig = Record<string, never>;
 
+export type Gender = "male" | "female" | "unknown";
+
 export type GenerationConfig = {
 	temperature?: number | null,
 	top_k?: number | null,
@@ -355,6 +410,15 @@ export type JobId = string;
 
 export type JobState = "running" | "finished" | "failed" | "stopped";
 
+export type KindFonts = {
+	speech?: string | null,
+	thought?: string | null,
+	narration?: string | null,
+	sound_effect?: string | null,
+	sign?: string | null,
+	aside?: string | null,
+};
+
 export type KoharuLayoutRFDetrSeg2XLConfig = {
 	text_threshold?: number | null,
 	bubble_threshold?: number | null,
@@ -423,6 +487,12 @@ export type ModelSelection = {
 export type OcrConfig = {
 	method: OcrMethod,
 	local_model: OcrModel,
+	/**
+	 *  In the hybrid method, read every region with a second local model as
+	 *  well and send only regions where the two disagree to the API. When off,
+	 *  every region goes to the API.
+	 */
+	cross_check?: boolean,
 	api: ApiOcrConfig,
 };
 
@@ -444,7 +514,9 @@ export type OpenAiConfig = Record<string, never>;
 
 export type OpenRouterConfig = Record<string, never>;
 
-export type Operation = { operation: "full" } | { operation: "through"; stage: Stage } | { operation: "only"; stage: Stage } | { operation: "stages"; stages: Stage[] };
+export type Operation = { operation: "full" } | { operation: "through"; stage: Stage } | { operation: "only"; stage: Stage } | { operation: "stages"; stages: Stage[] } | 
+/**  Rewrite the generated translations of the selected texts shorter. */
+{ operation: "shorten" };
 
 export type Page = {
 	id: EntityId,
@@ -452,9 +524,23 @@ export type Page = {
 	size: PageSize,
 	layers: Layer[],
 	regions: AnalysisRegion[],
+	/**  Lettering scene markup saw outside every text region, still unresolved. */
+	unboxed_text: UnboxedText[],
 };
 
 export type PageImportSource = "files" | "folder";
+
+export type PageMarkupMissing = 
+/**  The model declined the request. */
+"refused" | 
+/**  The provider's content filter stopped the answer. */
+"content-filter" | 
+/**  The model answered with no content. */
+"empty" | 
+/**  The answer broke the markup contract and was discarded whole. */
+"invalid" | 
+/**  The request itself failed, for example on a network or provider error. */
+"failed";
 
 export type PageSelection = {
 	project: ProjectInfo,
@@ -473,6 +559,8 @@ export type PageSummary = {
 	source_asset: string | null,
 	layer_count: number,
 	warning: PageWarning | null,
+	/**  Why scene markup could not label this page, when it tried and failed. */
+	markup_missing: PageMarkupMissing | null,
 };
 
 export type PageWarning = {
@@ -489,6 +577,7 @@ export type PaintBrush = {
 export type PipelineConfig = {
 	detection: DetectionModel,
 	ocr: OcrConfig,
+	markup: SceneMarkupConfig,
 	translation: TranslationConfig,
 	inpainting: InpaintingConfig,
 	/**
@@ -544,6 +633,7 @@ export type ProviderConfig = { provider: "local"; settings: LocalConfig } | { pr
 export type ProviderPreference = {
 	name: string,
 	supports_ocr: boolean,
+	supports_markup: boolean,
 	supports_translation: boolean,
 	config: ProviderConfig,
 	credential: CredentialInput | null,
@@ -584,6 +674,16 @@ export type RoremMixedConfig = {
 
 export type RunId = string;
 
+/**
+ *  The scene markup stage, which labels each text's kind, speaker and
+ *  continuation for translation to read.
+ */
+export type SceneMarkupConfig = {
+	model: ModelSelection,
+	generation: GenerationConfig,
+	instructions: string | null,
+};
+
 export type Scope = { scope: "project" } | { scope: "pages"; value: EntityId[] } | { scope: "region"; value: {
 	page: EntityId,
 	bounds: Bounds,
@@ -594,7 +694,13 @@ export type SourceText = {
 	language: string | null,
 };
 
-export type Stage = "detection" | "ocr" | "translation" | "inpainting";
+/**
+ *  What a piece of text is in the story, independent from its detected role
+ *  and from how it is presented.
+ */
+export type SpeechKind = "speech" | "thought" | "narration" | "sound-effect" | "sign" | "aside";
+
+export type Stage = "detection" | "ocr" | "markup" | "translation" | "inpainting";
 
 export type StageTarget = { target: "page"; value: EntityId } | { target: "chapter" };
 
@@ -639,11 +745,39 @@ export type TextContent = {
 	id: EntityId,
 	source: SourceText | null,
 	translation: Translation | null,
+	/**  Present only while the review still applies to `translation`. */
+	translation_review: TranslationReview | null,
+	/**  The source text is a local OCR draft no API read has confirmed yet. */
+	ocr_unverified: boolean,
+	markup: TextMarkup | null,
 	role: string | null,
 	source_region: EntityId | null,
 };
 
+export type TextFitWarning = {
+	element: EntityId,
+	kind: TextFitWarningKind,
+};
+
+export type TextFitWarningKind = 
+/**  The text does not fit its area even at the smallest size tried. */
+"overflow" | 
+/**  The text fits only below the readable minimum size. */
+"below_readable_size" | 
+/**  The text barely stands out from the image under it. */
+"low_contrast";
+
 export type TextLayoutKind = "point" | "paragraph";
+
+/**
+ *  Scene markup of a text: its kind and the speaker's character id. A speaker
+ *  the character list no longer contains is reported as no speaker.
+ */
+export type TextMarkup = {
+	kind: SpeechKind,
+	speaker: CharacterId | null,
+	user: boolean,
+};
 
 export type TextTransferMode = "copy" | "move";
 
@@ -663,6 +797,8 @@ export type TransformFrame = {
 export type Translation = {
 	text: string,
 	language: string | null,
+	/**  Written by the pipeline rather than typed by the user. */
+	generated: boolean,
 };
 
 export type TranslationConfig = {
@@ -673,6 +809,12 @@ export type TranslationConfig = {
 	chapter: TranslationProfile,
 };
 
+export type TranslationIssue = 
+/**  Source text was recognized but has no translation. */
+"empty" | 
+/**  The translation still holds Japanese characters. */
+"japanese_text";
+
 export type TranslationProfile = {
 	model: ModelSelection,
 	generation: GenerationConfig,
@@ -680,10 +822,24 @@ export type TranslationProfile = {
 	unit_policy?: TranslationUnitPolicy,
 };
 
+export type TranslationReview = {
+	reason: TranslationReviewReason,
+	reference: string | null,
+};
+
+export type TranslationReviewReason = 
+/**  The source swears or insults, and the translation reads milder. */
+"softened-profanity";
+
 export type TranslationUnitPolicy = "page_only" | "adaptive_v1";
 
 export type TypesettingConfig = {
 	font_families?: string[],
+	/**
+	 *  Font used ahead of `font_families` for text of one scene markup kind.
+	 *  A layer's own preferred font still wins.
+	 */
+	kind_fonts?: KindFonts,
 };
 
 export type Typography = {
@@ -702,6 +858,24 @@ export type Typography = {
 export type TypographyUpdate = {
 	layer: EntityId,
 	typography: Typography,
+};
+
+/**
+ *  Lettering markup saw outside every text region, as an axis-aligned box in
+ *  page units. It is a review flag, not detection geometry and not a layer.
+ */
+export type UnboxedText = {
+	x: number,
+	y: number,
+	width: number,
+	height: number,
+	kind: SpeechKind,
+};
+
+/**  A page where scene markup saw lettering outside every text region. */
+export type UnboxedTextIssue = {
+	page: EntityId,
+	count: number,
 };
 
 export type UpstreamUpdate = {

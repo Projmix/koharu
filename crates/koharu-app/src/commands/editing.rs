@@ -9,7 +9,10 @@ use super::{
     ChannelExt as _, Error,
     canvas::{CanvasChannel, Point},
     processing::Processing,
-    project::{CurrentProject, Page, Project, TextClipboardPayload, Typography},
+    project::{
+        CharacterInput, CurrentProject, Page, Project, ProjectLibrary, TextClipboardPayload,
+        Typography,
+    },
 };
 async fn synchronize_canvas(
     desktop: &Desktop,
@@ -239,6 +242,96 @@ pub(crate) async fn set_translation(
 
 #[tauri::command]
 #[specta::specta]
+pub(crate) async fn set_speech_markup(
+    layer: EntityId,
+    kind: koharu_scene::SpeechKind,
+    speaker: Option<koharu_scene::CharacterId>,
+    desktop: State<'_, Desktop>,
+    project: State<'_, CurrentProject>,
+    canvas_channel: State<'_, CanvasChannel>,
+) -> Result<(), Error> {
+    let (commit, page) = {
+        let mut project = project.project.lock().await;
+        let project = project.as_mut().context("no project is open")?;
+        let commit = project.set_speech_markup(layer, kind, speaker).await?;
+        project.record_commit(&commit);
+        (commit, project.active_page())
+    };
+    let canvas = synchronize_canvas(&desktop, &commit, page).await?;
+    canvas_channel.channel.publish(canvas);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn dismiss_unboxed_text(
+    page: EntityId,
+    flag: koharu_scene::UnboxedText,
+    desktop: State<'_, Desktop>,
+    project: State<'_, CurrentProject>,
+    canvas_channel: State<'_, CanvasChannel>,
+) -> Result<(), Error> {
+    let (commit, active) = {
+        let mut project = project.project.lock().await;
+        let project = project.as_mut().context("no project is open")?;
+        let commit = project.dismiss_unboxed_text(page, flag).await?;
+        project.record_commit(&commit);
+        (commit, project.active_page())
+    };
+    let canvas = synchronize_canvas(&desktop, &commit, active).await?;
+    canvas_channel.channel.publish(canvas);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn set_characters(
+    characters: Vec<CharacterInput>,
+    desktop: State<'_, Desktop>,
+    project: State<'_, CurrentProject>,
+    canvas_channel: State<'_, CanvasChannel>,
+) -> Result<(), Error> {
+    let (commit, page) = {
+        let mut project = project.project.lock().await;
+        let project = project.as_mut().context("no project is open")?;
+        let commit = project.set_characters(characters).await?;
+        project.record_commit(&commit);
+        (commit, project.active_page())
+    };
+    let canvas = synchronize_canvas(&desktop, &commit, page).await?;
+    canvas_channel.channel.publish(canvas);
+    Ok(())
+}
+
+/// Add another project's characters to the open project. Returns how many
+/// were new.
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn import_characters(
+    source: String,
+    desktop: State<'_, Desktop>,
+    library: State<'_, ProjectLibrary>,
+    project: State<'_, CurrentProject>,
+    canvas_channel: State<'_, CanvasChannel>,
+) -> Result<u32, Error> {
+    let (commit, page, added) = {
+        let mut project = project.project.lock().await;
+        let project = project.as_mut().context("no project is open")?;
+        if project.name == source {
+            return Err(anyhow::anyhow!("a project cannot import its own characters").into());
+        }
+        let imported = library.characters(&source).await?;
+        let (commit, added) = project.import_characters(imported).await?;
+        project.record_commit(&commit);
+        (commit, project.active_page(), added)
+    };
+    let canvas = synchronize_canvas(&desktop, &commit, page).await?;
+    canvas_channel.channel.publish(canvas);
+    Ok(u32::try_from(added).context("too many characters")?)
+}
+
+#[tauri::command]
+#[specta::specta]
 pub(crate) async fn set_typography(
     updates: Vec<TypographyUpdate>,
     desktop: State<'_, Desktop>,
@@ -248,7 +341,9 @@ pub(crate) async fn set_typography(
     let (commit, page) = {
         let mut project = project.project.lock().await;
         let project = project.as_mut().context("no project is open")?;
-        let commit = project.set_typography(updates).await?;
+        let commit = project
+            .set_typography(updates, |layer| desktop.presented_font_size(layer))
+            .await?;
         project.record_commit(&commit);
         (commit, project.active_page())
     };

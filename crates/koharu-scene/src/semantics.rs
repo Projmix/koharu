@@ -64,6 +64,14 @@ impl RelationSpec for FlowsIn {
 }
 impl FunctionalRelation for FlowsIn {}
 
+/// Semantic text content continues the sentence of an earlier text content,
+/// such as one line split across two balloons or across a page turn.
+pub struct Continues;
+impl RelationSpec for Continues {
+    const KIND: &'static str = "dev.koharu.relation.continues";
+}
+impl FunctionalRelation for Continues {}
+
 /// A source-analysis region is spatially contained by another region.
 pub struct Inside;
 impl RelationSpec for Inside {

@@ -9,7 +9,7 @@ import type {
 } from '@koharu/bridge/protocol'
 
 export type PipelineModel = DetectionModel | LocalInpaintingModel
-export type ModelStage = Exclude<Stage, 'ocr' | 'translation'>
+export type ModelStage = Exclude<Stage, 'ocr' | 'markup' | 'translation'>
 export type ModelName = PipelineModel['model']
 
 export const localOcrModels = ['paddleocr-vl-1.6', 'manga-ocr', 'baberu-ocr', 'hayai-ocr'] as const

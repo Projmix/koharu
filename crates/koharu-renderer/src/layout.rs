@@ -9,7 +9,7 @@ use hypher::Lang;
 use icu_normalizer::ComposingNormalizerBorrowed;
 use icu_properties::{
     CodePointMapData,
-    props::{GeneralCategory, GeneralCategoryGroup},
+    props::{GeneralCategory, GeneralCategoryGroup, Script},
 };
 use skrifa::{MetadataProvider, instance::Size};
 
@@ -122,6 +122,7 @@ struct ShapedSegment<'a> {
     advance: f32,
     trailing_advance: f32,
     break_penalty: f32,
+    binds_to_next: bool,
     break_suffix: Option<ShapedBreakSuffix<'a>>,
 }
 
@@ -132,6 +133,9 @@ struct LineBreakMeasure {
     break_suffix_advance: f32,
     break_penalty: f32,
     is_mandatory: bool,
+    /// A one-letter Cyrillic word such as «в» or «я» followed by a real word. It may
+    /// stand alone on a line but never ends a line that has other words.
+    binds_to_next: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -191,21 +195,85 @@ pub struct TextLayout<'a> {
     cjk_punctuation_layout: bool,
 }
 
+/// Fork divergence from upstream, which split a word only once whole words
+/// were pinned to the readability floor: on the owner's chapter that left short
+/// lines in narrow balloons at 55-65% of the hand-set size, where he
+/// hyphenated instead. Above the floor, one split word is accepted when it buys
+/// at least this much size over whole words. The owner splits a word in 43 of
+/// 140 balloons; 1.15 agrees with his choice most often (22 balloons differ,
+/// against 25 at 1.25 and 26 at 1.1) and reproduces his narrow-oval splits such
+/// as «кося- / чат» and «изме- / нится».
+const HYPHENATION_SIZE_GAIN: f32 = 1.15;
+
+/// See `TextLayout::balance_comic_lines`.
+const SHORT_INNER_LINE_FACTOR: f32 = 0.9;
+const BALANCE_MIN_SIZE_RATIO: f32 = 0.8;
+const BALANCE_PROBE_STEP: f32 = 0.5;
+const SHORT_LINE_MAX_LETTERS: usize = 2;
+
+/// Lines other than the first and last that hold at most `SHORT_LINE_MAX_LETTERS`
+/// letters and end a word: «и», or the «то» a break leaves after «том-».
+fn short_inner_lines(text: &str, layout: &LayoutRun<'_>) -> usize {
+    let count = layout.lines.len();
+    if count < 3 {
+        return 0;
+    }
+    layout.lines[1..count - 1]
+        .iter()
+        .filter(|line| {
+            let ends_word = text[line.range.end..]
+                .chars()
+                .next()
+                .is_none_or(char::is_whitespace)
+                && !text[line.range.clone()].trim_end().ends_with('-');
+            ends_word
+                && text[line.range.clone()]
+                    .chars()
+                    .filter(|character| character.is_alphanumeric())
+                    .count()
+                    <= SHORT_LINE_MAX_LETTERS
+        })
+        .count()
+}
+
+/// Words a layout breaks across lines, not counting breaks after a hyphen
+/// already in the text.
+fn layout_split_words(text: &str, layout: &LayoutRun<'_>) -> usize {
+    layout
+        .lines
+        .iter()
+        .filter(|line| {
+            let (before, after) = text.split_at(line.range.end.min(text.len()));
+            before
+                .chars()
+                .next_back()
+                .is_some_and(char::is_alphanumeric)
+                && after.chars().next().is_some_and(char::is_alphanumeric)
+        })
+        .count()
+}
+
 fn largest_fitting_font_size<T>(
     minimum: f32,
     maximum: f32,
     mut layout_at: impl FnMut(f32) -> Result<T>,
     fits: impl Fn(&T) -> bool,
 ) -> Result<Option<T>> {
-    const PROBES: usize = 8;
+    // Fitting is not monotonic in a balloon: a size that reflows into one more
+    // line of whole words can fit between two sizes that do not. Probing every
+    // half pixel keeps such windows from being skipped, which would otherwise
+    // push the text to the floor and into mid-word hyphenation.
+    const PROBE_STEP: f32 = 0.5;
+    const MIN_PROBES: usize = 8;
     if maximum - minimum <= f32::EPSILON {
         let candidate = layout_at(maximum)?;
         return Ok(fits(&candidate).then_some(candidate));
     }
-    let step = (maximum - minimum) / PROBES as f32;
+    let probes = (((maximum - minimum) / PROBE_STEP).ceil() as usize).max(MIN_PROBES);
+    let step = (maximum - minimum) / probes as f32;
     let mut larger_non_fit = None;
-    for probe in 0..=PROBES {
-        let size = if probe == PROBES {
+    for probe in 0..=probes {
+        let size = if probe == probes {
             minimum
         } else {
             maximum - step * probe as f32
@@ -384,63 +452,107 @@ impl<'a> TextLayout<'a> {
                 && layout.height <= max_height + f32::EPSILON
         };
 
+        if self.hyphenation_policy == HyphenationPolicy::LastResort {
+            let mut unhyphenated = self.clone();
+            unhyphenated.hyphenation_policy = HyphenationPolicy::Disabled;
+            let clean = unhyphenated.largest_fitting(text, minimum, maximum, fits)?;
+            if let Some(clean) = clean {
+                if clean.font_size.floor() > minimum.floor() {
+                    // Fork divergence: see `HYPHENATION_SIZE_GAIN`.
+                    let single_split = |layout: &LayoutRun<'_>| {
+                        fits(layout) && layout_split_words(text, layout) <= 1
+                    };
+                    let target = clean.font_size * HYPHENATION_SIZE_GAIN;
+                    return match self.largest_fitting(
+                        text,
+                        clean.font_size,
+                        maximum,
+                        single_split,
+                    )? {
+                        Some(hyphenated) if hyphenated.font_size >= target => Ok(hyphenated),
+                        _ => unhyphenated.balance_comic_lines(text, clean, minimum, fits),
+                    };
+                }
+                // Avoiding a word break is no longer useful once it pins the text to
+                // the configured readability floor. Compare raster-size buckets so
+                // hyphenation must recover a visible pixel, not a tuned percentage.
+                return Ok(match self.largest_fitting(text, minimum, maximum, fits)? {
+                    Some(hyphenated) if hyphenated.font_size.floor() > clean.font_size.floor() => {
+                        hyphenated
+                    }
+                    _ => clean,
+                });
+            }
+            if let Some(hyphenated) = self.largest_fitting(text, minimum, maximum, fits)? {
+                return Ok(hyphenated);
+            }
+        } else if let Some(best) = self.largest_fitting(text, minimum, maximum, fits)? {
+            return Ok(best);
+        }
+        self.run_with_size(text, minimum)
+    }
+
+    /// Fork divergence: the largest fitting size in a narrow balloon often stacks
+    /// one short word per line («В / том- / то / и / дело.»), where the owner sets a
+    /// slightly smaller size in fewer, even lines («В том-то / и дело.»). A short
+    /// line between two others costs `SHORT_INNER_LINE_FACTOR` of the size; the top
+    /// and bottom lines of a balloon are narrow anyway and stay free.
+    fn balance_comic_lines(
+        &self,
+        text: &str,
+        largest: LayoutRun<'a>,
+        minimum: f32,
+        fits: impl Fn(&LayoutRun<'a>) -> bool,
+    ) -> Result<LayoutRun<'a>> {
+        if self.comic_balloon.is_none() {
+            return Ok(largest);
+        }
+        let score = |layout: &LayoutRun<'_>| {
+            layout.font_size * SHORT_INNER_LINE_FACTOR.powi(short_inner_lines(text, layout) as i32)
+        };
+        let lowest = (largest.font_size * BALANCE_MIN_SIZE_RATIO).max(minimum);
+        let mut best_score = score(&largest);
+        let mut best = largest;
+        let mut size = best.font_size - BALANCE_PROBE_STEP;
+        while size >= lowest && size > best_score {
+            let candidate = self.run_with_size(text, size)?;
+            let candidate_score = score(&candidate);
+            if fits(&candidate) && candidate_score > best_score {
+                best_score = candidate_score;
+                best = candidate;
+            }
+            size -= BALANCE_PROBE_STEP;
+        }
+        Ok(best)
+    }
+
+    fn largest_fitting(
+        &self,
+        text: &str,
+        minimum: f32,
+        maximum: f32,
+        fits: impl Fn(&LayoutRun<'a>) -> bool,
+    ) -> Result<Option<LayoutRun<'a>>> {
         if self.comic_balloon.is_some() {
             // A balloon's usable width changes when the text reflows to a different
             // number of lines, so a smaller font can fail even though a larger one
             // fits. Search from largest to smallest instead of assuming monotonicity.
-            if self.hyphenation_policy == HyphenationPolicy::LastResort {
-                let mut unhyphenated = self.clone();
-                unhyphenated.hyphenation_policy = HyphenationPolicy::Disabled;
-                let clean = largest_fitting_font_size(
-                    minimum,
-                    maximum,
-                    |size| unhyphenated.run_with_size(text, size),
-                    fits,
-                )?;
-                // Avoiding a word break is no longer useful once it pins the text to
-                // the configured readability floor. Compare raster-size buckets so
-                // hyphenation must recover a visible pixel, not a tuned percentage.
-                if clean
-                    .as_ref()
-                    .is_some_and(|best| best.font_size.floor() > minimum.floor())
-                {
-                    return Ok(clean.unwrap());
-                }
-                let hyphenated = largest_fitting_font_size(
-                    minimum,
-                    maximum,
-                    |size| self.run_with_size(text, size),
-                    fits,
-                )?;
-                match (clean, hyphenated) {
-                    (Some(clean), Some(hyphenated))
-                        if hyphenated.font_size.floor() > clean.font_size.floor() =>
-                    {
-                        return Ok(hyphenated);
-                    }
-                    (Some(clean), _) => return Ok(clean),
-                    (None, Some(hyphenated)) => return Ok(hyphenated),
-                    (None, None) => {}
-                }
-            } else if let Some(best) = largest_fitting_font_size(
+            return largest_fitting_font_size(
                 minimum,
                 maximum,
                 |size| self.run_with_size(text, size),
                 fits,
-            )? {
-                return Ok(best);
-            }
-            return self.run_with_size(text, minimum);
+            );
         }
 
         let maximum_layout = self.run_with_size(text, maximum)?;
         if fits(&maximum_layout) {
-            return Ok(maximum_layout);
+            return Ok(Some(maximum_layout));
         }
 
         let mut best = self.run_with_size(text, minimum)?;
         if !fits(&best) {
-            return Ok(best);
+            return Ok(None);
         }
 
         let mut low = minimum;
@@ -457,7 +569,7 @@ impl<'a> TextLayout<'a> {
                 high = size;
             }
         }
-        Ok(best)
+        Ok(Some(best))
     }
 
     fn run_with_size(&self, text: &str, font_size: f32) -> Result<LayoutRun<'a>> {
@@ -643,6 +755,8 @@ impl<'a> TextLayout<'a> {
                     }
                 })
                 .sum();
+            let binds_to_next = !segment.is_mandatory
+                && binds_to_next_word(text, segment.range.clone(), segment.next_offset);
             shaped_segments.push(ShapedSegment {
                 range: segment.range,
                 visible_end,
@@ -656,6 +770,7 @@ impl<'a> TextLayout<'a> {
                 } else {
                     0.0
                 },
+                binds_to_next,
                 break_suffix: segment_break_suffix,
             });
         }
@@ -999,6 +1114,7 @@ impl<'a> TextLayout<'a> {
                     .map_or(0.0, |suffix| suffix.advance),
                 break_penalty: segment.break_penalty,
                 is_mandatory: segment.is_mandatory,
+                binds_to_next: segment.binds_to_next,
             })
             .collect::<Vec<_>>();
         let result = if let Some(balloon) = self.comic_balloon.as_ref() {
@@ -1472,7 +1588,9 @@ fn optimal_uniform_line_breaks(
             };
             let line_advance = advance - segments[end - 1].trailing_advance + suffix_advance;
             let hyphenated_break = end < len && suffix_advance > 0.0;
-            if hyphenated_break && !allow_hyphenation {
+            if hyphenated_break && !allow_hyphenation
+                || strands_one_letter_word(segments, start, end)
+            {
                 continue;
             }
             let mut cost = dp[start] + line_break_badness(line_advance, max_extent);
@@ -1603,12 +1721,7 @@ fn comic_line_breaks(
                         Some(result)
                     })
             })
-            .min_by(|left, right| {
-                left.overflowed
-                    .cmp(&right.overflowed)
-                    .then_with(|| left.profiles.len().cmp(&right.profiles.len()))
-                    .then_with(|| left.cost.total_cmp(&right.cost))
-            })
+            .min_by(|left, right| rank_comic_breaks(segments, left, right))
     };
 
     if policy == HyphenationPolicy::LastResort
@@ -1659,7 +1772,9 @@ fn exact_profiled_line_breaks(
                     0.0
                 };
                 let hyphenated_break = end < len && suffix > 0.0;
-                if hyphenated_break && !allow_hyphenation {
+                if hyphenated_break && !allow_hyphenation
+                    || strands_one_letter_word(segments, start, end)
+                {
                     continue;
                 }
                 let line_advance = advance - segments[end - 1].trailing_advance + suffix;
@@ -1714,6 +1829,64 @@ fn exact_profiled_line_breaks(
     })
 }
 
+/// Orders balloon line-break candidates, best first. A candidate that fits wins and,
+/// among those, fewer lines. When nothing fits, keep words whole first and then spill
+/// as little as possible: extra lines read better than a word split across lines
+/// that still overflows.
+fn rank_comic_breaks(
+    segments: &[LineBreakMeasure],
+    left: &LineBreakResult,
+    right: &LineBreakResult,
+) -> std::cmp::Ordering {
+    left.overflowed.cmp(&right.overflowed).then_with(|| {
+        if left.overflowed {
+            let excess = |result: &LineBreakResult| {
+                breaks_excess(segments, &result.breaks, &result.profiles).ceil()
+            };
+            split_words(segments, &left.breaks)
+                .cmp(&split_words(segments, &right.breaks))
+                .then_with(|| excess(left).total_cmp(&excess(right)))
+                .then_with(|| left.cost.total_cmp(&right.cost))
+        } else {
+            left.profiles
+                .len()
+                .cmp(&right.profiles.len())
+                .then_with(|| left.cost.total_cmp(&right.cost))
+        }
+    })
+}
+
+/// Total width by which lines exceed their profiles.
+fn breaks_excess(segments: &[LineBreakMeasure], breaks: &[usize], profiles: &[LineProfile]) -> f32 {
+    let mut start = 0usize;
+    let mut excess = 0.0;
+    for (line, end) in breaks.iter().copied().enumerate() {
+        let mut advance = segments[start..end]
+            .iter()
+            .map(|segment| segment.advance)
+            .sum::<f32>();
+        advance -= segments[end - 1].trailing_advance;
+        if end < segments.len() {
+            advance += segments[end - 1].break_suffix_advance;
+        }
+        let width = profiles
+            .get(line)
+            .or_else(|| profiles.first())
+            .map_or(0.0, |profile| profile.width);
+        excess += (advance - width).max(0.0);
+        start = end;
+    }
+    excess
+}
+
+/// Line breaks that fall inside a word rather than at a space, hyphenated or not.
+fn split_words(segments: &[LineBreakMeasure], breaks: &[usize]) -> usize {
+    breaks
+        .iter()
+        .filter(|&&end| end < segments.len() && segments[end - 1].trailing_advance <= 0.0)
+        .count()
+}
+
 fn breaks_overflow(segments: &[LineBreakMeasure], breaks: &[usize], widths: &[f32]) -> bool {
     let mut start = 0usize;
     for (line, end) in breaks.iter().copied().enumerate() {
@@ -1741,8 +1914,12 @@ fn breaks_overflow(segments: &[LineBreakMeasure], breaks: &[usize], widths: &[f3
 }
 
 impl ComicBalloon {
+    // Deliberate divergence: a full line of ink height as air undersized
+    // balloon text against hand-set sizes (median 0.77 on a 110-balloon
+    // chapter); a quarter of it matches them (median 0.98) without leaving the
+    // contour.
     fn air(&self, ink_height: f32) -> f32 {
-        self.minimum_air.max(ink_height)
+        self.minimum_air.max(ink_height * 0.25)
     }
 
     fn inline_extent(&self, writing_mode: WritingMode, air_x: f32, air_y: f32) -> f32 {
@@ -2001,6 +2178,16 @@ fn comic_break_penalty(text: &str, boundary: usize) -> f32 {
         Some(',' | ';' | ':' | '—' | '–') => return 20.0,
         _ => {}
     }
+    // Russian typesetting keeps a particle such as «-то» or «-ка» with its word: a
+    // break at a hyphen must not leave a tail of one or two letters.
+    if before.len() == boundary && before.ends_with('-') {
+        let tail = after
+            .find(|character: char| !character.is_alphabetic())
+            .map_or(after, |end| &after[..end]);
+        if tail.chars().count() <= 2 && !after[tail.len()..].starts_with('-') {
+            return 1_000.0;
+        }
+    }
     let next_word = after
         .split(|character: char| !character.is_ascii_alphabetic())
         .next()
@@ -2023,6 +2210,36 @@ fn comic_break_penalty(text: &str, boundary: usize) -> f32 {
     } else {
         100.0
     }
+}
+
+/// Fork divergence, following the Russian typesetting rule: a line that has other
+/// words never ends on a one-letter word. Koly's pages leave such a word alone on its
+/// own line in a narrow balloon, so that line stays allowed.
+fn strands_one_letter_word(segments: &[LineBreakMeasure], start: usize, end: usize) -> bool {
+    end < segments.len() && end - start > 1 && segments[end - 1].binds_to_next
+}
+
+/// Spaced-out letters («Х л ю п») have no word to bind to, and a letter glued to
+/// punctuation («…А») already shares its line with it; neither binds.
+fn binds_to_next_word(text: &str, range: Range<usize>, next_offset: usize) -> bool {
+    let is_cyrillic_letter = |letter: char| {
+        letter.is_alphabetic() && CodePointMapData::<Script>::new().get(letter) == Script::Cyrillic
+    };
+    let mut word = text[range.clone()].trim_end().chars();
+    let one_letter = word
+        .next()
+        .is_some_and(|letter| word.next().is_none() && is_cyrillic_letter(letter));
+    let starts_word = text[..range.start]
+        .chars()
+        .next_back()
+        .is_none_or(char::is_whitespace);
+    // A chain of one-letter words («и в будущем») binds through to the real word.
+    let next_word_letters = text[next_offset.min(text.len())..]
+        .split_whitespace()
+        .map(|word| word.chars().filter(|c| c.is_alphabetic()).count())
+        .find(|&letters| letters != 1)
+        .unwrap_or(0);
+    one_letter && starts_word && next_word_letters > 1
 }
 
 fn line_break_badness(line_advance: f32, max_extent: f32) -> f32 {
@@ -2260,7 +2477,15 @@ mod tests {
         .expect("the larger fitting range should be found");
 
         assert!((11.99..=12.0).contains(&fitted));
-        assert!(calls.get() <= 18);
+        assert!(calls.get() <= 40);
+
+        // A whole-word reflow that fits only in a window narrower than the
+        // old coarse probe step must still be found above the floor.
+        let narrow = largest_fitting_font_size(9.0, 24.0, Ok, |size| {
+            (13.2..=13.6).contains(size) || *size <= 9.0
+        })?
+        .expect("the narrow fitting window should be found");
+        assert!((13.5..=13.6).contains(&narrow));
         Ok(())
     }
 
@@ -2311,11 +2536,33 @@ mod tests {
                 break_suffix_advance: 0.0,
                 break_penalty: 0.0,
                 is_mandatory: false,
+                binds_to_next: false,
             };
             7
         ];
 
         assert_eq!(optimal_line_breaks(&segments, 100.0), vec![2, 4, 7]);
+    }
+
+    #[test]
+    fn a_one_letter_word_never_ends_a_line_with_other_words() {
+        assert!(binds_to_next_word("Секс в тачке.", 9..12, 12));
+        assert!(binds_to_next_word("и в будущем.", 0..3, 3));
+        assert!(!binds_to_next_word("Х л ю п", 3..6, 6));
+        assert!(!binds_to_next_word("…А вообще", 3..6, 6));
+        let word = |advance: f32, binds_to_next: bool| LineBreakMeasure {
+            advance,
+            trailing_advance: 0.0,
+            break_suffix_advance: 0.0,
+            break_penalty: 0.0,
+            is_mandatory: false,
+            binds_to_next,
+        };
+        // «сексом в / машине» would fill the first line best.
+        let segments = [word(60.0, false), word(20.0, true), word(60.0, false)];
+        assert_eq!(optimal_line_breaks(&segments, 80.0), vec![1, 3]);
+        // In a narrow column the word may stand alone on its own line.
+        assert_eq!(optimal_line_breaks(&segments, 60.0), vec![1, 2, 3]);
     }
 
     #[test]
@@ -2327,6 +2574,7 @@ mod tests {
                 break_suffix_advance: 0.0,
                 break_penalty: 0.0,
                 is_mandatory: false,
+                binds_to_next: false,
             },
             LineBreakMeasure {
                 advance: 40.0,
@@ -2334,6 +2582,7 @@ mod tests {
                 break_suffix_advance: 0.0,
                 break_penalty: 0.0,
                 is_mandatory: false,
+                binds_to_next: false,
             },
         ];
 
@@ -2667,25 +2916,120 @@ mod tests {
     }
 
     #[test]
-    fn comic_auto_fit_uses_a_smaller_clean_setting_before_hyphenating() -> anyhow::Result<()> {
+    fn comic_auto_fit_splits_one_word_only_for_a_clearly_larger_size() -> anyhow::Result<()> {
         let font = any_system_font();
-        let layout = TextLayout::new(&font)
-            .with_min_font_size(9.0)
-            .with_max_font_size(24.0)
-            .with_hyphenation_policy(HyphenationPolicy::LastResort)
-            .with_alignment(TextAlign::Center)
-            .with_max_width(80.0)
-            .with_max_height(100.0)
-            .with_comic_balloon(
-                80.0,
-                100.0,
-                vec![(0.0, 0.0), (80.0, 0.0), (80.0, 100.0), (0.0, 100.0)],
-                0.0,
-            )
-            .run("prosperity")?;
+        let layout = |policy| {
+            TextLayout::new(&font)
+                .with_min_font_size(9.0)
+                .with_max_font_size(24.0)
+                .with_hyphenation_policy(policy)
+                .with_alignment(TextAlign::Center)
+                .with_max_width(80.0)
+                .with_max_height(100.0)
+                .with_comic_balloon(
+                    80.0,
+                    100.0,
+                    vec![(0.0, 0.0), (80.0, 0.0), (80.0, 100.0), (0.0, 100.0)],
+                    0.0,
+                )
+                .run("prosperity")
+        };
+        let clean = layout(HyphenationPolicy::Disabled)?;
+        let chosen = layout(HyphenationPolicy::LastResort)?;
 
-        assert_eq!(layout.lines.len(), 1);
-        assert!(layout.font_size < 24.0);
+        assert_eq!(clean.lines.len(), 1);
+        assert_eq!(chosen.lines.len(), 2);
+        assert_eq!(layout_split_words("prosperity", &chosen), 1);
+        assert!(chosen.font_size >= clean.font_size * HYPHENATION_SIZE_GAIN);
+        Ok(())
+    }
+
+    #[test]
+    fn comic_auto_fit_splits_a_word_in_a_narrow_oval_for_a_moderate_gain() -> anyhow::Result<()> {
+        let font = any_system_font();
+        let text = "И дальше нихера не изменится.";
+        let layout = |width: f32, height: f32, policy| {
+            TextLayout::new(&font)
+                .with_min_font_size(9.0)
+                .with_max_font_size(40.0)
+                .with_hyphenation_language_tag("ru")
+                .with_hyphenation_policy(policy)
+                .with_alignment(TextAlign::Center)
+                .with_max_width(width)
+                .with_max_height(height)
+                .with_comic_balloon(width, height, Vec::new(), 4.0)
+                .run(text)
+        };
+        // Glyph metrics differ between the system fonts the tests pick, so sweep
+        // narrow ovals: a split word buys the gain, and somewhere a gain
+        // below the former 1.25 threshold is taken.
+        let mut moderate = 0;
+        for (width, aspect) in (80..=160)
+            .step_by(20)
+            .flat_map(|width| (8..=22).map(move |aspect| (width as f32, aspect as f32 * 0.1)))
+        {
+            let height = width * aspect;
+            let clean = layout(width, height, HyphenationPolicy::Disabled)?;
+            let chosen = layout(width, height, HyphenationPolicy::LastResort)?;
+            let splits = layout_split_words(text, &chosen);
+            // At the readability floor a split only has to recover a pixel.
+            if clean.font_size.floor() <= 9.0 {
+                continue;
+            }
+            assert!(splits <= 1, "width {width}");
+            if splits == 1 {
+                let gain = chosen.font_size / clean.font_size;
+                assert!(gain >= HYPHENATION_SIZE_GAIN - 1e-3, "width {width}");
+                moderate += usize::from(gain < 1.25);
+            }
+        }
+        assert!(moderate > 0);
+        Ok(())
+    }
+
+    #[test]
+    fn comic_auto_fit_trades_a_little_size_for_fewer_lone_short_words() -> anyhow::Result<()> {
+        const HEIGHT: f32 = 160.0;
+        let font = any_system_font();
+        let text = "В том-то и дело.";
+        let layout = |width: f32, policy| {
+            TextLayout::new(&font)
+                .with_min_font_size(9.0)
+                .with_max_font_size(60.0)
+                .with_hyphenation_policy(policy)
+                .with_alignment(TextAlign::Center)
+                .with_max_width(width)
+                .with_max_height(HEIGHT)
+                .with_comic_balloon(
+                    width,
+                    HEIGHT,
+                    vec![(0.0, 0.0), (width, 0.0), (width, HEIGHT), (0.0, HEIGHT)],
+                    0.0,
+                )
+                .run(text)
+        };
+        // Glyph metrics differ between the system fonts the tests pick, so
+        // sweep balloon widths: the balanced fit never strands more short
+        // words than the largest fit, and clears them somewhere in the sweep.
+        let mut balanced = 0;
+        for width in (60..=200).step_by(5).map(|width| width as f32) {
+            let largest = layout(width, HyphenationPolicy::Disabled)?;
+            let chosen = layout(width, HyphenationPolicy::LastResort)?;
+            let stranded = short_inner_lines(text, &largest);
+            assert!(
+                short_inner_lines(text, &chosen) <= stranded,
+                "width {width}"
+            );
+            assert!(
+                chosen.font_size >= largest.font_size * BALANCE_MIN_SIZE_RATIO,
+                "width {width}"
+            );
+            if stranded > 0 && short_inner_lines(text, &chosen) == 0 {
+                assert!(chosen.lines.len() < largest.lines.len(), "width {width}");
+                balanced += 1;
+            }
+        }
+        assert!(balanced > 0);
         Ok(())
     }
 
@@ -2746,6 +3090,7 @@ mod tests {
                 break_suffix_advance: 0.0,
                 break_penalty: 0.0,
                 is_mandatory: false,
+                binds_to_next: false,
             };
             5
         ];
@@ -2765,6 +3110,7 @@ mod tests {
             break_suffix_advance: 0.0,
             break_penalty: 0.0,
             is_mandatory: false,
+            binds_to_next: false,
         }; 4];
         let balloon = comic_balloon(
             100.0,
@@ -2817,6 +3163,7 @@ mod tests {
                 break_suffix_advance: 5.0,
                 break_penalty: 0.0,
                 is_mandatory: false,
+                binds_to_next: false,
             },
             LineBreakMeasure {
                 advance: 30.0,
@@ -2824,6 +3171,7 @@ mod tests {
                 break_suffix_advance: 0.0,
                 break_penalty: 0.0,
                 is_mandatory: false,
+                binds_to_next: false,
             },
         ];
         let unbroken =
@@ -2838,6 +3186,7 @@ mod tests {
                 break_suffix_advance: 10.0,
                 break_penalty: 0.0,
                 is_mandatory: false,
+                binds_to_next: false,
             },
             LineBreakMeasure {
                 advance: 55.0,
@@ -2845,6 +3194,7 @@ mod tests {
                 break_suffix_advance: 0.0,
                 break_penalty: 0.0,
                 is_mandatory: false,
+                binds_to_next: false,
             },
         ];
         let hyphenated =
@@ -2900,12 +3250,12 @@ mod tests {
                 .with_hyphenation_language_tag("en")
                 .with_hyphenation_policy(policy)
                 .with_alignment(TextAlign::Center)
-                .with_max_width(68.0)
+                .with_max_width(56.0)
                 .with_max_height(218.0)
                 .with_comic_balloon(
-                    68.0,
+                    56.0,
                     218.0,
-                    vec![(0.0, 0.0), (68.0, 0.0), (68.0, 218.0), (0.0, 218.0)],
+                    vec![(0.0, 0.0), (56.0, 0.0), (56.0, 218.0), (0.0, 218.0)],
                     4.0,
                 )
                 .run(text)
@@ -2924,13 +3274,71 @@ mod tests {
     }
 
     #[test]
+    fn overflowing_balloon_breaks_prefer_whole_words_over_fewer_lines() {
+        let word = |advance: f32, space: bool, hyphen: bool| LineBreakMeasure {
+            advance,
+            trailing_advance: if space { 6.0 } else { 0.0 },
+            break_suffix_advance: if hyphen { 6.0 } else { 0.0 },
+            break_penalty: 0.0,
+            is_mandatory: false,
+            binds_to_next: false,
+        };
+        // "aaaa bbb|ccc dd": the middle word may split with a hyphen.
+        let segments = [
+            word(46.0, true, false),
+            word(30.0, false, true),
+            word(36.0, true, false),
+            word(20.0, false, false),
+        ];
+        let profiles = |count: usize| {
+            vec![
+                LineProfile {
+                    width: 50.0,
+                    center_offset: 0.0,
+                    block_baseline: 0.0,
+                };
+                count
+            ]
+        };
+        let split = LineBreakResult {
+            breaks: vec![2, 4],
+            profiles: profiles(2),
+            overflowed: true,
+            cost: 1.0,
+        };
+        let whole = LineBreakResult {
+            breaks: vec![1, 3, 4],
+            profiles: profiles(3),
+            overflowed: true,
+            cost: 2.0,
+        };
+        let fitting = LineBreakResult {
+            breaks: vec![1, 3, 4],
+            profiles: profiles(3),
+            overflowed: false,
+            cost: 2.0,
+        };
+
+        assert_eq!(
+            rank_comic_breaks(&segments, &whole, &split),
+            std::cmp::Ordering::Less
+        );
+        assert_eq!(
+            rank_comic_breaks(&segments, &fitting, &split),
+            std::cmp::Ordering::Less
+        );
+        assert_eq!(split_words(&segments, &split.breaks), 1);
+        assert_eq!(split_words(&segments, &whole.breaks), 0);
+    }
+
+    #[test]
     fn short_comic_text_keeps_clean_words_when_an_unhyphenated_setting_fits() -> anyhow::Result<()>
     {
         let font = any_system_font();
         let text = "A cat tower?";
         let layout = |policy| {
             TextLayout::new(&font)
-                .with_max_font_size(80.0)
+                .with_max_font_size(18.0)
                 .with_min_font_size(8.0)
                 .with_hyphenation_language_tag("en")
                 .with_hyphenation_policy(policy)
@@ -2969,6 +3377,7 @@ mod tests {
                 break_suffix_advance: 0.0,
                 break_penalty: 0.0,
                 is_mandatory: true,
+                binds_to_next: false,
             },
             LineBreakMeasure {
                 advance: 20.0,
@@ -2976,6 +3385,7 @@ mod tests {
                 break_suffix_advance: 0.0,
                 break_penalty: 0.0,
                 is_mandatory: false,
+                binds_to_next: false,
             },
             LineBreakMeasure {
                 advance: 5.0,
@@ -2983,6 +3393,7 @@ mod tests {
                 break_suffix_advance: 0.0,
                 break_penalty: 0.0,
                 is_mandatory: false,
+                binds_to_next: false,
             },
         ];
         let profiles = vec![
@@ -3012,6 +3423,7 @@ mod tests {
                 break_suffix_advance: 5.0,
                 break_penalty: 0.0,
                 is_mandatory: false,
+                binds_to_next: false,
             },
             LineBreakMeasure {
                 advance: 25.0,
@@ -3019,6 +3431,7 @@ mod tests {
                 break_suffix_advance: 20.0,
                 break_penalty: 0.0,
                 is_mandatory: false,
+                binds_to_next: false,
             },
             LineBreakMeasure {
                 advance: 5.0,
@@ -3026,6 +3439,7 @@ mod tests {
                 break_suffix_advance: 0.0,
                 break_penalty: 0.0,
                 is_mandatory: false,
+                binds_to_next: false,
             },
         ];
 
@@ -3058,8 +3472,8 @@ mod tests {
     fn comic_balloon_air_uses_the_visible_ink_height_and_explicit_floor() {
         let balloon = comic_balloon(100.0, 100.0, Vec::new(), 4.0);
 
-        assert_approx_eq(balloon.air(12.0), 12.0);
-        assert_approx_eq(balloon.air(24.0), 24.0);
+        assert_approx_eq(balloon.air(12.0), 4.0);
+        assert_approx_eq(balloon.air(24.0), 6.0);
         assert_approx_eq(balloon.air(3.0), 4.0);
     }
 

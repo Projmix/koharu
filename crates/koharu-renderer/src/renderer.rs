@@ -11,10 +11,10 @@ use futures::future::try_join_all;
 use koharu_rasterizer::{RasterOptions, Rasterizer};
 use koharu_scene::{
     Asset, AssetRole, BlobId, Change, Component, ComponentOwner, EntityChange, EntityId, FitsTo,
-    FlowsIn, Geometry, Group, OcrAnalysis, Origin, Page, Presents, RasterLayer, RasterLayerKind,
-    RecognizedFrom, Region, RelationChange, RelationId, RelationSpec, Revision, Snapshot,
-    TextAlignment, TextDirection, TextLayout as SceneTextLayout, TextLayoutKind, Translation,
-    Typography, Visibility,
+    FlowsIn, Geometry, Group, OcrAnalysis, Origin, Page, PanelRegion, Presents, RasterLayer,
+    RasterLayerKind, RecognizedFrom, Region, RegionSpec, RelationChange, RelationId, RelationSpec,
+    Revision, Snapshot, SpeechKind, SpeechMarkup, TextAlignment, TextDirection,
+    TextLayout as SceneTextLayout, TextLayoutKind, TextRole, Translation, Typography, Visibility,
 };
 use parking_lot::Mutex;
 use rayon::prelude::*;
@@ -31,9 +31,9 @@ use vello::{
 };
 
 use crate::{
-    Error, FontFamily, FontStyle, Frame, ImageKind, ImageMetadata, Layer, LayerKind, Presentation,
-    RasterImage, RenderBounds, RenderDependency, RenderDiagnostic, Result, RetentionStats,
-    TextAlign, TextMetadata, TypesettingConfig, WritingMode,
+    Error, FontFamily, FontStyle, Frame, ImageKind, ImageMetadata, KindFonts, Layer, LayerKind,
+    Presentation, RasterImage, RenderBounds, RenderDependency, RenderDiagnostic, Result,
+    RetentionStats, TextAlign, TextMetadata, TypesettingConfig, WritingMode,
     bubble::{GeometryFrame, LayoutBox, contour, flow_cells, geometry_bounds, geometry_frame},
     fonts::{FontPreview, FontRequest, Fonts},
     frame::{
@@ -500,7 +500,9 @@ impl Renderer {
             height,
             source_role: &source_role,
             font_families: &typesetting.font_families,
+            kind_fonts: &typesetting.kind_fonts,
             balloon_flows: flow_plan.placements,
+            panels: page_panels(snapshot, page)?,
             layers: Vec::new(),
             dependencies: BTreeSet::from([
                 RenderDependency::Entity(page),
@@ -574,7 +576,9 @@ struct Traversal<'a> {
     height: u32,
     source_role: &'a AssetRole,
     font_families: &'a [String],
+    kind_fonts: &'a KindFonts,
     balloon_flows: HashMap<EntityId, ResolvedPlacement>,
+    panels: Vec<(EntityId, LayoutBox)>,
     layers: Vec<LayerDraft>,
     dependencies: BTreeSet<RenderDependency>,
     diagnostics: Vec<RenderDiagnostic>,
@@ -711,6 +715,33 @@ impl Traversal<'_> {
         Ok(())
     }
 
+    /// The scene markup kind of a content entity. Before markup runs, the
+    /// detected role already identifies a sound effect, and text detection
+    /// placed inside a balloon is taken as speech.
+    fn speech_kind(
+        &self,
+        content: EntityId,
+        dependencies: &mut BTreeSet<RenderDependency>,
+    ) -> Result<Option<SpeechKind>> {
+        dependencies.insert(component_dependency::<SpeechMarkup>(content));
+        if let Some(markup) = self.snapshot.component::<SpeechMarkup>(content)? {
+            return Ok(Some(markup.kind));
+        }
+        dependencies.insert(component_dependency::<TextRole>(content));
+        Ok(self
+            .snapshot
+            .component::<TextRole>(content)?
+            .and_then(|role| {
+                if role.role.ends_with(".onomatopoeia") {
+                    Some(SpeechKind::SoundEffect)
+                } else if role.role.ends_with(".dialogue") {
+                    Some(SpeechKind::Speech)
+                } else {
+                    None
+                }
+            }))
+    }
+
     fn text_draft(
         &mut self,
         entity: EntityId,
@@ -789,14 +820,36 @@ impl Traversal<'_> {
         let preferred_font = typography
             .as_ref()
             .and_then(|value| value.preferred_font.clone());
-        let font_families = self.font_families.to_vec();
+        let speech_kind = self.speech_kind(content, dependencies)?;
+        let mut font_families = self.font_families.to_vec();
+        if let Some(family) = speech_kind.and_then(|kind| self.kind_fonts.get(kind)) {
+            font_families.insert(0, family.to_owned());
+        }
+        // Automatic sizes scale with the page. On a 1280 px chapter 2.5% of
+        // the height matched hand-set free text and stopped short balloon
+        // lines from blowing up; free sound effects keep the former 24 px
+        // there, while one set in a balloon is sized like the balloon's text.
+        let automatic_ceiling = self.height as f32
+            * if speech_kind == Some(SpeechKind::SoundEffect) && balloon_contour.is_none() {
+                0.01875
+            } else {
+                0.025
+            };
         for family in preferred_font.iter().chain(font_families.iter()) {
             dependencies.insert(RenderDependency::Font(family.clone()));
         }
         let is_bubble = balloon_contour.is_some();
         let descriptor = TextNodeDescriptor {
             entity,
-            text: text.clone(),
+            text: if is_bubble
+                || writing_mode != WritingMode::Horizontal
+                || layout.kind == TextLayoutKind::Point
+                || typography.as_ref().is_some_and(|value| !value.auto_fit)
+            {
+                text.clone()
+            } else {
+                stacked_column_text(&text, frame.bounds).unwrap_or_else(|| text.clone())
+            },
             language: translation.language.clone(),
             width: frame.bounds.width,
             height: frame.bounds.height,
@@ -810,6 +863,7 @@ impl Traversal<'_> {
                 .map(Into::into),
             font_size: typography.as_ref().and_then(|value| value.size),
             minimum_font_size: MINIMUM_FONT_SIZE,
+            automatic_ceiling,
             auto_fit: typography.as_ref().is_none_or(|value| value.auto_fit),
             alignment,
             writing_mode,
@@ -818,6 +872,9 @@ impl Traversal<'_> {
                 .and_then(|value| value.color)
                 .unwrap_or([0, 0, 0, 255]),
             stroke: resolve_stroke(typography.as_ref()),
+            measured_stroke: typography
+                .as_ref()
+                .is_some_and(|value| matches!(value.origin, Origin::Generated(_))),
             line_height: 1.2,
             letter_spacing: 0.0,
             word_spacing: 0.0,
@@ -861,12 +918,75 @@ impl Traversal<'_> {
         let Some(frame) = geometry_frame(&geometry, None) else {
             return Ok(None);
         };
+        let (geometry, frame) = self.clip_to_panel(geometry, frame, dependencies);
         Ok(Some(ResolvedPlacement {
             geometry,
             frame,
             balloon_contour: None,
             dependencies: Arc::from([]),
         }))
+    }
+
+    /// Fork divergence: free text fits to its detected region, and a vertical
+    /// Japanese box can run across a gutter into the next panel. The fit area
+    /// stops at the edges of the detected panel holding most of it. A rotated
+    /// region, or one mostly outside every panel, keeps its own area.
+    fn clip_to_panel(
+        &self,
+        geometry: Geometry,
+        frame: GeometryFrame,
+        dependencies: &mut BTreeSet<RenderDependency>,
+    ) -> (Geometry, GeometryFrame) {
+        if self.panels.is_empty() {
+            return (geometry, frame);
+        }
+        // Adding or removing a panel changes which one holds the region.
+        dependencies.insert(RenderDependency::Hierarchy(self.page));
+        for &(panel, _) in &self.panels {
+            dependencies.insert(component_dependency::<Geometry>(panel));
+            dependencies.insert(component_dependency::<Region>(panel));
+        }
+        if frame.angle_degrees != 0.0 {
+            return (geometry, frame);
+        }
+        let bounds = frame.bounds;
+        let area = bounds.width * bounds.height;
+        let clipped = self
+            .panels
+            .iter()
+            .filter_map(|(_, panel)| {
+                let left = bounds.x.max(panel.x);
+                let top = bounds.y.max(panel.y);
+                let right = (bounds.x + bounds.width).min(panel.x + panel.width);
+                let bottom = (bounds.y + bounds.height).min(panel.y + panel.height);
+                let share = (right - left).max(0.0) * (bottom - top).max(0.0) / area;
+                (share >= 0.5).then_some((share, [left, top, right, bottom]))
+            })
+            .max_by(|left, right| left.0.total_cmp(&right.0))
+            .map(|(_, clipped)| clipped);
+        let Some([left, top, right, bottom]) = clipped else {
+            return (geometry, frame);
+        };
+        if left == bounds.x
+            && top == bounds.y
+            && right == bounds.x + bounds.width
+            && bottom == bounds.y + bounds.height
+        {
+            return (geometry, frame);
+        }
+        let clipped = Geometry {
+            origin: geometry.origin.clone(),
+            ..Geometry::rectangle(
+                f64::from(left),
+                f64::from(top),
+                f64::from(right - left),
+                f64::from(bottom - top),
+            )
+        };
+        match geometry_frame(&clipped, None) {
+            Some(frame) => (clipped, frame),
+            None => (geometry, frame),
+        }
     }
 
     fn balloon_flow(
@@ -913,6 +1033,7 @@ struct BalloonFlowPlan {
 struct FlowSeed {
     layer: EntityId,
     anchor: Option<(f32, f32)>,
+    weight: f32,
     dependencies: BTreeSet<RenderDependency>,
 }
 
@@ -956,9 +1077,16 @@ fn resolve_balloon_flows(snapshot: &Snapshot, page: EntityId) -> Result<BalloonF
                 continue;
             }
             let anchor = flow_anchor(snapshot, content, &mut dependencies)?;
+            let weight = translation
+                .text
+                .value
+                .chars()
+                .filter(|character| !character.is_whitespace())
+                .count() as f32;
             groups.entry(balloon).or_default().push(FlowSeed {
                 layer: entity,
                 anchor,
+                weight,
                 dependencies,
             });
         }
@@ -993,7 +1121,9 @@ fn resolve_balloon_flows(snapshot: &Snapshot, page: EntityId) -> Result<BalloonF
             .iter()
             .map(|seed| seed.anchor.unwrap_or(center))
             .collect::<Vec<_>>();
-        let cells = (seeds.len() > 1).then(|| flow_cells(frame, &balloon_contour, &anchors));
+        let weights = seeds.iter().map(|seed| seed.weight).collect::<Vec<_>>();
+        let cells =
+            (seeds.len() > 1).then(|| flow_cells(frame, &balloon_contour, &anchors, &weights));
         let dependencies: Arc<[RenderDependency]> = dependencies.iter().cloned().collect();
         for (index, seed) in seeds.into_iter().enumerate() {
             // Persisting a canvas transform must preserve the exact shape used
@@ -1235,6 +1365,7 @@ fn assemble_frame(
             dependencies: draft.dependencies,
         })));
     }
+    diagnostics.extend(low_contrast_diagnostics(&layers));
     let layers: Arc<[Layer]> = layers.into();
     let layer_index = layers
         .iter()
@@ -1305,6 +1436,115 @@ fn transform_bounds(bounds: RenderBounds, transform: Affine) -> RenderBounds {
     }
 }
 
+/// Below this ratio text is hard to tell from its ground; WCAG asks 3 of
+/// large text, and dark lettering on a mid-grey screentone still reaches 2.
+const MIN_TEXT_CONTRAST: f32 = 1.5;
+const CONTRAST_SAMPLES: u32 = 24;
+
+/// Fork divergence: cleaning can paint a dark balloon white under light
+/// lettering, and the text then vanishes without any other warning (p22).
+/// Text is reported when neither its fill nor its outline stands out from the
+/// image layers under it. The ground is the median luminance of those layers
+/// composited over the rendered text, so the check depends on the assembled
+/// frame alone and an incremental frame reports what a full render would.
+fn low_contrast_diagnostics(layers: &[Layer]) -> Vec<RenderDiagnostic> {
+    let mut diagnostics = Vec::new();
+    for (index, layer) in layers.iter().enumerate() {
+        let (LayerKind::Text(text), NodeDescriptor::Text(descriptor)) =
+            (layer.kind(), &layer.0.node.descriptor)
+        else {
+            continue;
+        };
+        if !layer.presentation().visible {
+            continue;
+        }
+        let Some(ground) = ground_luminance(&layers[..index], text.rendered_bounds) else {
+            continue;
+        };
+        let against_ground = |color: [u8; 4]| {
+            let luminance = relative_luminance([color[0], color[1], color[2]].map(f32::from));
+            (luminance.max(ground) + 0.05) / (luminance.min(ground) + 0.05)
+        };
+        let outline = descriptor
+            .stroke
+            .filter(|stroke| stroke.width_px >= 1.0)
+            .map_or(1.0, |stroke| against_ground(stroke.color));
+        let contrast = against_ground(text.color).max(outline);
+        if contrast < MIN_TEXT_CONTRAST {
+            diagnostics.push(RenderDiagnostic::TextLowContrast {
+                entity: layer.entity(),
+                contrast,
+            });
+        }
+    }
+    diagnostics
+}
+
+fn ground_luminance(below: &[Layer], bounds: RenderBounds) -> Option<f32> {
+    let images = below
+        .iter()
+        .filter(|layer| layer.presentation().visible && layer.presentation().opacity > 0.0)
+        .filter_map(|layer| {
+            let image = layer.raster_image()?;
+            Some((
+                layer.placement().inverse(),
+                layer.presentation().opacity,
+                image,
+            ))
+        })
+        .collect::<Vec<_>>();
+    let mut samples = Vec::new();
+    for row in 0..CONTRAST_SAMPLES {
+        for column in 0..CONTRAST_SAMPLES {
+            let point = vello::kurbo::Point::new(
+                f64::from(
+                    bounds.x + bounds.width * (column as f32 + 0.5) / CONTRAST_SAMPLES as f32,
+                ),
+                f64::from(bounds.y + bounds.height * (row as f32 + 0.5) / CONTRAST_SAMPLES as f32),
+            );
+            let mut color: Option<[f32; 3]> = None;
+            for (inverse, opacity, image) in &images {
+                let local = *inverse * point;
+                if local.x < 0.0
+                    || local.y < 0.0
+                    || local.x >= f64::from(image.width)
+                    || local.y >= f64::from(image.height)
+                {
+                    continue;
+                }
+                let offset = (local.y as usize * image.width as usize + local.x as usize) * 4;
+                let Some(pixel) = image.pixels.get(offset..offset + 4) else {
+                    continue;
+                };
+                let alpha = f32::from(pixel[3]) / 255.0 * opacity;
+                let base = color.unwrap_or([255.0; 3]);
+                color = Some(std::array::from_fn(|channel| {
+                    base[channel] + (f32::from(pixel[channel]) - base[channel]) * alpha
+                }));
+            }
+            samples.extend(color.map(relative_luminance));
+        }
+    }
+    if samples.is_empty() {
+        return None;
+    }
+    let middle = samples.len() / 2;
+    Some(*samples.select_nth_unstable_by(middle, f32::total_cmp).1)
+}
+
+/// WCAG relative luminance of an sRGB colour with channels from 0 to 255.
+fn relative_luminance(color: [f32; 3]) -> f32 {
+    let [red, green, blue] = color.map(|channel| {
+        let channel = channel / 255.0;
+        if channel <= 0.040_45 {
+            channel / 12.92
+        } else {
+            ((channel + 0.055) / 1.055).powf(2.4)
+        }
+    });
+    0.2126 * red + 0.7152 * green + 0.0722 * blue
+}
+
 fn transform_diagnostic(diagnostic: RenderDiagnostic, transform: Affine) -> RenderDiagnostic {
     match diagnostic {
         RenderDiagnostic::TextOverflow {
@@ -1359,6 +1599,24 @@ fn component_dependency<T: Component>(entity: EntityId) -> RenderDependency {
         entity,
         kind: T::KIND.to_owned(),
     }
+}
+
+fn page_panels(snapshot: &Snapshot, page: EntityId) -> Result<Vec<(EntityId, LayoutBox)>> {
+    let mut panels = Vec::new();
+    for entity in snapshot.descendants(page)? {
+        let is_panel = snapshot
+            .component::<Region>(entity.id())?
+            .is_some_and(|region| region.kind == PanelRegion::kind());
+        if !is_panel {
+            continue;
+        }
+        if let Some(geometry) = snapshot.component::<Geometry>(entity.id())?
+            && let Some(bounds) = geometry_bounds(&geometry)
+        {
+            panels.push((entity.id(), bounds));
+        }
+    }
+    Ok(panels)
 }
 
 fn belongs_to_page(snapshot: &Snapshot, mut entity: EntityId, page: EntityId) -> Result<bool> {
@@ -1429,6 +1687,35 @@ fn resolve_writing_mode(
         Some(TextDirection::Auto) | None if bounds.height > bounds.width => WritingMode::VerticalRl,
         Some(TextDirection::Auto) | None => WritingMode::Horizontal,
     }
+}
+
+/// Letters of a short word one per line in a tall, narrow free-text frame,
+/// the way hand-lettered sound effects stack in a vertical column. Laid out
+/// horizontally such a word shrinks to the column width; longer phrases keep
+/// wrapping, since stacking them drops below the readable size. A word
+/// translated as spaced letters («Х л ю п») is that same stacked word.
+fn stacked_column_text(text: &str, bounds: LayoutBox) -> Option<String> {
+    const MAX_STACKED_LETTERS: usize = 6;
+    let text = text.trim();
+    let letters = text.chars().filter(|c| c.is_alphabetic()).count();
+    let spaced_letters = text
+        .split_whitespace()
+        .all(|token| token.chars().count() == 1);
+    if bounds.height < bounds.width * 2.0
+        || letters == 0
+        || letters > MAX_STACKED_LETTERS
+        || !spaced_letters && text.chars().any(char::is_whitespace)
+    {
+        return None;
+    }
+    let mut stacked = String::with_capacity(text.len() * 2);
+    for (index, character) in text.chars().filter(|c| !c.is_whitespace()).enumerate() {
+        if index > 0 {
+            stacked.push('\n');
+        }
+        stacked.push(character);
+    }
+    Some(stacked)
 }
 
 fn resolve_alignment(
@@ -1708,6 +1995,40 @@ mod tests {
     }
 
     #[test]
+    fn short_words_stack_in_tall_narrow_frames() {
+        let tall = LayoutBox {
+            x: 0.0,
+            y: 0.0,
+            width: 30.0,
+            height: 120.0,
+        };
+        let wide = LayoutBox {
+            width: 120.0,
+            height: 30.0,
+            ..tall
+        };
+
+        assert_eq!(
+            stacked_column_text("Ха-а…", tall).as_deref(),
+            Some("Х\nа\n-\nа\n…")
+        );
+        assert_eq!(
+            stacked_column_text("Х л ю п", tall).as_deref(),
+            Some(
+                "Х
+л
+ю
+п"
+            )
+        );
+        assert_eq!(stacked_column_text("Ха-а…", wide), None);
+        assert_eq!(stacked_column_text("Х л ю п", wide), None);
+        assert_eq!(stacked_column_text("Я и ты", tall), None);
+        assert_eq!(stacked_column_text("Живёт в общежитии", tall), None);
+        assert_eq!(stacked_column_text("Подождите", tall), None);
+    }
+
+    #[test]
     fn user_writing_mode_overrides_language_default() {
         let mut typography = Typography {
             origin: koharu_scene::Origin::User,
@@ -1860,6 +2181,135 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn markup_kind_font_precedes_the_default_families() {
+        let mut session = Session::memory().await.unwrap();
+        let mut ids = None;
+        let create = session
+            .snapshot()
+            .patch(|edit| {
+                let page = edit.add_page(PageDraft::new("page", 200.0, 120.0), At::End)?;
+                let content = edit.add_text_content(page, At::End)?;
+                edit.set(
+                    content,
+                    &SourceText {
+                        text: Authored::user("バン".to_owned()),
+                        language: None,
+                    },
+                )?;
+                edit.set(
+                    content,
+                    &Translation {
+                        text: Authored::user("Бам".to_owned()),
+                        language: None,
+                    },
+                )?;
+                edit.set(
+                    content,
+                    &SpeechMarkup {
+                        origin: Origin::User,
+                        kind: SpeechKind::SoundEffect,
+                        speaker: None,
+                    },
+                )?;
+                let text = edit.add_text_layer(
+                    page,
+                    At::End,
+                    content,
+                    &SceneTextLayout {
+                        origin: Origin::User,
+                        kind: TextLayoutKind::Paragraph,
+                        angle_degrees: Some(0.0),
+                    },
+                )?;
+                edit.set(text, &Geometry::rectangle(10.0, 10.0, 80.0, 40.0))?;
+                ids = Some((page, text));
+                Ok(())
+            })
+            .unwrap();
+        let snapshot = session.commit(create).await.unwrap().snapshot;
+        let (page, text) = ids.unwrap();
+        let mut typesetting = TypesettingConfig::default();
+        typesetting.kind_fonts.sound_effect = Some("Edo".to_owned());
+        typesetting.kind_fonts.speech = Some("ChillSpeech".to_owned());
+        let renderer = Renderer::with_typesetting(typesetting);
+        let compiled = renderer.compile(&snapshot, page).unwrap();
+        let layer = compiled
+            .layers
+            .iter()
+            .find(|layer| layer.entity == text)
+            .unwrap();
+        let NodeDescriptor::Text(descriptor) = &layer.descriptor else {
+            panic!("expected a text layer");
+        };
+        assert_eq!(
+            descriptor.font_families,
+            ["Edo", "CCWildWords", "Adobe 黑体 Std"]
+        );
+    }
+
+    #[tokio::test]
+    async fn balloon_dialogue_takes_the_speech_font_before_markup() {
+        let mut session = Session::memory().await.unwrap();
+        let mut ids = None;
+        let create = session
+            .snapshot()
+            .patch(|edit| {
+                let page = edit.add_page(PageDraft::new("page", 200.0, 120.0), At::End)?;
+                let content = edit.add_text_content(page, At::End)?;
+                edit.set(
+                    content,
+                    &SourceText {
+                        text: Authored::user("やあ".to_owned()),
+                        language: None,
+                    },
+                )?;
+                edit.set(
+                    content,
+                    &Translation {
+                        text: Authored::user("Привет".to_owned()),
+                        language: None,
+                    },
+                )?;
+                edit.set(
+                    content,
+                    &TextRole {
+                        origin: Origin::User,
+                        role: "dev.koharu.text.dialogue".to_owned(),
+                    },
+                )?;
+                let text = edit.add_text_layer(
+                    page,
+                    At::End,
+                    content,
+                    &SceneTextLayout {
+                        origin: Origin::User,
+                        kind: TextLayoutKind::Paragraph,
+                        angle_degrees: Some(0.0),
+                    },
+                )?;
+                edit.set(text, &Geometry::rectangle(10.0, 10.0, 80.0, 40.0))?;
+                ids = Some((page, text));
+                Ok(())
+            })
+            .unwrap();
+        let snapshot = session.commit(create).await.unwrap().snapshot;
+        let (page, text) = ids.unwrap();
+        let mut typesetting = TypesettingConfig::default();
+        typesetting.kind_fonts.speech = Some("ChillSpeech".to_owned());
+        let renderer = Renderer::with_typesetting(typesetting);
+        let compiled = renderer.compile(&snapshot, page).unwrap();
+        let layer = compiled
+            .layers
+            .iter()
+            .find(|layer| layer.entity == text)
+            .unwrap();
+        let NodeDescriptor::Text(descriptor) = &layer.descriptor else {
+            panic!("expected a text layer");
+        };
+        assert_eq!(descriptor.font_families[0], "ChillSpeech");
+    }
+
+    #[tokio::test]
     async fn analysis_regions_are_not_promoted_to_image_layers() {
         let mut session = Session::memory().await.unwrap();
         let source = AssetRole::new("source").unwrap();
@@ -2005,6 +2455,86 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn free_text_fit_area_stops_at_the_panel_holding_most_of_it() {
+        let mut session = Session::memory().await.unwrap();
+        let mut ids = None;
+        let create = session
+            .snapshot()
+            .patch(|edit| {
+                let page = edit.add_page(PageDraft::new("page", 200.0, 120.0), At::End)?;
+                for x in [0.0, 105.0] {
+                    edit.add_analysis_region::<PanelRegion>(
+                        page,
+                        At::End,
+                        &Geometry::rectangle(x, 0.0, 95.0, 120.0),
+                        None,
+                    )?;
+                }
+                let mut layers = Vec::new();
+                // The first region lies mostly in the left panel and runs over
+                // the gutter; the second sits mostly in the gutter itself.
+                for (x, width) in [(20.0, 100.0), (80.0, 40.0)] {
+                    let region = edit.add_analysis_region::<koharu_scene::TextRegion>(
+                        page,
+                        At::End,
+                        &Geometry::rectangle(x, 20.0, width, 60.0),
+                        None,
+                    )?;
+                    let content = edit.add_text_content(page, At::End)?;
+                    edit.set(
+                        content,
+                        &SourceText {
+                            text: Authored::user("source".to_owned()),
+                            language: None,
+                        },
+                    )?;
+                    edit.set(
+                        content,
+                        &Translation {
+                            text: Authored::user("text".to_owned()),
+                            language: None,
+                        },
+                    )?;
+                    let layer = edit.add_text_layer(
+                        page,
+                        At::End,
+                        content,
+                        &SceneTextLayout {
+                            origin: Origin::User,
+                            kind: TextLayoutKind::Paragraph,
+                            angle_degrees: None,
+                        },
+                    )?;
+                    edit.relate::<FitsTo>(layer, region)?;
+                    layers.push(layer);
+                }
+                ids = Some((page, layers));
+                Ok(())
+            })
+            .unwrap();
+        let snapshot = session.commit(create).await.unwrap().snapshot;
+        let (page, layers) = ids.unwrap();
+        let compiled = Renderer::default().compile(&snapshot, page).unwrap();
+        let bounds = |entity| {
+            let frame = compiled
+                .layers
+                .iter()
+                .find(|layer| layer.entity == entity)
+                .unwrap()
+                .frame
+                .bounds;
+            [
+                frame.x,
+                frame.y,
+                frame.x + frame.width,
+                frame.y + frame.height,
+            ]
+        };
+        assert_eq!(bounds(layers[0]), [20.0, 20.0, 95.0, 80.0]);
+        assert_eq!(bounds(layers[1]), [80.0, 20.0, 120.0, 80.0]);
+    }
+
+    #[tokio::test]
     async fn joined_balloon_flows_preserve_layout_when_transformed() {
         let mut session = Session::memory().await.unwrap();
         let mut ids = None;
@@ -2072,6 +2602,7 @@ mod tests {
         let font = crate::fonts::FontSystem::new().first_font().unwrap();
         let renderer = Renderer::with_typesetting(TypesettingConfig {
             font_families: vec![font.family_name().to_owned()],
+            kind_fonts: KindFonts::default(),
         });
         let base_compiled = renderer.compile(&base, page).unwrap();
         let first = base_compiled
@@ -2216,6 +2747,110 @@ mod tests {
                 original.layer(entity).unwrap().kind()
             );
         }
+    }
+
+    #[tokio::test]
+    async fn text_that_matches_the_image_under_it_is_low_contrast() {
+        let mut session = Session::memory().await.unwrap();
+        let source = AssetRole::new("source").unwrap();
+        let mut ids = None;
+        let create = session
+            .snapshot()
+            .patch(|edit| {
+                let page = edit.add_page(PageDraft::new("page", 200.0, 120.0), At::End)?;
+                edit.set_asset(
+                    page,
+                    &source,
+                    asset(png(200, 120, [0, 0, 0, 255]), 200, 120),
+                )?;
+                // White paint over the dark page's left half, like a balloon
+                // cleaned white under light lettering.
+                let paint = edit.add_entity(page, At::End)?;
+                edit.set(paint, &Geometry::rectangle(0.0, 0.0, 100.0, 120.0))?;
+                edit.set_asset(
+                    paint,
+                    &source,
+                    asset(png(100, 120, [255, 255, 255, 255]), 100, 120),
+                )?;
+                let mut layers = Vec::new();
+                for (x, stroke) in [(10.0, None), (110.0, None), (10.0, Some([0, 0, 0, 255]))] {
+                    let content = edit.add_text_content(page, At::End)?;
+                    edit.set(
+                        content,
+                        &SourceText {
+                            text: Authored::user("source".to_owned()),
+                            language: None,
+                        },
+                    )?;
+                    edit.set(
+                        content,
+                        &Translation {
+                            text: Authored::user("ab".to_owned()),
+                            language: None,
+                        },
+                    )?;
+                    let layer = edit.add_text_layer(
+                        page,
+                        At::End,
+                        content,
+                        &SceneTextLayout {
+                            origin: Origin::User,
+                            kind: TextLayoutKind::Paragraph,
+                            angle_degrees: Some(0.0),
+                        },
+                    )?;
+                    edit.set(layer, &Geometry::rectangle(x, 10.0, 80.0, 40.0))?;
+                    edit.set(
+                        layer,
+                        &Typography {
+                            origin: Origin::User,
+                            preferred_font: None,
+                            font_weight: None,
+                            font_style: None,
+                            size: Some(20.0),
+                            auto_fit: false,
+                            color: Some([255, 255, 255, 255]),
+                            stroke_color: stroke,
+                            stroke_width: stroke.map(|_| 2.0),
+                            alignment: None,
+                            writing_mode: None,
+                            extensions: Default::default(),
+                        },
+                    )?;
+                    layers.push(layer);
+                }
+                // An image above the text does not hide it.
+                let cover = edit.add_entity(page, At::End)?;
+                edit.set(cover, &Geometry::rectangle(100.0, 0.0, 100.0, 120.0))?;
+                edit.set_asset(
+                    cover,
+                    &source,
+                    asset(png(100, 120, [255, 255, 255, 255]), 100, 120),
+                )?;
+                ids = Some((page, layers));
+                Ok(())
+            })
+            .unwrap();
+        let snapshot = session.commit(create).await.unwrap().snapshot;
+        let (page, layers) = ids.unwrap();
+        let font = crate::fonts::FontSystem::new().first_font().unwrap();
+        let renderer = Renderer::with_typesetting(TypesettingConfig {
+            font_families: vec![font.family_name().to_owned()],
+            kind_fonts: KindFonts::default(),
+        });
+        let frame = renderer.render(&snapshot, page).await.unwrap();
+        let flagged = frame
+            .diagnostics()
+            .iter()
+            .filter_map(|diagnostic| match diagnostic {
+                RenderDiagnostic::TextLowContrast { entity, contrast } => {
+                    assert!(*contrast < MIN_TEXT_CONTRAST);
+                    Some(*entity)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(flagged, [layers[0]]);
     }
 
     #[tokio::test]

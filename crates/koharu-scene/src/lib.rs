@@ -24,11 +24,14 @@ pub use change::{
 };
 pub use component::{Component, ValidationContext};
 pub use components::{
-    Asset, AssetInput, AssetMetadata, AssetRole, Authored, DetectionAnalysis, DetectionLabel,
-    EntityOrigin, FontStyle, Generation, Geometry, Group, LanguageTag, OcrAnalysis, Origin, Page,
-    PageDraft, Point, Project, RasterLayer, RasterLayerKind, Region, RegionKind, Relation,
-    RelationKind, SourceText, TextAlignment, TextContent, TextDirection, TextGroup, TextLayout,
-    TextLayoutKind, TextRole, Translation, Typography, Visibility, WritingMode,
+    Asset, AssetInput, AssetMetadata, AssetRole, Authored, Character, CharacterId, CharacterList,
+    DetectionAnalysis, DetectionLabel, EntityOrigin, FontStyle, Gender, Generation, Geometry,
+    Group, LanguageTag, ObservedText, OcrAnalysis, Origin, Page, PageDraft, PageMarkup,
+    PageMarkupMissing, PageMarkupStatus, Point, Project, RasterLayer, RasterLayerKind, Region,
+    RegionKind, Relation, RelationKind, SourceText, SpeechKind, SpeechMarkup, TextAlignment,
+    TextContent, TextDirection, TextGroup, TextLayout, TextLayoutKind, TextRole, Translation,
+    TranslationReview, TranslationReviewReason, Typography, UnboxedText, UnboxedTextReview,
+    Visibility, WritingMode,
 };
 pub use document::{AnalysisRegionRef, GroupRef, TextContentRef, TextLayerRef};
 pub use edit::{At, Edit, RemovePolicy};
@@ -36,7 +39,7 @@ pub use error::{Error, Result};
 pub use id::{EntityId, ProducerId, ProjectId, RelationId};
 pub use patch::Patch;
 pub use semantics::{
-    BubbleRegion, FitsTo, FlowsIn, FunctionalRelation, Inside, PanelRegion, Presents,
+    BubbleRegion, Continues, FitsTo, FlowsIn, FunctionalRelation, Inside, PanelRegion, Presents,
     RecognizedFrom, RegionSpec, RelationSpec, TextRegion,
 };
 pub use session::{Commit, Session};

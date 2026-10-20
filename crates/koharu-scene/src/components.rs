@@ -8,6 +8,7 @@ mod analysis;
 mod assets;
 mod groups;
 mod layers;
+mod markup;
 mod provenance;
 mod spatial;
 mod structure;
@@ -23,7 +24,14 @@ pub use layers::{
     FontStyle, RasterLayer, RasterLayerKind, TextAlignment, TextLayout, TextLayoutKind, Typography,
     WritingMode,
 };
+pub use markup::{
+    Character, CharacterId, CharacterList, Gender, ObservedText, PageMarkup, PageMarkupMissing,
+    PageMarkupStatus, SpeechKind, SpeechMarkup, UnboxedText, UnboxedTextReview,
+};
 pub use provenance::{Authored, Generation, Origin};
 pub use spatial::{Geometry, Point, Visibility};
 pub use structure::{EntityOrigin, Page, PageDraft, Project, Relation, RelationKind};
-pub use text::{LanguageTag, SourceText, TextContent, TextRole, Translation};
+pub use text::{
+    LanguageTag, SourceText, TextContent, TextRole, Translation, TranslationReview,
+    TranslationReviewReason,
+};

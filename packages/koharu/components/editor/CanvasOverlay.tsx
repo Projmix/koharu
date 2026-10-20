@@ -1,6 +1,8 @@
 'use client'
 
+import { Plus, X } from 'lucide-react'
 import { useMemo, useRef } from 'react'
+import { useTranslation } from 'react-i18next'
 
 import { SelectionControls } from '@/components/editor/SelectionControls'
 import {
@@ -26,7 +28,9 @@ import type {
   Page,
   Point,
   TransformFrame,
+  UnboxedText,
 } from '@koharu/bridge/protocol'
+import { Button } from '@koharu/ui/components/button'
 
 interface CanvasOverlayProps {
   page: Page
@@ -39,6 +43,8 @@ interface CanvasOverlayProps {
   brushSize: number
   showBrushCursor: boolean
   showDetectionRegions: boolean
+  onCreateUnboxedText: (flag: UnboxedText) => void
+  onDismissUnboxedText: (flag: UnboxedText) => void
   onTransformStart: (elements: TransformFrame[]) => void
   onTransformFrame: (elements: TransformFrame[]) => void
   onTransformEnd: () => void
@@ -55,6 +61,8 @@ export function CanvasOverlay({
   brushSize,
   showBrushCursor,
   showDetectionRegions,
+  onCreateUnboxedText,
+  onDismissUnboxedText,
   onTransformStart,
   onTransformFrame,
   onTransformEnd,
@@ -63,6 +71,7 @@ export function CanvasOverlay({
   // Subscribed here so a camera change re-renders the overlay alone, not the whole workspace.
   const camera = useKoharuStore((state) => state.camera)
   const textTransformTarget = useKoharuStore((state) => state.textTransformTarget)
+  const textFitWarnings = useKoharuStore((state) => state.textFitWarnings)
   const expandedSelection = useMemo(
     () => expandLayerSelection(page.layers, selected),
     [page.layers, selected],
@@ -88,6 +97,8 @@ export function CanvasOverlay({
   const automaticRegion = selectedTextLayer?.automatic_region
     ? page.regions.find((region) => region.id === selectedTextLayer.automatic_region)
     : undefined
+  // A custom frame replaces the balloon as the area text is fitted into.
+  const fitArea = selectedTextLayer?.geometry ?? automaticRegion?.geometry
   const sourceRegion = selectedTextLayer?.content.source_region
     ? page.regions.find((region) => region.id === selectedTextLayer.content.source_region)
     : undefined
@@ -118,13 +129,22 @@ export function CanvasOverlay({
           numbers={regionNumbers}
         />
       )}
-      {automaticRegion && (
-        <AutomaticRegionOverlay geometry={automaticRegion.geometry} camera={camera} />
-      )}
+      {showDetectionRegions &&
+        page.unboxed_text.map((flag) => (
+          <UnboxedTextFlag
+            key={`${flag.x}:${flag.y}:${flag.width}:${flag.height}`}
+            flag={flag}
+            camera={camera}
+            onCreate={onCreateUnboxedText}
+            onDismiss={onDismissUnboxedText}
+          />
+        ))}
+      {fitArea && <AutomaticRegionOverlay geometry={fitArea} camera={camera} />}
       {layers.map(({ layer, frame, opacity }) => {
         const position = cssFrame(frame, camera)
         const selected = selectedIds.has(layer.id) && selectableLayer(layer)
         const highlighted = !selected && hovered === layer.id
+        const warned = !selected && !highlighted && Boolean(textFitWarnings[layer.id])
         return (
           <div
             key={layer.id}
@@ -140,7 +160,9 @@ export function CanvasOverlay({
               border:
                 highlighted || (selected && multipleSelected)
                   ? '1px solid var(--canvas-selection)'
-                  : undefined,
+                  : warned
+                    ? '1px dashed var(--color-amber-500)'
+                    : undefined,
               opacity,
               willChange: selected ? 'left, top, width, height, transform' : undefined,
             }}
@@ -241,6 +263,63 @@ function DetectionRegions({
         )
       })}
     </svg>
+  )
+}
+
+/**
+ * Lettering scene markup saw outside every text region. It is a review flag,
+ * not a region: creating a text block reads it, dismissing drops the flag.
+ */
+function UnboxedTextFlag({
+  flag,
+  camera,
+  onCreate,
+  onDismiss,
+}: {
+  flag: UnboxedText
+  camera: Camera
+  onCreate: (flag: UnboxedText) => void
+  onDismiss: (flag: UnboxedText) => void
+}) {
+  const { t } = useTranslation()
+  const position = cssFrame({ ...flag, angle_degrees: 0 }, camera)
+  return (
+    <div
+      data-testid='unboxed-text'
+      className='absolute rounded-sm border-2 border-dashed border-rose-500 bg-rose-500/10'
+      style={{
+        left: position.left,
+        top: position.top,
+        width: position.width,
+        height: position.height,
+      }}
+    >
+      <div className='absolute bottom-full left-0 mb-1 flex gap-1'>
+        <Button
+          data-canvas-control
+          type='button'
+          size='icon-xs'
+          className='pointer-events-auto bg-rose-600 text-white shadow-sm hover:bg-rose-700'
+          title={t('canvas.unboxedText.create')}
+          aria-label={t('canvas.unboxedText.create')}
+          onClick={() => onCreate(flag)}
+        >
+          <Plus />
+        </Button>
+        <Button
+          data-canvas-control
+          type='button'
+          size='icon-xs'
+          variant='outline'
+          className='pointer-events-auto shadow-sm'
+          title={t('canvas.unboxedText.dismiss')}
+          aria-label={t('canvas.unboxedText.dismiss')}
+          onClick={() => onDismiss(flag)}
+        >
+          <X />
+        </Button>
+      </div>
+    </div>
   )
 }
 

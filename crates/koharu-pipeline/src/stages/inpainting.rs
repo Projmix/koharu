@@ -259,6 +259,7 @@ impl Model {
             mask: prepared.mask.clone(),
             paint: prepared.paint.take(),
             restore_bounds: prepared.restore_bounds,
+            flat_fill: std::mem::take(&mut prepared.flat_fill),
         };
         let (model_name, image) = match self {
             Self::LaMa(model) => {
@@ -269,19 +270,13 @@ impl Model {
                         let model = model
                             .lock()
                             .map_err(|_| anyhow!("LaMa model lock is poisoned"))?;
-                        inpaint_tiled(
-                            &prepared.image,
-                            &prepared.mask,
-                            &prepared.text_mask,
-                            &prepared.flat_fill_regions,
-                            |image, mask| {
-                                Ok(DynamicImage::ImageRgb8(model.inference(
-                                    image,
-                                    mask,
-                                    &InpaintRequest::default(),
-                                )?))
-                            },
-                        )
+                        inpaint_tiled(&prepared.image, &prepared.unfilled_mask, |image, mask| {
+                            Ok(DynamicImage::ImageRgb8(model.inference(
+                                image,
+                                mask,
+                                &InpaintRequest::default(),
+                            )?))
+                        })
                     })
                     .await?,
                 )
@@ -294,15 +289,9 @@ impl Model {
                         let model = model
                             .lock()
                             .map_err(|_| anyhow!("AOT model lock is poisoned"))?;
-                        inpaint_tiled(
-                            &prepared.image,
-                            &prepared.mask,
-                            &prepared.text_mask,
-                            &prepared.flat_fill_regions,
-                            |image, mask| {
-                                Ok(DynamicImage::ImageRgb8(model.inference(image, mask)?))
-                            },
-                        )
+                        inpaint_tiled(&prepared.image, &prepared.unfilled_mask, |image, mask| {
+                            Ok(DynamicImage::ImageRgb8(model.inference(image, mask)?))
+                        })
                     })
                     .await?,
                 )
@@ -316,21 +305,15 @@ impl Model {
                         let model = model
                             .lock()
                             .map_err(|_| anyhow!("FLUX model lock is poisoned"))?;
-                        inpaint_tiled(
-                            &prepared.image,
-                            &prepared.mask,
-                            &prepared.text_mask,
-                            &prepared.flat_fill_regions,
-                            |image, mask| {
-                                model.inference(
-                                    &config.prompt,
-                                    image,
-                                    None,
-                                    &DynamicImage::ImageLuma8(mask.clone()),
-                                    &Flux2KleinInpaintOptions::default(),
-                                )
-                            },
-                        )
+                        inpaint_tiled(&prepared.image, &prepared.unfilled_mask, |image, mask| {
+                            model.inference(
+                                &config.prompt,
+                                image,
+                                None,
+                                &DynamicImage::ImageLuma8(mask.clone()),
+                                &Flux2KleinInpaintOptions::default(),
+                            )
+                        })
                     })
                     .await?,
                 )
@@ -344,21 +327,15 @@ impl Model {
                         let model = model
                             .lock()
                             .map_err(|_| anyhow!("RORem model lock is poisoned"))?;
-                        inpaint_tiled(
-                            &prepared.image,
-                            &prepared.mask,
-                            &prepared.text_mask,
-                            &prepared.flat_fill_regions,
-                            |image, mask| {
-                                Ok(DynamicImage::ImageRgb8(model.inference(
-                                    image,
-                                    mask,
-                                    &config.prompt,
-                                    &config.negative_prompt,
-                                    &RoremMixedOptions::default(),
-                                )?))
-                            },
-                        )
+                        inpaint_tiled(&prepared.image, &prepared.unfilled_mask, |image, mask| {
+                            Ok(DynamicImage::ImageRgb8(model.inference(
+                                image,
+                                mask,
+                                &config.prompt,
+                                &config.negative_prompt,
+                                &RoremMixedOptions::default(),
+                            )?))
+                        })
                     })
                     .await?,
                 )
@@ -451,6 +428,7 @@ struct CleanupTarget {
     mask: GrayImage,
     paint: Option<RgbaImage>,
     restore_bounds: Option<[u32; 4]>,
+    flat_fill: Vec<(u32, u32, Rgb<u8>)>,
 }
 
 impl CleanupTarget {
@@ -481,6 +459,7 @@ impl CleanupTarget {
             bail!("inpainted image dimensions do not match page {page}");
         }
         let mut overlay = cleanup_overlay(image, &self.mask, full_page, self.restore_bounds);
+        lock_flat_fill(&mut overlay, &self.mask, full_page, &self.flat_fill);
         exclude_paint_from_cleanup(&mut overlay, self.paint.as_ref());
         let mut bytes = Cursor::new(Vec::new());
         let width = overlay.width();
@@ -586,6 +565,22 @@ fn cleanup_overlay(
         *target = Rgba([generated[0], generated[1], generated[2], 255]);
     }
     overlay
+}
+
+// Image-edit models see the whole page and may repaint a balloon they were
+// told to keep, e.g. turn a dark balloon white. Uniform balloons were already
+// cleaned without a model, so their pixels override whatever the model returned.
+fn lock_flat_fill(
+    cleanup: &mut RgbaImage,
+    mask: &GrayImage,
+    full_page: bool,
+    flat_fill: &[(u32, u32, Rgb<u8>)],
+) {
+    for &(x, y, color) in flat_fill {
+        if full_page || mask.get_pixel(x, y)[0] >= 127 {
+            cleanup.put_pixel(x, y, Rgba([color[0], color[1], color[2], 255]));
+        }
+    }
 }
 
 fn exclude_paint_from_cleanup(cleanup: &mut RgbaImage, paint: Option<&RgbaImage>) {
@@ -697,8 +692,10 @@ struct InpaintInput {
     original: Arc<DynamicImage>,
     paint: Option<RgbaImage>,
     mask: GrayImage,
-    text_mask: GrayImage,
-    flat_fill_regions: Vec<FlatFillRegion>,
+    /// `mask` minus the pixels already cleaned by uniform balloon fill.
+    unfilled_mask: GrayImage,
+    /// Page-space balloon pixels a model result must not change.
+    flat_fill: Vec<(u32, u32, Rgb<u8>)>,
     restore_bounds: Option<[u32; 4]>,
 }
 
@@ -807,6 +804,17 @@ async fn prepare(
         }
     }
     let flat_fill_regions = flat_fill_regions(input, source.width(), source.height())?;
+    let mut filled = source.to_rgb8();
+    let mut unfilled_mask = mask.clone();
+    let flat_fill = fill_uniform_regions(
+        &mut filled,
+        &mut unfilled_mask,
+        &text_mask,
+        &flat_fill_regions,
+    );
+    if !flat_fill.is_empty() {
+        source = Arc::new(DynamicImage::ImageRgb8(filled));
+    }
     let restore_bounds = if input.inpainting_intent() == Some(InpaintingIntent::Restore) {
         mask_bounds(&mask)
     } else {
@@ -820,8 +828,8 @@ async fn prepare(
         original,
         paint,
         mask,
-        text_mask,
-        flat_fill_regions,
+        unfilled_mask,
+        flat_fill,
         restore_bounds,
     })
 }
@@ -830,6 +838,8 @@ const TILE_SIZE: u32 = 512;
 const TILE_CONTEXT: u32 = 128;
 const UNIFORM_BACKGROUND_MIN_PIXELS: usize = 16;
 const FLAT_FILL_EDGE_MARGIN: f32 = 3.0;
+const MASKED_FILL_TOLERANCE: u8 = 32;
+const MASKED_FILL_MIN_SHARE: f64 = 0.6;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct InpaintTile {
@@ -849,33 +859,29 @@ struct MaskComponent {
 // block crop to the inpainter:
 // https://github.com/dmMaze/BallonsTranslator/blob/4bcc635c19f6c63a902872cf77b3d554e14ed1b7/ballontranslator/modules/inpaint/base.py#L168-L200
 // Koharu uses the detected bubble polygons as those blocks. Uniform bubbles are
-// filled first; only the remaining mask is split into bounded model crops.
+// filled first for every provider; only the remaining mask is split into
+// bounded model crops.
 fn inpaint_tiled(
     image: &DynamicImage,
-    mask: &GrayImage,
-    text_mask: &GrayImage,
-    flat_fill_regions: &[FlatFillRegion],
+    pending_mask: &GrayImage,
     mut inference: impl FnMut(&DynamicImage, &GrayImage) -> Result<DynamicImage>,
 ) -> Result<DynamicImage> {
     ensure!(
-        image.dimensions() == mask.dimensions() && mask.dimensions() == text_mask.dimensions(),
-        "image and mask dimensions differ: image={:?}, mask={:?}, text_mask={:?}",
+        image.dimensions() == pending_mask.dimensions(),
+        "image and mask dimensions differ: image={:?}, mask={:?}",
         image.dimensions(),
-        mask.dimensions(),
-        text_mask.dimensions()
+        pending_mask.dimensions()
     );
 
     let mut output = image.to_rgb8();
-    let mut pending_mask = mask.clone();
-    fill_uniform_regions(&mut output, &mut pending_mask, text_mask, flat_fill_regions);
-    let (component_labels, tiles) = inpaint_tiles(&pending_mask);
+    let (component_labels, tiles) = inpaint_tiles(pending_mask);
     for tile in &tiles {
         let [left, top, right, bottom] = tile.crop;
         let crop_width = right - left;
         let crop_height = bottom - top;
         let crop_image =
             image::imageops::crop_imm(&output, left, top, crop_width, crop_height).to_image();
-        let crop_mask = crop_tile_mask(&pending_mask, tile);
+        let crop_mask = crop_tile_mask(pending_mask, tile);
 
         let generated = inference(&DynamicImage::ImageRgb8(crop_image), &crop_mask)?;
         let generated = if generated.dimensions() == (crop_width, crop_height) {
@@ -894,12 +900,15 @@ fn inpaint_tiled(
     Ok(DynamicImage::ImageRgb8(output))
 }
 
+/// Fills the text inside uniform balloons and returns every pixel of those
+/// balloons that is no longer pending, with its final colour.
 fn fill_uniform_regions(
     output: &mut RgbImage,
     pending_mask: &mut GrayImage,
     text_mask: &GrayImage,
     regions: &[FlatFillRegion],
-) {
+) -> Vec<(u32, u32, Rgb<u8>)> {
+    let mut filled = Vec::new();
     for region in regions {
         let [left, top, right, bottom] = region.bounds;
         let mut targets = Vec::new();
@@ -923,7 +932,18 @@ fn fill_uniform_regions(
             output.put_pixel(x, y, color);
             pending_mask.put_pixel(x, y, Luma([0]));
         }
+        let [left, top, right, bottom] = region.bounds;
+        for y in top..bottom {
+            for x in left..right {
+                if pending_mask.get_pixel(x, y)[0] < 127
+                    && point_in_polygon((x as f32 + 0.5, y as f32 + 0.5), &region.polygon)
+                {
+                    filled.push((x, y, *output.get_pixel(x, y)));
+                }
+            }
+        }
     }
+    filled
 }
 
 fn inpaint_tiles(mask: &GrayImage) -> (ImageBuffer<Luma<u32>, Vec<u32>>, Vec<InpaintTile>) {
@@ -1083,28 +1103,69 @@ fn uniform_region_color(
     region: &FlatFillRegion,
 ) -> Option<Rgb<u8>> {
     let [left, top, right, bottom] = region.bounds;
-    let mut channels = [Vec::new(), Vec::new(), Vec::new()];
+    let mut interior = Vec::new();
+    let mut unmasked = Vec::new();
     for y in top..bottom {
         for x in left..right {
             let point = (x as f32 + 0.5, y as f32 + 0.5);
-            if mask.get_pixel(x, y)[0] >= 127
-                || !point_in_polygon(point, &region.polygon)
+            if !point_in_polygon(point, &region.polygon)
                 || polygon_edge_distance_squared(point, &region.polygon)
                     < FLAT_FILL_EDGE_MARGIN * FLAT_FILL_EDGE_MARGIN
             {
                 continue;
             }
-            let pixel = image.get_pixel(x, y);
-            for channel in 0..3 {
-                channels[channel].push(pixel[channel]);
+            let pixel = *image.get_pixel(x, y);
+            interior.push(pixel);
+            if mask.get_pixel(x, y)[0] < 127 {
+                unmasked.push(pixel);
             }
         }
     }
-    if channels[0].len() < UNIFORM_BACKGROUND_MIN_PIXELS {
-        return None;
+    if let Some(color) = flat_color(&unmasked) {
+        return Some(color);
     }
 
-    let medians = channels.each_mut().map(|values| median(values));
+    // Deliberate divergence from BallonsTranslator: a text mask can cover the
+    // whole balloon, or leave only a few stray pixels unmasked, as happens with
+    // white lettering on a dark balloon. The balloon fill is still the dominant
+    // colour of the interior, so keep the pixels near the interior median and
+    // require them to be most of the balloon and flat on their own. Textured,
+    // gradient, or lettering-dense interiors still go to the model.
+    let center = median_color(&interior)?;
+    let inliers = interior
+        .iter()
+        .copied()
+        .filter(|pixel| {
+            (0..3).all(|channel| pixel[channel].abs_diff(center[channel]) <= MASKED_FILL_TOLERANCE)
+        })
+        .collect::<Vec<_>>();
+    if (inliers.len() as f64) < interior.len() as f64 * MASKED_FILL_MIN_SHARE {
+        return None;
+    }
+    flat_color(&inliers)
+}
+
+fn median_color(pixels: &[Rgb<u8>]) -> Option<Rgb<u8>> {
+    if pixels.len() < UNIFORM_BACKGROUND_MIN_PIXELS {
+        return None;
+    }
+    let mut channels = std::array::from_fn::<_, 3, _>(|channel| {
+        pixels
+            .iter()
+            .map(|pixel| pixel[channel])
+            .collect::<Vec<_>>()
+    });
+    Some(Rgb(channels.each_mut().map(|values| median(values))))
+}
+
+fn flat_color(pixels: &[Rgb<u8>]) -> Option<Rgb<u8>> {
+    let medians = median_color(pixels)?.0;
+    let channels = std::array::from_fn::<_, 3, _>(|channel| {
+        pixels
+            .iter()
+            .map(|pixel| pixel[channel])
+            .collect::<Vec<_>>()
+    });
     let deviations = std::array::from_fn::<_, 3, _>(|channel| {
         standard_deviation(&channels[channel], f64::from(medians[channel]))
     });
@@ -1261,7 +1322,8 @@ mod tests {
         let prepared = prepare(&input, false, false).await.unwrap();
         assert_eq!(prepared.mask.get_pixel(3, 4), &Luma([255]));
         assert_eq!(prepared.mask.get_pixel(0, 0), &Luma([0]));
-        assert!(prepared.text_mask.pixels().all(|pixel| pixel[0] == 0));
+        assert_eq!(prepared.unfilled_mask, prepared.mask);
+        assert!(prepared.flat_fill.is_empty());
     }
 
     #[tokio::test]
@@ -1778,17 +1840,18 @@ mod tests {
             }
         }
         let mut calls = 0;
-
-        let output = inpaint_tiled(
-            &DynamicImage::ImageRgb8(image),
-            &mask,
+        let mut pending = mask.clone();
+        fill_uniform_regions(
+            &mut image,
+            &mut pending,
             &mask,
             &[rectangle_region([0, 0, 96, 96])],
-            |_, _| {
-                calls += 1;
-                Ok(DynamicImage::new_rgb8(1, 1))
-            },
-        )
+        );
+
+        let output = inpaint_tiled(&DynamicImage::ImageRgb8(image), &pending, |_, _| {
+            calls += 1;
+            Ok(DynamicImage::new_rgb8(1, 1))
+        })
         .unwrap()
         .to_rgb8();
 
@@ -1826,26 +1889,66 @@ mod tests {
             }
         }
         let mut calls = 0;
-
-        let output = inpaint_tiled(
-            &DynamicImage::ImageRgb8(image),
-            &mask,
+        let mut pending = mask.clone();
+        fill_uniform_regions(
+            &mut image,
+            &mut pending,
             &mask,
             &[
                 rectangle_region([10, 10, 90, 90]),
                 rectangle_region([110, 10, 190, 90]),
             ],
-            |_, _| {
-                calls += 1;
-                Ok(DynamicImage::new_rgb8(1, 1))
-            },
-        )
+        );
+
+        let output = inpaint_tiled(&DynamicImage::ImageRgb8(image), &pending, |_, _| {
+            calls += 1;
+            Ok(DynamicImage::new_rgb8(1, 1))
+        })
         .unwrap()
         .to_rgb8();
 
         assert_eq!(calls, 0);
         assert_eq!(output.get_pixel(45, 50), &Rgb([245, 245, 245]));
         assert_eq!(output.get_pixel(150, 50), &Rgb([250, 240, 220]));
+    }
+
+    #[test]
+    fn dark_balloon_covered_by_its_text_mask_keeps_its_own_fill() {
+        let dark = Rgb([30, 40, 40]);
+        let mut image = RgbImage::from_pixel(80, 120, Rgb([200, 200, 200]));
+        let mut mask = GrayImage::new(80, 120);
+        for y in 10..110 {
+            for x in 10..70 {
+                image.put_pixel(x, y, dark);
+                mask.put_pixel(x, y, Luma([u8::MAX]));
+            }
+        }
+        for y in (20..100).step_by(10) {
+            for x in 25..55 {
+                image.put_pixel(x, y, Rgb([255, 255, 255]));
+                image.put_pixel(x, y + 1, Rgb([255, 255, 255]));
+            }
+        }
+        let mut pending = mask.clone();
+
+        let filled = fill_uniform_regions(
+            &mut image,
+            &mut pending,
+            &mask,
+            &[rectangle_region([10, 10, 70, 110])],
+        );
+
+        assert!(pending.pixels().all(|pixel| pixel[0] == 0));
+        assert_eq!(image.get_pixel(30, 20), &dark);
+        assert_eq!(image.get_pixel(40, 61), &dark);
+
+        // A full-page image-edit result that repaints the balloon white is
+        // overridden by the balloon's own fill.
+        let generated = RgbaImage::from_pixel(80, 120, Rgba([250, 250, 250, 255]));
+        let mut cleanup = cleanup_overlay(&generated, &mask, true, None);
+        lock_flat_fill(&mut cleanup, &mask, true, &filled);
+        assert_eq!(cleanup.get_pixel(40, 61), &Rgba([30, 40, 40, 255]));
+        assert_eq!(cleanup.get_pixel(5, 5), &Rgba([250, 250, 250, 255]));
     }
 
     #[test]
@@ -1859,24 +1962,18 @@ mod tests {
         }
         let mut calls = 0;
 
-        let output = inpaint_tiled(
-            &DynamicImage::ImageRgb8(image),
-            &mask,
-            &mask,
-            &[],
-            |tile, tile_mask| {
-                calls += 1;
-                assert_eq!(
-                    tile_mask.pixels().filter(|pixel| pixel[0] >= 127).count(),
-                    25 * 25
-                );
-                Ok(DynamicImage::ImageRgb8(RgbImage::from_pixel(
-                    tile.width(),
-                    tile.height(),
-                    Rgb([1, 2, 3]),
-                )))
-            },
-        )
+        let output = inpaint_tiled(&DynamicImage::ImageRgb8(image), &mask, |tile, tile_mask| {
+            calls += 1;
+            assert_eq!(
+                tile_mask.pixels().filter(|pixel| pixel[0] >= 127).count(),
+                25 * 25
+            );
+            Ok(DynamicImage::ImageRgb8(RgbImage::from_pixel(
+                tile.width(),
+                tile.height(),
+                Rgb([1, 2, 3]),
+            )))
+        })
         .unwrap()
         .to_rgb8();
 
@@ -1935,22 +2032,16 @@ mod tests {
         mask.put_pixel(1100, 600, Luma([u8::MAX]));
         let mut calls = 0;
 
-        let output = inpaint_tiled(
-            &DynamicImage::ImageRgb8(image),
-            &mask,
-            &mask,
-            &[],
-            |tile, _| {
-                calls += 1;
-                assert!(tile.width() <= TILE_CONTEXT * 2 + 1);
-                assert!(tile.height() <= TILE_CONTEXT * 2 + 1);
-                Ok(DynamicImage::ImageRgb8(RgbImage::from_pixel(
-                    tile.width(),
-                    tile.height(),
-                    Rgb([1, 2, 3]),
-                )))
-            },
-        )
+        let output = inpaint_tiled(&DynamicImage::ImageRgb8(image), &mask, |tile, _| {
+            calls += 1;
+            assert!(tile.width() <= TILE_CONTEXT * 2 + 1);
+            assert!(tile.height() <= TILE_CONTEXT * 2 + 1);
+            Ok(DynamicImage::ImageRgb8(RgbImage::from_pixel(
+                tile.width(),
+                tile.height(),
+                Rgb([1, 2, 3]),
+            )))
+        })
         .unwrap()
         .to_rgb8();
 

@@ -6,6 +6,7 @@ import {
   AlignLeft,
   AlignRight,
   ArrowDown,
+  ArrowRightLeft,
   ArrowUp,
   Brush,
   ChevronDown,
@@ -19,7 +20,10 @@ import {
   Minus,
   Plus,
   RotateCcw,
+  Scissors,
+  SquareDashed,
   Trash2,
+  TriangleAlert,
   Type,
 } from 'lucide-react'
 import { type MouseEvent, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
@@ -37,7 +41,15 @@ import {
   layerChildren,
   ocrNumbering,
 } from '@/lib/document'
-import { pageKey, projectKey, queryClient, refresh, useFonts, usePage } from '@/lib/queries'
+import {
+  pageKey,
+  projectKey,
+  queryClient,
+  refresh,
+  useCharacters,
+  useFonts,
+  usePage,
+} from '@/lib/queries'
 import { useKoharuStore } from '@/lib/store'
 import { previewCanvasOpacity } from '@koharu/bridge/canvas'
 import {
@@ -46,10 +58,14 @@ import {
   type FontFamily,
   type FontStyle,
   type Layer,
+  type SpeechKind,
   type TextAlignment,
+  type TextFitWarningKind,
+  type TranslationReviewReason,
   type Typography,
   type WritingMode,
 } from '@koharu/bridge/protocol'
+import { Badge } from '@koharu/ui/components/badge'
 import { Button } from '@koharu/ui/components/button'
 import {
   DropdownMenu,
@@ -431,7 +447,7 @@ function TypeInspector() {
           </InspectorField>
         </div>
 
-        <div className='grid min-w-0 grid-cols-[2.75rem_minmax(5.5rem,1fr)] items-end gap-1.5'>
+        <div className='grid min-w-0 grid-cols-[2.75rem_minmax(5.5rem,1fr)_1.5rem] items-end gap-1.5'>
           <InspectorField label={t('inspector.border')}>
             <ColorWell
               label={t('inspector.borderColor')}
@@ -486,10 +502,45 @@ function TypeInspector() {
               </NumberFieldGroup>
             </NumberField>
           </InspectorField>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  type='button'
+                  variant='ghost'
+                  size='icon-xs'
+                  aria-label={t('inspector.invertBorder')}
+                  disabled={disabled}
+                  onClick={() => apply(invertBorder)}
+                />
+              }
+            >
+              <ArrowRightLeft className='size-3' />
+            </TooltipTrigger>
+            <TooltipContent side='left'>{t('inspector.invertBorder')}</TooltipContent>
+          </Tooltip>
         </div>
       </div>
     </div>
   )
+}
+
+// Swaps the text and border colors. Text without a visible border becomes
+// black or white, whichever contrasts with its old color, outlined in it.
+function invertBorder(value: Typography): Typography {
+  const color = value.color ?? defaultTypography.color!
+  const stroke = value.stroke_color
+  if ((value.stroke_width ?? 0) > 0 && stroke && stroke[3] > 0) {
+    return { ...value, color: stroke, stroke_color: color }
+  }
+  const [red, green, blue] = color
+  const light = 0.2126 * red + 0.7152 * green + 0.0722 * blue > 127.5
+  return {
+    ...value,
+    color: light ? [0, 0, 0, 255] : [255, 255, 255, 255],
+    stroke_color: [red, green, blue, 255],
+    stroke_width: 1.5,
+  }
 }
 
 function findFontFamily(families: FontFamily[], name: string): FontFamily | undefined {
@@ -871,6 +922,12 @@ function LayersInspector() {
   )
 }
 
+const textFitWarningLabels = {
+  overflow: 'layers.textOverflow',
+  below_readable_size: 'layers.textBelowReadableSize',
+  low_contrast: 'layers.textLowContrast',
+} as const satisfies Record<TextFitWarningKind, string>
+
 function LayerRow({
   layer,
   index,
@@ -927,6 +984,13 @@ function LayerRow({
   const detail = localizedLayerKind(layer, t)
   const currentRole = isTextLayer(layer) ? supportedTextRole(layer.content.role) : null
   const Icon = layerIcon(layer)
+  const fitWarning = useKoharuStore((state) => state.textFitWarnings[layer.id])
+  const warning = [
+    fitWarning && t(textFitWarningLabels[fitWarning]),
+    isTextLayer(layer) && layer.content.ocr_unverified && t('layers.ocrUnverified'),
+  ]
+    .filter(Boolean)
+    .join(' · ')
   const [numberValue, setNumberValue] = useState(number?.toString() ?? '')
 
   useEffect(() => setNumberValue(number?.toString() ?? ''), [number])
@@ -1034,7 +1098,19 @@ function LayerRow({
               />
             )}
             <span className='min-w-0 flex-1'>
-              <span className='block truncate text-[11px] font-medium'>{name}</span>
+              <span className='flex min-w-0 items-center gap-1'>
+                <span className='truncate text-[11px] font-medium'>{name}</span>
+                {warning && (
+                  <TriangleAlert
+                    role='img'
+                    data-testid={`text-warning-${layer.id}`}
+                    aria-label={warning}
+                    className='size-3 shrink-0 text-amber-500'
+                  >
+                    <title>{warning}</title>
+                  </TriangleAlert>
+                )}
+              </span>
               {!onRoleChange && (
                 <span className='block truncate text-[9px] leading-3 text-muted-foreground capitalize'>
                   {detail}
@@ -1151,6 +1227,10 @@ function LayerEditor({ layer, onDelete }: { layer: Layer; onDelete?: () => void 
   const translationInput = useRef<HTMLTextAreaElement>(null)
   const pendingTextFocus = useKoharuStore((state) => state.pendingTextFocus)
   const textTransformTarget = useKoharuStore((state) => state.textTransformTarget)
+  const fitWarning = useKoharuStore((state) => state.textFitWarnings[layer.id])
+  const processing = useKoharuStore((state) =>
+    Object.values(state.jobs).some((job) => job.state === 'running'),
+  )
   useEffect(() => {
     if (pendingTextFocus !== layer.id || !translationInput.current) return
     translationInput.current.focus()
@@ -1260,6 +1340,30 @@ function LayerEditor({ layer, onDelete }: { layer: Layer; onDelete?: () => void 
                   ? t('inspector.autoFit')
                   : t('inspector.unplaced')}
             </span>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    type='button'
+                    variant={textTransformTarget === 'area' ? 'secondary' : 'ghost'}
+                    size='xs'
+                    aria-label={t('inspector.drawArea')}
+                    aria-pressed={textTransformTarget === 'area'}
+                    className='ml-auto h-5 gap-1 rounded-md px-1.5 text-[9px] font-normal text-muted-foreground hover:text-foreground'
+                    onClick={() =>
+                      useKoharuStore.setState({
+                        textTransformTarget: textTransformTarget === 'area' ? 'text' : 'area',
+                        tool: 'select',
+                      })
+                    }
+                  />
+                }
+              >
+                <SquareDashed className='size-3' />
+                {t('inspector.drawAreaShort')}
+              </TooltipTrigger>
+              <TooltipContent side='left'>{t('inspector.drawArea')}</TooltipContent>
+            </Tooltip>
             {layer.geometry && layer.automatic_region && (
               <Tooltip>
                 <TooltipTrigger
@@ -1269,7 +1373,7 @@ function LayerEditor({ layer, onDelete }: { layer: Layer; onDelete?: () => void 
                       variant='ghost'
                       size='xs'
                       aria-label={t('inspector.resetAutoFit')}
-                      className='ml-auto h-5 gap-1 rounded-md px-1.5 text-[9px] font-normal text-muted-foreground hover:text-foreground'
+                      className='h-5 gap-1 rounded-md px-1.5 text-[9px] font-normal text-muted-foreground hover:text-foreground'
                       onClick={resetTextFrame}
                     />
                   }
@@ -1310,10 +1414,179 @@ function LayerEditor({ layer, onDelete }: { layer: Layer; onDelete?: () => void 
               }
             />
           </InspectorField>
+          {(fitWarning === 'overflow' || fitWarning === 'below_readable_size') &&
+            layer.content.translation?.generated &&
+            layer.content.translation.text.trim() && (
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      type='button'
+                      variant='outline'
+                      size='xs'
+                      data-testid={`shorten-translation-${layer.id}`}
+                      disabled={processing}
+                      className='h-5 gap-1 justify-self-start rounded-md px-1.5 text-[9px] font-normal'
+                      onClick={() =>
+                        void call(
+                          commands.process,
+                          { scope: 'entities', value: [layer.id] },
+                          { operation: 'shorten' },
+                        ).catch(() => undefined)
+                      }
+                    />
+                  }
+                >
+                  <Scissors className='size-3' />
+                  {t('inspector.shortenTranslation')}
+                </TooltipTrigger>
+                <TooltipContent side='left'>{t('inspector.shortenTranslationHint')}</TooltipContent>
+              </Tooltip>
+            )}
+          {layer.content.translation_review && (
+            <div
+              data-testid={`translation-review-${layer.id}`}
+              className='grid min-w-0 gap-1 rounded-md border border-amber-500/30 bg-amber-500/[0.06] px-1.5 py-1'
+            >
+              <div className='flex min-w-0 items-start gap-1'>
+                <Badge
+                  variant='outline'
+                  className='h-auto min-w-0 shrink justify-start border-amber-500/40 px-1.5 py-0.5 text-left text-[9px] leading-3 whitespace-normal text-amber-700 dark:text-amber-400'
+                >
+                  <TriangleAlert />
+                  {t(translationReviewLabels[layer.content.translation_review.reason])}
+                </Badge>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <Button
+                        type='button'
+                        variant='ghost'
+                        size='xs'
+                        aria-label={t('inspector.translationReviewKeepHint')}
+                        className='ml-auto h-5 shrink-0 rounded-md px-1.5 text-[9px] font-normal text-muted-foreground hover:text-foreground'
+                        onClick={() =>
+                          call(
+                            commands.setTranslation,
+                            layer.id,
+                            layer.content.translation?.text ?? null,
+                          )
+                            .then(() => refresh(projectKey, pageKey))
+                            .catch(() => undefined)
+                        }
+                      />
+                    }
+                  >
+                    {t('inspector.translationReviewKeep')}
+                  </TooltipTrigger>
+                  <TooltipContent side='left'>
+                    {t('inspector.translationReviewKeepHint')}
+                  </TooltipContent>
+                </Tooltip>
+              </div>
+              {layer.content.translation_review.reference && (
+                <InspectorField label={t('inspector.translationReviewReference')}>
+                  <p className='max-h-16 min-w-0 overflow-y-auto text-[11px] leading-4 break-words whitespace-pre-wrap select-text'>
+                    {layer.content.translation_review.reference}
+                  </p>
+                </InspectorField>
+              )}
+            </div>
+          )}
+          <SpeechMarkupFields layer={layer} name={name} />
         </>
       )}
     </div>
   )
+}
+
+const speechKinds: SpeechKind[] = [
+  'speech',
+  'thought',
+  'narration',
+  'sound-effect',
+  'sign',
+  'aside',
+]
+
+/** Kind and speaker of a text. Each choice commits user-authored scene markup. */
+function SpeechMarkupFields({
+  layer,
+  name,
+}: {
+  layer: Extract<Layer, { type: 'text' }>
+  name: string
+}) {
+  const { t } = useTranslation()
+  const characters = useCharacters().data ?? []
+  const markup = layer.content.markup
+  const commit = (kind: SpeechKind, speaker: string | null) =>
+    call(commands.setSpeechMarkup, layer.id, kind, speaker)
+      .then(() => refresh(projectKey, pageKey))
+      .catch(() => undefined)
+  const kindLabels = Object.fromEntries(
+    speechKinds.map((kind) => [kind, t(`inspector.speechKinds.${kind}`)]),
+  )
+  const speakerLabels = {
+    none: t('inspector.noSpeaker'),
+    ...Object.fromEntries(characters.map((character) => [character.id, character.name])),
+  }
+
+  return (
+    <div className='grid min-w-0 grid-cols-2 gap-1.5'>
+      <InspectorField label={t('inspector.speechKind')}>
+        <Select
+          value={markup?.kind ?? null}
+          items={kindLabels}
+          onValueChange={(kind) => kind && commit(kind as SpeechKind, markup?.speaker ?? null)}
+        >
+          <SelectTrigger
+            data-testid={`speech-kind-${layer.id}`}
+            aria-label={t('inspector.speechKindLabel', { name })}
+            className='h-6 w-full min-w-0 text-[11px]'
+          >
+            <SelectValue placeholder={t('inspector.unmarked')} />
+          </SelectTrigger>
+          <SelectContent>
+            {speechKinds.map((kind) => (
+              <SelectItem key={kind} value={kind}>
+                {kindLabels[kind]}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </InspectorField>
+      <InspectorField label={t('inspector.speaker')}>
+        <Select
+          value={markup?.speaker ?? 'none'}
+          items={speakerLabels}
+          onValueChange={(speaker) =>
+            speaker && commit(markup?.kind ?? 'speech', speaker === 'none' ? null : speaker)
+          }
+        >
+          <SelectTrigger
+            data-testid={`speaker-${layer.id}`}
+            aria-label={t('inspector.speakerLabel', { name })}
+            className='h-6 w-full min-w-0 text-[11px] [&>span]:truncate'
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value='none'>{speakerLabels.none}</SelectItem>
+            {characters.map((character) => (
+              <SelectItem key={character.id} value={character.id}>
+                {character.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </InspectorField>
+    </div>
+  )
+}
+
+const translationReviewLabels: Record<TranslationReviewReason, string> = {
+  'softened-profanity': 'inspector.translationReview',
 }
 
 function InspectorField({ label, children }: { label: string; children: React.ReactNode }) {

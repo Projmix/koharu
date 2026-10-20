@@ -37,12 +37,10 @@ impl PageWork {
     }
 
     fn ready(&self, index: usize) -> bool {
-        let Some(prerequisite) = prerequisite(self.stages[index].stage) else {
-            return true;
-        };
+        let prerequisites = prerequisites(self.stages[index].stage);
         self.stages
             .iter()
-            .filter(|work| work.stage == prerequisite)
+            .filter(|work| prerequisites.contains(&work.stage))
             .all(|work| work.state == WorkState::Finished)
     }
 }
@@ -312,11 +310,15 @@ impl Scheduler {
     }
 }
 
-const fn prerequisite(stage: Stage) -> Option<Stage> {
+/// The earlier stages of a page that a stage waits for when they are in the
+/// same run. Translation uses whatever markup exists, so it waits for markup
+/// only when the run includes it.
+const fn prerequisites(stage: Stage) -> &'static [Stage] {
     match stage {
-        Stage::Detection => None,
-        Stage::Ocr | Stage::Inpainting => Some(Stage::Detection),
-        Stage::Translation => Some(Stage::Ocr),
+        Stage::Detection => &[],
+        Stage::Ocr | Stage::Inpainting => &[Stage::Detection],
+        Stage::Markup => &[Stage::Ocr],
+        Stage::Translation => &[Stage::Ocr, Stage::Markup],
     }
 }
 
@@ -402,13 +404,82 @@ mod tests {
 
         assert!(!scheduler.complete_stage(StageTarget::Page(pages[0]), Stage::Ocr));
         busy.remove(&Stage::Ocr);
-        let translation = scheduler.start_next(&busy).unwrap();
-        assert_eq!(
-            translation,
-            (StageTarget::Page(pages[0]), Stage::Translation)
-        );
+        let markup = scheduler.start_next(&busy).unwrap();
+        assert_eq!(markup, (StageTarget::Page(pages[0]), Stage::Markup));
         assert!(busy.contains(&Stage::Detection));
         assert!(busy.contains(&Stage::Inpainting));
+    }
+
+    #[test]
+    fn page_translation_waits_for_markup_only_when_it_is_in_the_run() {
+        let pages = pages(1);
+        let stages = [Stage::Ocr, Stage::Markup, Stage::Translation];
+        let mut scheduler = Scheduler::new(&pages, &stages, false, false);
+        let busy = BTreeSet::new();
+        let ocr = scheduler.start_next(&busy).unwrap();
+        scheduler.complete_stage(ocr.0, ocr.1);
+        let markup = scheduler.start_next(&busy).unwrap();
+        assert_eq!(markup, (StageTarget::Page(pages[0]), Stage::Markup));
+        assert!(
+            scheduler
+                .start_next(&BTreeSet::from([Stage::Markup]))
+                .is_none()
+        );
+        scheduler.complete_stage(markup.0, markup.1);
+        assert_eq!(
+            scheduler.start_next(&busy),
+            Some((StageTarget::Page(pages[0]), Stage::Translation))
+        );
+
+        let mut scheduler = Scheduler::new(&pages, &[Stage::Ocr, Stage::Translation], false, false);
+        let ocr = scheduler.start_next(&busy).unwrap();
+        scheduler.complete_stage(ocr.0, ocr.1);
+        assert_eq!(
+            scheduler.start_next(&busy),
+            Some((StageTarget::Page(pages[0]), Stage::Translation))
+        );
+    }
+
+    #[test]
+    fn chapter_translation_waits_for_markup_on_every_page() {
+        let pages = pages(2);
+        let mut scheduler = Scheduler::new(&pages, &Stage::ALL, true, false);
+        let busy = BTreeSet::new();
+        assert_eq!(scheduler.total(), 9);
+        for stage in [Stage::Detection, Stage::Ocr, Stage::Markup] {
+            for page in &pages {
+                let work = scheduler.start_next(&busy).unwrap();
+                assert_eq!(work, (StageTarget::Page(*page), stage));
+                assert!(scheduler.start_next(&BTreeSet::from([stage])).is_none());
+                scheduler.complete_stage(work.0, work.1);
+            }
+        }
+        let chapter = scheduler.start_next(&busy).unwrap();
+        assert_eq!(chapter, (StageTarget::Chapter, Stage::Translation));
+        assert!(
+            scheduler
+                .start_next(&BTreeSet::from([Stage::Translation]))
+                .is_none()
+        );
+        scheduler.complete_stage(chapter.0, chapter.1);
+        assert_eq!(
+            scheduler.start_next(&busy),
+            Some((StageTarget::Page(pages[0]), Stage::Inpainting))
+        );
+    }
+
+    #[test]
+    fn markup_alone_runs_each_page_in_project_order() {
+        let pages = pages(2);
+        let mut scheduler = Scheduler::new(&pages, &[Stage::Markup], true, false);
+        let busy = BTreeSet::new();
+        assert_eq!(scheduler.total(), 2);
+        for page in &pages {
+            let work = scheduler.start_next(&busy).unwrap();
+            assert_eq!(work, (StageTarget::Page(*page), Stage::Markup));
+            scheduler.complete_stage(work.0, work.1);
+        }
+        assert!(scheduler.start_next(&busy).is_none());
     }
 
     #[test]

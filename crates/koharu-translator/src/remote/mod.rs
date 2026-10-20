@@ -33,8 +33,8 @@ pub use qwen_ocr::QwenOcrConfig;
 pub use qwen_ocr::default_model as default_qwen_ocr_model;
 
 use crate::{
-    Error, GenerationConfig, Model, ModelSelection, OcrRequest, Provider, ProvidersConfig, Result,
-    TranslationRequest,
+    Error, GenerationConfig, MarkupOutcome, MarkupRequest, Model, ModelSelection, OcrRequest,
+    Provider, ProvidersConfig, Result, TranslationRequest,
 };
 
 pub(crate) async fn translate(
@@ -47,6 +47,15 @@ pub(crate) async fn translate(
     if request.is_chapter() && !supports_structured_chapter(selection.provider) {
         return Err(anyhow::anyhow!(
             "{} does not support strict chapter translation responses; choose a structured-output provider",
+            selection.provider
+        )
+        .into());
+    }
+    // A shortening rewrite reads the current translation and its limit from
+    // the prompt; machine translation would only translate the source again.
+    if request.has_shorten() && !supports_structured_chapter(selection.provider) {
+        return Err(anyhow::anyhow!(
+            "{} cannot shorten a translation; choose a language-model provider",
             selection.provider
         )
         .into());
@@ -162,6 +171,35 @@ pub(crate) async fn recognize(
             .await
         }
         _ => Err(anyhow::anyhow!("{provider} does not support API OCR").into()),
+    }
+}
+
+pub(crate) async fn mark_up(
+    client: &Client,
+    providers: &ProvidersConfig,
+    provider: Provider,
+    model: &str,
+    generation: &GenerationConfig,
+    request: &MarkupRequest,
+) -> Result<MarkupOutcome> {
+    match provider {
+        Provider::OpenRouter => {
+            openrouter::mark_up(client, &providers.openrouter, model, generation, request).await
+        }
+        Provider::OpenAi => {
+            openai::mark_up(client, &providers.openai, model, generation, request).await
+        }
+        Provider::OpenAiCompatible => {
+            openai_compatible::compatible_markup(
+                client,
+                &providers.openai_compatible,
+                model,
+                generation,
+                request,
+            )
+            .await
+        }
+        _ => Err(anyhow::anyhow!("{provider} does not support scene markup").into()),
     }
 }
 

@@ -5,9 +5,10 @@
 //! relation endpoints.
 
 use crate::{
-    BubbleRegion, DetectionAnalysis, EntityId, EntityOrigin, Error, Geometry, Group, OcrAnalysis,
-    Page, Project, RasterLayer, Region, RegionSpec, Relation, Result, SourceText, TextContent,
-    TextGroup, TextLayout, TextRegion, TextRole, Translation, Typography, Visibility,
+    BubbleRegion, CharacterList, DetectionAnalysis, EntityId, EntityOrigin, Error, Geometry, Group,
+    OcrAnalysis, Page, PageMarkup, Project, RasterLayer, Region, RegionSpec, Relation, Result,
+    SourceText, SpeechMarkup, TextContent, TextGroup, TextLayout, TextRegion, TextRole,
+    Translation, TranslationReview, Typography, UnboxedTextReview, Visibility,
     component::{Component, ComponentRecord, ValidationContext, decode, key},
     components::Assets,
     state::{Components, State},
@@ -60,6 +61,11 @@ component_schema! {
     DETECTION_ANALYSIS = 15 => DetectionAnalysis,
     ASSETS = 16 => Assets,
     ENTITY_ORIGIN = 17 => EntityOrigin,
+    TRANSLATION_REVIEW = 18 => TranslationReview,
+    SPEECH_MARKUP = 19 => SpeechMarkup,
+    PAGE_MARKUP = 20 => PageMarkup,
+    CHARACTER_LIST = 21 => CharacterList,
+    UNBOXED_TEXT_REVIEW = 22 => UnboxedTextReview,
 }
 
 pub(crate) fn validate_components(
@@ -102,9 +108,21 @@ pub(crate) fn validate_entity(state: &State, id: EntityId) -> Result<()> {
         })
     });
 
-    if (has_source || has_translation || has(TEXT_ROLE)) && !has_content {
+    if (has_source || has_translation || has(TEXT_ROLE) || has(SPEECH_MARKUP)) && !has_content {
         Err(Error::invalid(format!(
             "entity {id} carries text content data but is not text content"
+        )))
+    } else if (has(PAGE_MARKUP) || has(UNBOXED_TEXT_REVIEW)) && !has(PAGE) {
+        Err(Error::invalid(format!(
+            "entity {id} has page markup but is not a page"
+        )))
+    } else if has(CHARACTER_LIST) {
+        Err(Error::invalid(format!(
+            "entity {id} carries the project character list"
+        )))
+    } else if has(TRANSLATION_REVIEW) && !has_translation {
+        Err(Error::invalid(format!(
+            "entity {id} has a translation review but no translation"
         )))
     } else if has_translation && !has_source {
         Err(Error::invalid(format!(
@@ -273,6 +291,11 @@ fn validate_relation_endpoints(
                 && has(relation.target, Geometry::KIND)
                 && region_kind(relation.target)?.is_some_and(|kind| kind == BubbleRegion::kind())
         }
+        <crate::Continues as crate::RelationSpec>::KIND => {
+            relation.source != relation.target
+                && has(relation.source, TextContent::KIND)
+                && has(relation.target, TextContent::KIND)
+        }
         <crate::Inside as crate::RelationSpec>::KIND => {
             has(relation.source, Region::KIND)
                 && has(relation.target, Region::KIND)
@@ -298,6 +321,7 @@ fn is_functional(kind: &crate::RelationKind) -> bool {
             | <crate::RecognizedFrom as crate::RelationSpec>::KIND
             | <crate::FitsTo as crate::RelationSpec>::KIND
             | <crate::FlowsIn as crate::RelationSpec>::KIND
+            | <crate::Continues as crate::RelationSpec>::KIND
     )
 }
 

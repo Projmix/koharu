@@ -37,6 +37,8 @@ pub enum Operation {
     Stages {
         stages: Vec<Stage>,
     },
+    /// Rewrite the generated translations of the selected texts shorter.
+    Shorten,
 }
 
 impl Operation {
@@ -48,14 +50,21 @@ impl Operation {
             } => vec![Stage::Detection],
             Self::Through { stage: Stage::Ocr } => vec![Stage::Detection, Stage::Ocr],
             Self::Through {
+                stage: Stage::Markup,
+            } => vec![Stage::Detection, Stage::Ocr, Stage::Markup],
+            Self::Through {
                 stage: Stage::Translation,
-            } => {
-                vec![Stage::Detection, Stage::Ocr, Stage::Translation]
-            }
+            } => vec![
+                Stage::Detection,
+                Stage::Ocr,
+                Stage::Markup,
+                Stage::Translation,
+            ],
             Self::Through {
                 stage: Stage::Inpainting,
             } => vec![Stage::Detection, Stage::Inpainting],
             Self::Only { stage } => vec![*stage],
+            Self::Shorten => vec![Stage::Translation],
             Self::Stages { stages } => Stage::ALL
                 .into_iter()
                 .filter(|stage| stages.contains(stage))

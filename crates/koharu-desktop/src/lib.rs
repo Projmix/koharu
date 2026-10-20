@@ -4,7 +4,7 @@ use std::{collections::HashSet, future::Future, sync::Arc};
 
 use anyhow::{Context as _, Result, bail};
 use koharu_rasterizer::{Rasterizer, ResourceId};
-use koharu_renderer::{Frame as RenderedFrame, LayerKind, Renderer};
+use koharu_renderer::{Frame as RenderedFrame, LayerKind, RenderDiagnostic, Renderer};
 use koharu_scene::{Commit, EntityId, Geometry, Point, Revision, Snapshot};
 use parking_lot::{Mutex as SyncMutex, RwLock};
 use serde::{Deserialize, Serialize};
@@ -44,6 +44,25 @@ pub struct CanvasState {
     pub generation: u64,
     pub size: [u32; 2],
     pub element_frames: Vec<TransformFrame>,
+    /// Text the renderer could not fit at a readable size on the presented page.
+    pub text_fit_warnings: Vec<TextFitWarning>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Type)]
+pub struct TextFitWarning {
+    pub element: EntityId,
+    pub kind: TextFitWarningKind,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum TextFitWarningKind {
+    /// The text does not fit its area even at the smallest size tried.
+    Overflow,
+    /// The text fits only below the readable minimum size.
+    BelowReadableSize,
+    /// The text barely stands out from the image under it.
+    LowContrast,
 }
 
 #[derive(Default)]
@@ -185,6 +204,16 @@ impl Desktop {
             .with_context(|| format!("canvas page {page} at revision {revision} is not prepared"))
     }
 
+    /// The font size the presented frame laid a text layer out at.
+    #[must_use]
+    pub fn presented_font_size(&self, layer: EntityId) -> Option<f32> {
+        let presentation = self.presentation.read();
+        match presentation.frame.as_ref()?.layer(layer)?.kind() {
+            LayerKind::Text(text) => Some(text.font_size),
+            _ => None,
+        }
+    }
+
     #[must_use]
     pub fn canvas_state(&self) -> CanvasState {
         let presentation = self.presentation.read();
@@ -195,6 +224,7 @@ impl Desktop {
                 generation: presentation.generation,
                 size: [0, 0],
                 element_frames: Vec::new(),
+                text_fit_warnings: Vec::new(),
             };
         };
         let (width, height) = frame.size();
@@ -226,7 +256,26 @@ impl Desktop {
             generation: presentation.generation,
             size: [width, height],
             element_frames,
+            text_fit_warnings: text_fit_warnings(frame.diagnostics()),
         }
+    }
+
+    /// Fit warnings of every page in project order, as the export render lays
+    /// them out. A page prepared at this revision is reused instead of rendered.
+    pub async fn chapter_text_fit_warnings(
+        &self,
+        snapshot: &Snapshot,
+    ) -> Result<Vec<(EntityId, Vec<TextFitWarning>)>> {
+        let mut warnings = Vec::new();
+        for page in snapshot.pages().map(|page| page.id()) {
+            let cached = self.page_frames.lock().get(page, snapshot.revision());
+            let frame = match cached {
+                Some(frame) => frame,
+                None => self.renderer.render(snapshot, page).await?,
+            };
+            warnings.push((page, text_fit_warnings(frame.diagnostics())));
+        }
+        Ok(warnings)
     }
 
     pub fn transform_geometries(
@@ -281,14 +330,24 @@ impl Desktop {
                 angle_degrees: original.angle_degrees,
             };
             let coefficients = frame_transform(original, element.frame);
+            let points = layer
+                .geometry()
+                .points
+                .iter()
+                .map(|point| transform_point(coefficients, point))
+                .collect::<Vec<_>>();
+            // Moving or rotating keeps the balloon's shape. Resizing makes the area the
+            // box the user dragged, like a paragraph text box, instead of stretching the
+            // balloon outline past the balloon.
+            let resized = (element.frame.width - original.width).abs() > RESIZE_EPSILON
+                || (element.frame.height - original.height).abs() > RESIZE_EPSILON;
             let geometry = Geometry {
                 origin: layer.geometry().origin.clone(),
-                points: layer
-                    .geometry()
-                    .points
-                    .iter()
-                    .map(|point| transform_point(coefficients, point))
-                    .collect(),
+                points: if resized {
+                    rectangle_in_frame_axes(&points, element.frame.angle_degrees)
+                } else {
+                    points
+                },
             };
             if geometry != *layer.geometry()
                 || element.frame.angle_degrees != original.angle_degrees
@@ -533,6 +592,70 @@ fn frame_transform(original: Frame, preview: Frame) -> [f64; 6] {
     ]
 }
 
+const RESIZE_EPSILON: f32 = 0.01;
+
+/// One warning per text element, the one hiding the most text: overflow cuts
+/// it off, low contrast hides it in place, and a small size only strains it.
+fn text_fit_warnings(diagnostics: &[RenderDiagnostic]) -> Vec<TextFitWarning> {
+    let mut warnings = Vec::<TextFitWarning>::new();
+    for diagnostic in diagnostics {
+        let (element, kind) = match diagnostic {
+            RenderDiagnostic::TextOverflow { entity, .. } => {
+                (*entity, TextFitWarningKind::Overflow)
+            }
+            RenderDiagnostic::TextBelowReadableSize { entity, .. } => {
+                (*entity, TextFitWarningKind::BelowReadableSize)
+            }
+            RenderDiagnostic::TextLowContrast { entity, .. } => {
+                (*entity, TextFitWarningKind::LowContrast)
+            }
+            RenderDiagnostic::MissingAsset { .. } => continue,
+        };
+        let rank = |kind| match kind {
+            TextFitWarningKind::Overflow => 2,
+            TextFitWarningKind::LowContrast => 1,
+            TextFitWarningKind::BelowReadableSize => 0,
+        };
+        match warnings
+            .iter_mut()
+            .find(|warning| warning.element == element)
+        {
+            Some(warning) if rank(kind) > rank(warning.kind) => warning.kind = kind,
+            Some(_) => {}
+            None => warnings.push(TextFitWarning { element, kind }),
+        }
+    }
+    warnings
+}
+
+/// The rectangle that bounds `points` along axes rotated by `angle_degrees`, as
+/// top-left, top-right, bottom-right, bottom-left so its top edge keeps the angle.
+fn rectangle_in_frame_axes(points: &[Point], angle_degrees: f32) -> Vec<Point> {
+    let (sin, cos) = f64::from(angle_degrees).to_radians().sin_cos();
+    let (mut min_u, mut min_v) = (f64::INFINITY, f64::INFINITY);
+    let (mut max_u, mut max_v) = (f64::NEG_INFINITY, f64::NEG_INFINITY);
+    for point in points {
+        let u = point.x * cos + point.y * sin;
+        let v = -point.x * sin + point.y * cos;
+        min_u = min_u.min(u);
+        max_u = max_u.max(u);
+        min_v = min_v.min(v);
+        max_v = max_v.max(v);
+    }
+    [
+        (min_u, min_v),
+        (max_u, min_v),
+        (max_u, max_v),
+        (min_u, max_v),
+    ]
+    .into_iter()
+    .map(|(u, v)| Point {
+        x: u * cos - v * sin,
+        y: u * sin + v * cos,
+    })
+    .collect()
+}
+
 fn transform_point([a, b, c, d, e, f]: [f64; 6], point: &Point) -> Point {
     Point {
         x: a * point.x + c * point.y + e,
@@ -546,7 +669,98 @@ mod tests {
 
     use tokio::{sync::Notify, time::timeout};
 
-    use super::Desktop;
+    use koharu_scene::Point;
+
+    use koharu_renderer::{RenderBounds, RenderDiagnostic};
+    use koharu_scene::EntityId;
+
+    use super::{
+        Desktop, TextFitWarning, TextFitWarningKind, rectangle_in_frame_axes, text_fit_warnings,
+    };
+
+    #[test]
+    fn the_warning_hiding_the_most_text_wins_for_the_same_text() {
+        let first = EntityId::new();
+        let second = EntityId::new();
+        let below = |entity| RenderDiagnostic::TextBelowReadableSize {
+            entity,
+            font_size: 6.0,
+            minimum_font_size: 9.0,
+        };
+        let overflow = |entity| RenderDiagnostic::TextOverflow {
+            entity,
+            available: RenderBounds::default(),
+            actual_width: 50.0,
+            actual_height: 50.0,
+            font_size: 9.0,
+        };
+
+        let low_contrast = |entity| RenderDiagnostic::TextLowContrast {
+            entity,
+            contrast: 1.1,
+        };
+
+        let warnings = text_fit_warnings(&[
+            below(first),
+            low_contrast(first),
+            overflow(first),
+            low_contrast(first),
+            below(second),
+            low_contrast(second),
+        ]);
+
+        assert_eq!(
+            warnings,
+            [
+                TextFitWarning {
+                    element: first,
+                    kind: TextFitWarningKind::Overflow
+                },
+                TextFitWarning {
+                    element: second,
+                    kind: TextFitWarningKind::LowContrast
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn resized_balloon_area_becomes_the_dragged_rectangle() {
+        let ellipse = (0..16)
+            .map(|step| {
+                let angle = f64::from(step) * std::f64::consts::TAU / 16.0;
+                Point {
+                    x: 100.0 + 40.0 * angle.cos(),
+                    y: 200.0 + 60.0 * angle.sin(),
+                }
+            })
+            .collect::<Vec<_>>();
+
+        let rectangle = rectangle_in_frame_axes(&ellipse, 0.0);
+
+        let corners = rectangle
+            .iter()
+            .map(|p| (p.x.round(), p.y.round()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            corners,
+            [(60.0, 140.0), (140.0, 140.0), (140.0, 260.0), (60.0, 260.0)]
+        );
+    }
+
+    #[test]
+    fn rotated_area_rectangle_keeps_the_frame_angle() {
+        let square =
+            [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)].map(|(x, y)| Point { x, y });
+
+        let rectangle = rectangle_in_frame_axes(&square, 90.0);
+
+        let top = (
+            rectangle[1].x - rectangle[0].x,
+            rectangle[1].y - rectangle[0].y,
+        );
+        assert!(top.0.abs() < 1e-9 && (top.1 - 10.0).abs() < 1e-9);
+    }
 
     #[tokio::test]
     async fn newer_request_preempts_current_preparation_and_acquires_ownership() {

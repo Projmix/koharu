@@ -4,7 +4,7 @@ This file describes how the fork differs from upstream
 [koharu-rs/koharu](https://github.com/koharu-rs/koharu), what state `main` is
 in, and where JEV fits in the pipeline. Read it together with the root
 `AGENTS.md`, whose rules still apply. Update this file when fork behavior or
-the plan changes; it was last checked on 2026-10-18 against the rebuilt `main`.
+the plan changes; it was last checked on 2026-10-20.
 
 ## Product direction
 
@@ -33,6 +33,10 @@ tree. It stays in history; bring its ideas back in separate changes, JEV
 first, following the plan below. `git show d1ebfef -- <path>` shows the old
 code.
 
+Since the rebuild, work lands on `claude/project-thread-lbw4bo`; on
+2026-10-20 it is more than 85 commits ahead of `main` and not merged yet.
+The fork features below describe that branch.
+
 Known gaps after the rebuild:
 
 - `packages/bridge/src/protocol.ts` was merged by hand because the cloud
@@ -51,7 +55,40 @@ Known gaps after the rebuild:
 - OCR method `local`, `api` or hybrid `local-api`. The hybrid method uses an
   internal `OcrPass { Local, Final }`: the scheduler runs the local pass on
   every page of the chapter, then the API pass, and only then chapter
-  translation. Text the user edited is never overwritten.
+  translation. The local pass reads every region with the chosen model and a
+  second local reader (Manga OCR, or Hayai when Manga OCR is chosen); only
+  regions where they disagree go to the API. Text the user edited is never
+  overwritten.
+- Scene markup is its own pipeline stage, `markup`, between OCR and
+  Translation (config `pipeline.markup`; default model
+  `google/gemini-3.7-flash` through OpenRouter at temperature 0). It runs
+  when the user runs it, alone or with other stages: each page in project
+  order, after that page's OCR, is sent to a vision model with numbered
+  boxes drawn on it. When a run includes both, page translation waits for
+  that page's markup and chapter translation waits for markup on every
+  page; Translation never runs markup itself and uses whatever markup
+  exists. The model only labels each text's kind (speech, thought,
+  narration, sound-effect, sign, aside), speaker and the earlier text it
+  continues; it never transcribes or translates. Results go to the scene as
+  `SpeechMarkup`, the `Continues` relation, the project `CharacterList` and a
+  per-page `PageMarkup` with the texts it saw, so a rerun skips unchanged
+  pages. A refusal, filtered, invalid or failed answer records
+  `PageMarkup` as missing and the run continues. User-authored
+  markup and a user-edited character list are never overwritten.
+  The model also locates lettering no numbered box covers, without
+  transcribing it; `PageMarkup.unboxed` keeps those boxes minus any a text
+  region covers. They are review flags, not regions or layers: a flag is
+  open while no text region covers 30% of it and the user has not
+  dismissed it (a user-owned page `UnboxedTextReview`, so markup can still
+  rerun). The canvas shows open flags with "create a text block", which
+  is the OCR tool's region-and-read path, and "not text"; the chapter
+  check lists them per page.
+  `import_characters` adds another project's characters (read-only open of
+  its newest valid state, skipping a known id or name) as one user-owned
+  undo step. Chapter
+  translation sends `speech_kind`, `speaker` {name, gender}, `continues` per
+  segment and a top-level `characters` list, so the translator can use the
+  speaker's gender for Russian verb and adjective agreement.
 - Qwen-VL-OCR provider (`remote/qwen_ocr.rs`, DashScope) with its own
   endpoint and credential.
 - Image-edit inpainting through Fal, OpenRouter and Replicate, with a
@@ -60,6 +97,30 @@ Known gaps after the rebuild:
   text blocks, page duplication.
 - Fork updater against `Projmix/koharu` releases (`docs/fork-releases.md`).
 - Research notes in `docs/research/` and plans in `docs/superpowers/plans/`.
+- Automatic typesetting diverges from upstream to match the owner's
+  hand-set Russian pages (numbers in [results.ru.md](results.ru.md#тайпинг)):
+  text inside a balloon that detection marks as dialogue takes the speech
+  kind font before scene markup; a word is split only when that buys at
+  least 1.15x the whole-word size; a line never ends on a one-letter
+  Cyrillic word, and a chain of them binds through to the next real word;
+  balloon auto-fit trades up to 20% of size for fewer lone one- or
+  two-letter inner lines and penalises a hyphen break that leaves such a
+  tail. Detection reads text paint against a screentone's 5x5 mean shade,
+  and rejects outline readings whose band is surrounded by its fill or
+  whose "outline" is a glyph enclosed by its own ground. An automatic
+  outline is capped at 0.1x the font size, and text inside a balloon gets
+  none; a user-set outline is kept. Spaced sound-effect letters stack one
+  per line. The Border row has a swap button for text and outline colours.
+  Free text fits only inside the detected panel holding at least half of
+  its region (rotated regions keep their area). Text whose fill and outline
+  both stay below a 1.5 contrast ratio with the image layers under it gets
+  the existing fit warning (`TextFitWarningKind::LowContrast`).
+- Choosing an export format first runs a chapter check (`check_chapter`):
+  one list of visible text blocks with an empty translation, kana (or kanji
+  outside a Chinese target) left in the translation, or a fit warning from
+  the export render. Selecting a row opens that page and layer; a clean
+  chapter exports at once, otherwise "Export anyway" proceeds.
+
 
 ## JEV
 
@@ -81,6 +142,39 @@ verified, and the client read keys from environment variables, which
 `AGENTS.md` forbids for the desktop app. When reimplementing, keep the typed
 primitives, take the key only from `koharu_secrets`, and verify the API
 against its documentation.
+
+### API facts
+
+Checked on 2026-10-18 against public sources:
+
+- JEV is TypeSafe AI's "System One" decision model (`jev-1.13.0`, alias
+  `jev-latest`). It returns typed answers, not text: `noul` (probability of
+  yes), `choice` (up to 255 options with per-option probabilities and
+  confidence) and `score` (2 to 10 ordered levels).
+- **Input is text only.** JEV cannot look at the crop. The image-grounded
+  reading must come from the vision LLM; JEV arbitrates from text and numeric
+  features (both candidates, local confidence, agreement, character classes,
+  length against region area, column count, source language).
+- The request is `POST .../v1/systemone` with a `state` and a `questions`
+  map, bearer auth. LLM Gateway also serves it and announced on 2026-10-12 an
+  OpenAI-compatible `/v1/decisions` endpoint and the planned deprecation of
+  `/v1/systemone`. `d1ebfef` called `/v1/system-one/evaluate`, which does not
+  match either.
+- Price on LLM Gateway: $0.042 per million input tokens, output free, 600
+  requests per minute. All questions in one request share one read of the
+  state, so one batch per page is the right unit.
+
+Implementation rules:
+
+- Off by default. A settings toggle enables it; the key is stored only in
+  `koharu_secrets` (OS keychain). No environment variable or project file.
+- Confirm the TypeSafe base URL and the endpoint that will remain
+  (`/v1/systemone` or `/v1/decisions`) from TypeSafe's own documentation
+  before writing the client. A community Rust crate (`typesafe-rs` 0.1.0)
+  exists; prefer a small `reqwest` client like the other providers, since a
+  new dependency needs an issue first.
+- When JEV is unreachable, fall back to "flag every disagreement" and report
+  that the judge was offline.
 
 ### Planned OCR flow: local, then LLM, then JEV decides
 

@@ -52,6 +52,7 @@ pub struct ProviderPreferences {
 pub struct ProviderPreference {
     pub name: String,
     pub supports_ocr: bool,
+    pub supports_markup: bool,
     pub supports_translation: bool,
     pub config: ProviderConfig,
     pub credential: Option<CredentialInput>,
@@ -73,6 +74,7 @@ impl ProviderPreferences {
                 Ok(ProviderPreference {
                     name: provider.name().to_owned(),
                     supports_ocr: provider.supports_ocr(),
+                    supports_markup: provider.supports_markup(),
                     supports_translation: provider.supports_translation(),
                     config,
                     credential,

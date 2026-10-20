@@ -108,6 +108,7 @@ impl Arguments {
                 },
                 ..OcrConfig::default()
             },
+            markup: koharu_pipeline::SceneMarkupConfig::default(),
             translation: TranslationConfig {
                 source_language: Language::Japanese,
                 target_language: self.target_language,

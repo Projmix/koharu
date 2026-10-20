@@ -248,6 +248,21 @@ pub(crate) async fn get_pages(
 
 #[tauri::command]
 #[specta::specta]
+pub(crate) async fn get_characters(
+    project: State<'_, CurrentProject>,
+) -> std::result::Result<Vec<koharu_scene::Character>, Error> {
+    let snapshot = project
+        .project
+        .lock()
+        .await
+        .as_ref()
+        .context("no project is open")?
+        .snapshot();
+    Ok(Project::characters(&snapshot)?)
+}
+
+#[tauri::command]
+#[specta::specta]
 pub(crate) async fn get_page(
     project: State<'_, CurrentProject>,
 ) -> std::result::Result<Option<Page>, Error> {

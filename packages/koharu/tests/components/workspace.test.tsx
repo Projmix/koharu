@@ -113,6 +113,7 @@ function installProject() {
     size: { width: 1000, height: 1000 },
     layers: [layer],
     regions: [],
+    unboxed_text: [],
   }
   queryClient.setQueryData(projectKey, {
     name: 'Book',
@@ -282,7 +283,10 @@ describe('canvas interaction adapter', () => {
       content: {
         id: `${id}-content`,
         source: { text: source, language: 'ja' },
-        translation: { text: translation, language: 'en' },
+        translation: { text: translation, language: 'en', generated: true },
+        translation_review: null,
+        ocr_unverified: false,
+        markup: null,
         role: 'dev.koharu.text.dialogue',
         source_region: null,
       },
@@ -805,6 +809,9 @@ describe('canvas interaction adapter', () => {
         id: `${id}-content`,
         source: { text: id, language: 'ja' },
         translation: null,
+        translation_review: null,
+        ocr_unverified: false,
+        markup: null,
         role: 'dialogue',
         source_region: region,
       },
@@ -873,6 +880,27 @@ describe('canvas interaction adapter', () => {
     ])
   })
 
+  it('draws a rectangle as the selected text area and leaves drawing mode', async () => {
+    installProject()
+    const setGeometry = vi.spyOn(commands, 'setGeometry').mockResolvedValue(null)
+    const surface = renderWorkspace()
+    act(() => {
+      useKoharuStore.getState().selectLayers(['dialogue'])
+      useKoharuStore.setState({ textTransformTarget: 'area' })
+    })
+
+    fireEvent.pointerDown(surface, { button: 0, pointerId: 30, clientX: 20, clientY: 20 })
+    fireEvent.pointerMove(surface, { pointerId: 30, clientX: 60, clientY: 70 })
+    fireEvent.pointerUp(surface, { pointerId: 30, clientX: 60, clientY: 70 })
+
+    await waitFor(() => expect(setGeometry).toHaveBeenCalledOnce())
+    const [[update]] = setGeometry.mock.calls[0]
+    expect(update.layer).toBe('dialogue')
+    expect(update.points).toHaveLength(4)
+    await waitFor(() => expect(useKoharuStore.getState().textTransformTarget).toBe('text'))
+    expect(useKoharuStore.getState().selectedLayers).toEqual(['dialogue'])
+  })
+
   it('shows detected regions only while the select tool is active', () => {
     installProject()
     queryClient.setQueryData(pageKey, (page: { layers: Layer[] }) => ({
@@ -890,6 +918,9 @@ describe('canvas interaction adapter', () => {
             id: 'ocr-content',
             source: { text: 'Source', language: 'ja' },
             translation: null,
+            translation_review: null,
+            ocr_unverified: false,
+            markup: null,
             role: 'dialogue',
             source_region: 'text-region',
           },
@@ -1400,6 +1431,36 @@ describe('canvas interaction adapter', () => {
     )
     expect(useKoharuStore.getState().selectedLayers).toEqual(['ocr-layer'])
     expect(useKoharuStore.getState().tool).toBe('ocr')
+  })
+
+  it('reads a flagged unboxed text as an OCR region or dismisses the flag', async () => {
+    installProject()
+    const flag = { x: 300, y: 200, width: 80, height: 40, kind: 'sound-effect' as const }
+    queryClient.setQueryData(pageKey, (page: object) => ({ ...page, unboxed_text: [flag] }))
+    const addRegion = vi
+      .spyOn(commands, 'addOcrRegion')
+      .mockResolvedValue({ revision: 2, layer: 'ocr-layer', region: 'ocr-region' })
+    const process = vi.spyOn(commands, 'process').mockResolvedValue('ocr-job')
+    const dismiss = vi.spyOn(commands, 'dismissUnboxedText').mockResolvedValue(null)
+    renderWorkspace()
+
+    expect(screen.getAllByTestId('unboxed-text')).toHaveLength(1)
+    fireEvent.click(screen.getByTitle('Create a text block here'))
+    await waitFor(() => expect(process).toHaveBeenCalledOnce())
+    expect(addRegion).toHaveBeenCalledWith({
+      x: 300,
+      y: 200,
+      width: 80,
+      height: 40,
+      angle_degrees: 0,
+    })
+    expect(process).toHaveBeenCalledWith(
+      { scope: 'entities', value: ['ocr-region'] },
+      { operation: 'stages', stages: ['ocr'] },
+    )
+
+    fireEvent.click(screen.getByTitle('Not text'))
+    await waitFor(() => expect(dismiss).toHaveBeenCalledWith('page', flag))
   })
 
   it('clamps an OCR rectangle to the page', async () => {

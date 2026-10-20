@@ -21,8 +21,8 @@ mod stages;
 pub use config::{
     ApiInpaintingConfig, ApiOcrConfig, DetectionModel, InpaintingConfig, InpaintingMethod,
     InpaintingModelChoice, InpaintingProvider, LocalInpaintingModel, OcrConfig, OcrMethod,
-    OcrModel, PipelineConfig, ProcessorConfig, RestorationConfig, TranslationConfig,
-    TranslationProfile, TranslationUnitPolicy,
+    OcrModel, PipelineConfig, ProcessorConfig, RestorationConfig, SceneMarkupConfig,
+    TranslationConfig, TranslationProfile, TranslationUnitPolicy,
 };
 pub use error::{ErrorKind, PipelineError};
 pub use pipeline::Pipeline;
@@ -35,7 +35,8 @@ pub use scope::{Bounds, Scope};
 pub use stage::{Stage, StageTarget};
 pub use stages::{
     ChapterTranslation, Flux2KleinConfig, ImageEditConfig, InpaintingApplyMode,
-    KoharuLayoutRFDetrSeg2XLConfig, RoremMixedConfig, text_layer_placement,
+    KoharuLayoutRFDetrSeg2XLConfig, RoremMixedConfig, ocr_unverified, open_unboxed_text,
+    text_layer_placement,
 };
 
 use images::ImageCache;

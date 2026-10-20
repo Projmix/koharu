@@ -58,13 +58,30 @@
     "empty": "Select a page to begin.",
     "fit": "Fit Window",
     "surface": "Koharu canvas",
-    "unavailable": "WebGPU canvas unavailable"
+    "unavailable": "WebGPU canvas unavailable",
+    "unboxedText": {
+      "create": "Create a text block here",
+      "dismiss": "Not text"
+    }
   },
   "colorPicker": {
     "brushColor": "Brush color",
     "hexCode": "Hex color code",
     "sampleCanvas": "Pick color from canvas",
     "transparent": "Transparent"
+  },
+  "chapterCheck": {
+    "title": "Check before export",
+    "checking": "Checking pages…",
+    "issueCount": "{{count}} text blocks need a look. Select one to open it.",
+    "issueCount_one": "{{count}} text block needs a look. Select one to open it.",
+    "issueCount_other": "{{count}} text blocks need a look. Select one to open it.",
+    "emptyTranslation": "No translation",
+    "japaneseText": "Japanese characters left in the translation",
+    "unboxedText": "Possible missed text: {{count}}",
+    "unboxedText_one": "Possible missed text: {{count}}",
+    "unboxedText_other": "Possible missed text: {{count}}",
+    "exportAnyway": "Export anyway"
   },
   "common": {
     "back": "Back",
@@ -201,9 +218,12 @@
     "horizontal": "Horizontal",
     "increaseBorderWidth": "Increase border width",
     "increaseFontSize": "Increase font size by 1 pt",
+    "invertBorder": "Swap text and border colors",
     "opacity": "Opacity",
     "placement": "Placement",
     "resetAutoFit": "Reset to auto fit",
+    "drawArea": "Draw the area this text fits into",
+    "drawAreaShort": "Draw area",
     "selectPage": "Select a page to inspect its layers.",
     "size": "Size",
     "source": "Source text",
@@ -211,11 +231,31 @@
     "textColor": "Text color",
     "textDirection": "Text direction",
     "translation": "Translation",
+    "translationReview": "Translation may have softened profanity",
+    "shortenTranslation": "Shorten",
+    "shortenTranslationHint": "Rewrite this translation shorter so it fits; press again to shorten further",
+    "translationReviewKeep": "Keep",
+    "translationReviewKeepHint": "Keep this translation and clear the warning",
+    "translationReviewReference": "Machine translation",
     "type": "Type",
     "unplaced": "Unplaced",
     "vertical": "Vertical",
     "weight": "Weight",
-    "width": "Width"
+    "width": "Width",
+    "speechKind": "Kind",
+    "speechKindLabel": "{{name}} kind",
+    "speechKinds": {
+      "speech": "Speech",
+      "thought": "Thought",
+      "narration": "Narration",
+      "sound-effect": "Sound effect",
+      "sign": "Sign",
+      "aside": "Aside"
+    },
+    "speaker": "Speaker",
+    "speakerLabel": "{{name}} speaker",
+    "noSpeaker": "None",
+    "unmarked": "Not marked"
   },
   "languages": {
     "en-US": "English",
@@ -230,6 +270,10 @@
     "zh-TW": "繁體中文"
   },
   "layers": {
+    "textOverflow": "Text does not fit its area",
+    "textBelowReadableSize": "Text is shrunk below the readable size",
+    "textLowContrast": "Text barely stands out from the image under it",
+    "ocrUnverified": "OCR not verified: run OCR again",
     "collapse": "Collapse {{name}}",
     "delete": "Delete {{name}}",
     "edit": "Edit {{name}}",
@@ -344,7 +388,14 @@
     "rename": "Rename",
     "renameDescription": "Choose a new name for this page.",
     "renameTitle": "Rename page",
-    "selected": "{{count}} selected"
+    "selected": "{{count}} selected",
+    "markupMissing": {
+      "refused": "Scene markup: the model refused this page",
+      "content-filter": "Scene markup: blocked by the provider's content filter",
+      "empty": "Scene markup: the model returned nothing",
+      "invalid": "Scene markup: the answer was invalid and discarded",
+      "failed": "Scene markup: the request failed"
+    }
   },
   "outputPicker": {
     "instructions": "Translation instructions",
@@ -356,18 +407,21 @@
     "detection": "Detection",
     "inpainting": "Inpainting",
     "ocr": "OCR",
+    "markup": "Scene markup",
     "translation": "Translation"
   },
   "phaseShort": {
     "detection": "Detect",
     "inpainting": "Clean",
     "ocr": "OCR",
+    "markup": "Markup",
     "translation": "Translate"
   },
   "phaseDescription": {
     "detection": "Locate text on the page.",
     "inpainting": "Rebuild the artwork behind removed text.",
     "ocr": "Read the text inside each region.",
+    "markup": "Label each text's kind, speaker and continuation for translation.",
     "translation": "Convert source text to the target language."
   },
   "providerDescriptions": {
@@ -455,7 +509,14 @@
         "localModel": "Local OCR model",
         "method": "OCR method",
         "hybrid": "Local + API",
-        "hybridDescription": "Complete local OCR for every page in the chapter, then send each crop and its draft to the selected API model. Results are applied automatically."
+        "hybridDescription": "Complete local OCR for every page in the chapter, then check the drafts with the selected API model. Results are applied automatically.",
+        "crossCheck": "Cross-check with a second local model",
+        "crossCheckDescription": "Read every crop with a second local model too and send only crops where the two disagree to the API. Turn off to send every crop: about three times the cost, slightly more accurate on handwriting."
+      },
+      "markup": {
+        "model": "Markup model",
+        "instructions": "Additional instructions",
+        "instructionsDescription": "Appended to the markup request, for example hints about the characters."
       },
       "inpainting": {
         "apiModel": "Image editing model",
@@ -491,6 +552,10 @@
         "ocr": {
           "description": "Read the source text inside detected regions.",
           "title": "OCR"
+        },
+        "markup": {
+          "title": "Scene markup",
+          "description": "A vision model labels each text's kind, speaker and the line it continues. It never changes the text."
         }
       },
       "title": "Pipeline"
@@ -557,12 +622,17 @@
     },
     "typesetting": {
       "addFamily": "Add font family",
+      "clearKindFont": "Use default families for {{kind}}",
       "defaultFamilies": "Default font families",
       "description": "Set the ordered font stack used when a text layer has no assigned family.",
       "empty": "No default families. Koharu will use the system fallback.",
       "familyLabel": "Default font family {{index}}",
       "fontFallback": "Font fallback",
       "fontFallbackDescription": "Koharu uses the first available family that supports the text.",
+      "kindFontDefault": "Default families",
+      "kindFontLabel": "{{kind}} font",
+      "kindFonts": "Font by text type",
+      "kindFontsDescription": "Used before the default families for text of that type from scene markup. A font chosen on a text layer still wins.",
       "loadError": "Fonts could not be loaded. Existing families can still be removed.",
       "loadingFonts": "Loading fonts…",
       "removeFamily": "Remove {{family}}",
@@ -663,5 +733,26 @@
     "failed": "Could not resolve preview: {{error}}",
     "cleanupLayers": "Original + visible Paint layers. One PNG; text layers, masks and handles are excluded.",
     "restorationLayers": "Selected area of the original + visible Cleanup and Paint layers, in layer order. One PNG; text layers, masks and handles are excluded."
+  },
+  "characters": {
+    "tab": "Cast",
+    "title": "Characters",
+    "description": "Names and genders used by scene markup and translation. Once you edit the list it is yours, and markup no longer changes it.",
+    "empty": "No characters yet. Scene markup fills this list, or add them here.",
+    "name": "Name",
+    "gender": "Gender",
+    "genders": {
+      "male": "Male",
+      "female": "Female",
+      "unknown": "Unknown"
+    },
+    "notes": "Notes",
+    "notesPlaceholder": "Notes, e.g. how they talk",
+    "remove": "Remove {{name}}",
+    "newName": "New character name",
+    "add": "Add",
+    "import": "Import from project…",
+    "importNone": "No other projects",
+    "imported": "Characters added: {{count}}"
   }
 }

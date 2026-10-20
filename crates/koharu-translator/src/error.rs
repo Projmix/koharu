@@ -30,6 +30,11 @@ pub enum Error {
         status: u16,
         message: String,
     },
+    #[error("{provider} returned invalid scene markup: {message}")]
+    InvalidMarkup {
+        provider: &'static str,
+        message: String,
+    },
     #[error(transparent)]
     Other(#[from] anyhow::Error),
 }

@@ -23,6 +23,7 @@ pub struct TranslationRequest {
     pub(crate) segment_ids: Vec<String>,
     pub(crate) units: Vec<TranslationUnit>,
     pub(crate) unit_policy: Option<String>,
+    pub(crate) characters: Vec<TranslationCharacter>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -31,6 +32,120 @@ pub struct OcrRequest {
     pub source_language: Option<Language>,
     pub instructions: Option<String>,
     pub draft: Option<String>,
+}
+
+/// What a text is in the story, as scene markup labels it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MarkupKind {
+    Speech,
+    Thought,
+    Narration,
+    SoundEffect,
+    Sign,
+    Aside,
+}
+
+impl MarkupKind {
+    pub const ALL: [Self; 6] = [
+        Self::Speech,
+        Self::Thought,
+        Self::Narration,
+        Self::SoundEffect,
+        Self::Sign,
+        Self::Aside,
+    ];
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CharacterGender {
+    Male,
+    Female,
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MarkupCharacter {
+    pub id: String,
+    pub name: String,
+    pub gender: CharacterGender,
+    pub notes: String,
+}
+
+/// One numbered text box drawn on the markup page image.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MarkupRegion {
+    pub id: String,
+    pub text: String,
+    /// `[left, top, right, bottom]` normalized to 0..=1000 of the page size.
+    pub bbox: [u32; 4],
+}
+
+/// An already marked text of the previous page, for continuity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreviousMarkup {
+    pub id: String,
+    pub text: String,
+    pub kind: MarkupKind,
+    pub speaker: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MarkupRequest {
+    /// The page with every region's box and number drawn on it.
+    pub image: Arc<DynamicImage>,
+    pub source_language: Option<Language>,
+    pub regions: Vec<MarkupRegion>,
+    pub previous: Vec<PreviousMarkup>,
+    pub characters: Vec<MarkupCharacter>,
+    pub instructions: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MarkedRegion {
+    pub id: String,
+    pub kind: MarkupKind,
+    pub speaker: Option<String>,
+    pub continues: Option<String>,
+    pub confidence: f32,
+}
+
+/// Lettering the model sees on the page outside every numbered box. It is
+/// located, never transcribed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnboxedText {
+    /// `[left, top, right, bottom]` normalized to 0..=1000 of the page size.
+    pub bbox: [u32; 4],
+    pub kind: MarkupKind,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum MarkupOutcome {
+    Marked {
+        regions: Vec<MarkedRegion>,
+        new_characters: Vec<MarkupCharacter>,
+        unboxed: Vec<UnboxedText>,
+    },
+    Withheld(MarkupWithheld),
+}
+
+/// Why the model gave no markup. This is an answer, not a transport failure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MarkupWithheld {
+    Refused,
+    ContentFilter,
+    Empty,
+}
+
+impl MarkupRequest {
+    pub(crate) fn prepare_image(&mut self) -> anyhow::Result<()> {
+        let mut image = Some(Arc::clone(&self.image));
+        prepare_image(&mut image)?;
+        self.image = image.expect("markup image cannot be removed");
+        Ok(())
+    }
 }
 
 impl TranslationRequest {
@@ -54,7 +169,17 @@ impl TranslationRequest {
             page_numbers: None,
             units: Vec::new(),
             unit_policy: None,
+            characters: Vec::new(),
         }
+    }
+
+    #[must_use]
+    pub fn with_characters(
+        mut self,
+        characters: impl IntoIterator<Item = TranslationCharacter>,
+    ) -> Self {
+        self.characters = characters.into_iter().collect();
+        self
     }
 
     #[must_use]
@@ -203,6 +328,21 @@ impl TranslationRequest {
         self.segment_metadata(id).order_index.unwrap_or(id)
     }
 
+    pub(crate) fn has_markup(&self) -> bool {
+        !self.characters.is_empty()
+            || self.segment_metadata.iter().any(|metadata| {
+                metadata.speech_kind.is_some()
+                    || metadata.speaker.is_some()
+                    || metadata.continues.is_some()
+            })
+    }
+
+    pub(crate) fn has_shorten(&self) -> bool {
+        self.segment_metadata
+            .iter()
+            .any(|metadata| metadata.shorten.is_some())
+    }
+
     pub(crate) fn remove_image(&mut self) {
         self.image = None;
     }
@@ -300,6 +440,39 @@ pub struct TranslationSegmentMetadata {
     pub unit_type: Option<String>,
     #[serde(default)]
     pub is_sound_effect: bool,
+    #[serde(default)]
+    pub speech_kind: Option<MarkupKind>,
+    #[serde(default)]
+    pub speaker: Option<SegmentSpeaker>,
+    /// The stable segment ID of the earlier text this one continues.
+    #[serde(default)]
+    pub continues: Option<String>,
+    /// Rewrite this existing translation shorter instead of translating anew.
+    #[serde(default)]
+    pub shorten: Option<Shorten>,
+}
+
+/// An existing translation that does not fit its box, and the length its
+/// rewrite must not exceed.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Shorten {
+    pub current: String,
+    pub max_chars: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SegmentSpeaker {
+    pub name: String,
+    pub gender: CharacterGender,
+}
+
+/// A character of the chapter cast, as the translation prompt sees it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct TranslationCharacter {
+    pub name: String,
+    pub gender: CharacterGender,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub notes: String,
 }
 
 impl TranslationSegmentMetadata {

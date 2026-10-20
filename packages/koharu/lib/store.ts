@@ -4,6 +4,7 @@ import { create } from 'zustand'
 
 import type {
   CanvasState,
+  TextFitWarningKind,
   Download,
   EntityId,
   ImageEditPreview,
@@ -48,7 +49,13 @@ export type InspectorSection = 'copy' | 'type' | 'layers'
 export type ShortcutAction = CanvasTool | 'fit'
 export type Shortcuts = Record<ShortcutAction, string>
 export type PipelineScope = 'page' | 'selected-pages' | 'project'
-export const pipelineStages: readonly Stage[] = ['detection', 'ocr', 'translation', 'inpainting']
+export const pipelineStages: readonly Stage[] = [
+  'detection',
+  'ocr',
+  'markup',
+  'translation',
+  'inpainting',
+]
 
 interface KoharuStore {
   initialized: boolean
@@ -66,9 +73,12 @@ interface KoharuStore {
   canvasSize: [number, number]
   fitCanvasRequest: number
   layerFrames: Record<EntityId, Frame>
+  /** Text the renderer could not fit at a readable size on the presented page. */
+  textFitWarnings: Record<EntityId, TextFitWarningKind>
   selectedLayers: EntityId[]
   pendingTextFocus: EntityId | null
-  textTransformTarget: 'text' | 'region'
+  /** What a select-tool drag edits for a text layer; 'area' draws its fit area. */
+  textTransformTarget: 'text' | 'region' | 'area'
   selectedPages: EntityId[]
   tool: CanvasTool
   brush: CanvasBrush
@@ -121,6 +131,7 @@ export const useKoharuStore = create<KoharuStore>()((set) => ({
   canvasSize: [0, 0],
   fitCanvasRequest: 0,
   layerFrames: {},
+  textFitWarnings: {},
   selectedLayers: [],
   pendingTextFocus: null,
   textTransformTarget: 'text',
@@ -226,6 +237,9 @@ function canvasSnapshot(canvas: CanvasState) {
     canvasSize: canvas.size,
     layerFrames: Object.fromEntries(
       canvas.element_frames.map(({ element, frame }) => [element, frame]),
+    ),
+    textFitWarnings: Object.fromEntries(
+      canvas.text_fit_warnings.map(({ element, kind }) => [element, kind]),
     ),
   }
 }

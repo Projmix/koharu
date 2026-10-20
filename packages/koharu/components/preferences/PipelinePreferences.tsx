@@ -138,6 +138,12 @@ export function PipelinePreferences({
         providers={providers}
         onChange={onChange}
       />
+      <MarkupPreferences
+        value={value}
+        modelChoices={modelChoices}
+        providers={providers}
+        onChange={onChange}
+      />
       <InpaintingPreferences value={value} models={inpaintingModels} onChange={onChange} />
     </PreferencePage>
   )
@@ -532,6 +538,96 @@ function InpaintingPreferences({
   )
 }
 
+/** The scene markup stage: its vision model and optional instructions. */
+function MarkupPreferences({
+  value,
+  modelChoices,
+  providers,
+  onChange,
+}: {
+  value: PipelineConfig
+  modelChoices: Model[]
+  providers: ProviderPreference[]
+  onChange: (value: PipelineConfig) => void
+}) {
+  const { t } = useTranslation()
+  const [modelOpen, setModelOpen] = useState(false)
+  const markup = value.markup
+  const models = modelChoices.filter(
+    (model) =>
+      model.vision &&
+      providers.some((entry) => entry.config.provider === model.provider && entry.supports_markup),
+  )
+  const selected =
+    models.find((candidate) => modelKey(candidate) === modelKey(markup.model)) ?? null
+  const current: Model = selected ?? {
+    ...markup.model,
+    model: markup.model.model ?? null,
+    name: markup.model.model ?? providerName(providers, markup.model.provider),
+    quantizations: [],
+    vision: markup.model.vision ?? true,
+    reasoning: markup.model.reasoning ?? false,
+    reasoning_required: markup.model.reasoning_required ?? false,
+  }
+  const choices = selected ? models : [current, ...models]
+  const updateMarkup = (next: PipelineConfig['markup']) => onChange({ ...value, markup: next })
+
+  return (
+    <PreferenceSection
+      title={t('settings.pipeline.stages.markup.title')}
+      description={t('settings.pipeline.stages.markup.description')}
+    >
+      <PreferenceRow title={t('settings.pipeline.markup.model')} align='start'>
+        <Popover open={modelOpen} onOpenChange={setModelOpen}>
+          <PopoverTrigger
+            type='button'
+            aria-label={t('settings.pipeline.markup.model')}
+            className='flex h-9 w-full min-w-0 items-center justify-between gap-2 rounded-lg border border-input bg-transparent px-2.5 text-[11px] transition-colors outline-none hover:bg-foreground/[0.03] focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50'
+          >
+            <span className='flex min-w-0 flex-1 items-center gap-2 text-left'>
+              <Badge variant='outline' className='shrink-0 px-1.5 py-0 text-[9px] font-medium'>
+                {providerName(providers, current.provider)}
+              </Badge>
+              <span className='truncate'>{current.name}</span>
+            </span>
+            <ChevronDown className='size-3.5 shrink-0 text-muted-foreground' />
+          </PopoverTrigger>
+          <PopoverContent
+            align='start'
+            sideOffset={4}
+            className='w-(--anchor-width) min-w-64 gap-0 overflow-hidden rounded-xl border border-border/50 p-1 shadow-sm ring-0'
+          >
+            <ModelPicker
+              value={markup.model}
+              models={choices}
+              providers={providers}
+              onBack={() => setModelOpen(false)}
+              onSelect={(model) => {
+                updateMarkup({ ...markup, model })
+                setModelOpen(false)
+              }}
+            />
+          </PopoverContent>
+        </Popover>
+      </PreferenceRow>
+      <PreferenceRow
+        title={t('settings.pipeline.markup.instructions')}
+        description={t('settings.pipeline.markup.instructionsDescription')}
+        align='start'
+      >
+        <Textarea
+          aria-label={t('settings.pipeline.markup.instructions')}
+          value={markup.instructions ?? ''}
+          className='field-sizing-fixed min-h-20 resize-y overflow-y-auto text-[12px] leading-5'
+          onChange={(event) =>
+            updateMarkup({ ...markup, instructions: event.currentTarget.value || null })
+          }
+        />
+      </PreferenceRow>
+    </PreferenceSection>
+  )
+}
+
 function OcrPreferences({
   value,
   modelChoices,
@@ -577,6 +673,11 @@ function OcrPreferences({
               <FileText className='size-3.5 shrink-0 text-muted-foreground' />
               <Select
                 value={ocr.method}
+                items={{
+                  local: t('settings.pipeline.ocr.local'),
+                  api: t('settings.pipeline.ocr.api'),
+                  'local-api': t('settings.pipeline.ocr.hybrid'),
+                }}
                 onValueChange={(method) =>
                   method && updateOcr({ ...ocr, method: method as typeof ocr.method })
                 }
@@ -667,6 +768,18 @@ function OcrPreferences({
             )}
           </div>
         </PreferenceRow>
+        {ocr.method === 'local-api' && (
+          <PreferenceRow
+            title={t('settings.pipeline.ocr.crossCheck')}
+            description={t('settings.pipeline.ocr.crossCheckDescription')}
+          >
+            <Switch
+              aria-label={t('settings.pipeline.ocr.crossCheck')}
+              checked={ocr.cross_check}
+              onCheckedChange={(cross_check) => updateOcr({ ...ocr, cross_check })}
+            />
+          </PreferenceRow>
+        )}
       </PreferenceSection>
       {ocr.method !== 'local' && (
         <>

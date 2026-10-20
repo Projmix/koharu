@@ -31,14 +31,16 @@ pub(crate) enum OcrPass {
 pub enum Stage {
     Detection,
     Ocr,
+    Markup,
     Translation,
     Inpainting,
 }
 
 impl Stage {
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 5] = [
         Self::Detection,
         Self::Ocr,
+        Self::Markup,
         Self::Translation,
         Self::Inpainting,
     ];

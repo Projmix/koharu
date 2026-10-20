@@ -58,13 +58,30 @@
     "empty": "Başlamak için bir sayfa seçin.",
     "fit": "Pencereye Sığdır",
     "surface": "Koharu tuvali",
-    "unavailable": "WebGPU tuvali kullanılamıyor"
+    "unavailable": "WebGPU tuvali kullanılamıyor",
+    "unboxedText": {
+      "create": "Buraya metin bloğu oluştur",
+      "dismiss": "Metin değil"
+    }
   },
   "colorPicker": {
     "brushColor": "Fırça rengi",
     "hexCode": "Onaltılık renk kodu",
     "sampleCanvas": "Tuvalden renk seç",
     "transparent": "Şeffaf"
+  },
+  "chapterCheck": {
+    "title": "Dışa aktarmadan önce denetim",
+    "checking": "Sayfalar denetleniyor…",
+    "issueCount": "{{count}} metin bloğunun gözden geçirilmesi gerekiyor. Açmak için birini seçin.",
+    "issueCount_one": "{{count}} metin bloğunun gözden geçirilmesi gerekiyor. Açmak için seçin.",
+    "issueCount_other": "{{count}} metin bloğunun gözden geçirilmesi gerekiyor. Açmak için birini seçin.",
+    "emptyTranslation": "Çeviri yok",
+    "japaneseText": "Çeviride Japonca karakterler kaldı",
+    "unboxedText": "Algılanmamış olabilecek metin: {{count}}",
+    "unboxedText_one": "Algılanmamış olabilecek metin: {{count}}",
+    "unboxedText_other": "Algılanmamış olabilecek metin: {{count}}",
+    "exportAnyway": "Yine de dışa aktar"
   },
   "common": {
     "back": "Geri",
@@ -201,9 +218,12 @@
     "horizontal": "Yatay",
     "increaseBorderWidth": "Kenarlık genişliğini artır",
     "increaseFontSize": "Yazı tipi boyutunu 1 pt artır",
+    "invertBorder": "Metin ve kenarlık renklerini değiştir",
     "opacity": "Opaklık",
     "placement": "Yerleşim",
     "resetAutoFit": "Otomatik sığdırmaya sıfırla",
+    "drawArea": "Bu metnin sığacağı alanı çiz",
+    "drawAreaShort": "Alan çiz",
     "selectPage": "Katmanlarını incelemek için bir sayfa seçin.",
     "size": "Boyut",
     "source": "Kaynak metin",
@@ -211,11 +231,31 @@
     "textColor": "Metin rengi",
     "textDirection": "Metin yönü",
     "translation": "Çeviri",
+    "translationReview": "Çeviri küfürleri yumuşatmış olabilir",
+    "shortenTranslation": "Kısalt",
+    "shortenTranslationHint": "Bu çeviriyi sığması için daha kısa yeniden yaz; daha da kısaltmak için tekrar bas",
+    "translationReviewKeep": "Koru",
+    "translationReviewKeepHint": "Bu çeviriyi koru ve uyarıyı kaldır",
+    "translationReviewReference": "Makine çevirisi",
     "type": "Tipografi",
     "unplaced": "Yerleştirilmedi",
     "vertical": "Dikey",
     "weight": "Kalınlık",
-    "width": "Genişlik"
+    "width": "Genişlik",
+    "speechKind": "Tür",
+    "speechKindLabel": "{{name}} türü",
+    "speechKinds": {
+      "speech": "Konuşma",
+      "thought": "Düşünce",
+      "narration": "Anlatım",
+      "sound-effect": "Ses efekti",
+      "sign": "Tabela",
+      "aside": "Ara söz"
+    },
+    "speaker": "Konuşan",
+    "speakerLabel": "{{name}} konuşanı",
+    "noSpeaker": "Yok",
+    "unmarked": "İşaretlenmedi"
   },
   "languages": {
     "en-US": "English",
@@ -230,6 +270,10 @@
     "zh-TW": "繁體中文"
   },
   "layers": {
+    "textOverflow": "Metin alanına sığmıyor",
+    "textBelowReadableSize": "Metin okunabilir boyutun altına küçültüldü",
+    "textLowContrast": "Metin altındaki görüntüden neredeyse ayırt edilemiyor",
+    "ocrUnverified": "OCR doğrulanmadı: OCR'ı yeniden çalıştırın",
     "collapse": "{{name}} grubunu daralt",
     "delete": "{{name}} öğesini sil",
     "edit": "{{name}} öğesini düzenle",
@@ -344,7 +388,14 @@
     "rename": "Yeniden adlandır",
     "renameDescription": "Bu sayfa için yeni bir ad seçin.",
     "renameTitle": "Sayfayı yeniden adlandır",
-    "selected": "{{count}} seçili"
+    "selected": "{{count}} seçili",
+    "markupMissing": {
+      "refused": "Sahne işaretlemesi: model bu sayfayı reddetti",
+      "content-filter": "Sahne işaretlemesi: sağlayıcının içerik filtresi engelledi",
+      "empty": "Sahne işaretlemesi: model hiçbir şey döndürmedi",
+      "invalid": "Sahne işaretlemesi: yanıt geçersizdi ve atıldı",
+      "failed": "Sahne işaretlemesi: istek başarısız oldu"
+    }
   },
   "outputPicker": {
     "instructions": "Çeviri talimatları",
@@ -356,18 +407,21 @@
     "detection": "Algılama",
     "inpainting": "Doldurma",
     "ocr": "OCR",
+    "markup": "Sahne işaretleme",
     "translation": "Çeviri"
   },
   "phaseShort": {
     "detection": "Algı",
     "inpainting": "Temizle",
     "ocr": "OCR",
+    "markup": "İşaretleme",
     "translation": "Çeviri"
   },
   "phaseDescription": {
     "detection": "Sayfadaki metni bulur.",
     "inpainting": "Metin kaldırıldıktan sonra çizimi yeniden oluşturur.",
     "ocr": "Her bölgenin içindeki metni okur.",
+    "markup": "Çeviri için her metnin türünü, konuşanını ve devamını işaretler.",
     "translation": "Kaynak metni hedef dile çevirir."
   },
   "providerDescriptions": {
@@ -455,7 +509,14 @@
         "localModel": "Yerel OCR modeli",
         "method": "OCR yöntemi",
         "hybrid": "Yerel + API",
-        "hybridDescription": "Önce bölümdeki tüm sayfalarda yerel OCR tamamlanır, ardından her görüntü ve tanınan metin seçilen API modeline gönderilir. Sonuçlar otomatik uygulanır."
+        "hybridDescription": "Önce bölümdeki tüm sayfalarda yerel OCR tamamlanır, ardından tanınan metinler seçilen API modeliyle kontrol edilir. Sonuçlar otomatik uygulanır.",
+        "crossCheck": "İkinci yerel modelle karşılaştır",
+        "crossCheckDescription": "Her görüntü ikinci bir yerel modelle de okunur ve yalnızca ikisinin farklı okuduğu görüntüler API'ye gönderilir. Kapatırsanız tümü gönderilir: yaklaşık üç kat maliyetli, el yazısında biraz daha doğru."
+      },
+      "markup": {
+        "model": "İşaretleme modeli",
+        "instructions": "Ek talimatlar",
+        "instructionsDescription": "İşaretleme isteğine eklenir, ör. karakterlerle ilgili ipuçları."
       },
       "inpainting": {
         "apiModel": "Görüntü düzenleme modeli",
@@ -491,6 +552,10 @@
         "ocr": {
           "description": "Algılanan bölgelerdeki kaynak metni okur.",
           "title": "OCR"
+        },
+        "markup": {
+          "title": "Sahne işaretleme",
+          "description": "Görsel bir model her metnin türünü, konuşanını ve devam ettiği satırı işaretler. Metni asla değiştirmez."
         }
       },
       "title": "İşlem hattı"
@@ -557,12 +622,17 @@
     },
     "typesetting": {
       "addFamily": "Yazı tipi ailesi ekle",
+      "clearKindFont": "{{kind}} için varsayılan aileleri kullan",
       "defaultFamilies": "Varsayılan yazı tipi aileleri",
       "description": "Bir metin katmanına aile atanmadığında kullanılacak sıralı yazı tipi yığınını ayarlayın.",
       "empty": "Varsayılan aile yok. Koharu sistem yedeğini kullanacak.",
       "familyLabel": "Varsayılan yazı tipi ailesi {{index}}",
       "fontFallback": "Yedek yazı tipleri",
       "fontFallbackDescription": "Koharu, metni destekleyen ilk kullanılabilir aileyi kullanır.",
+      "kindFontDefault": "Varsayılan aileler",
+      "kindFontLabel": "Yazı tipi: {{kind}}",
+      "kindFonts": "Metin türüne göre yazı tipi",
+      "kindFontsDescription": "Sahne işaretlemesindeki bu türdeki metin için varsayılan ailelerden önce kullanılır. Metin katmanında seçilen yazı tipi yine önceliklidir.",
       "loadError": "Yazı tipleri yüklenemedi. Mevcut aileler yine de kaldırılabilir.",
       "loadingFonts": "Yazı tipleri yükleniyor…",
       "removeFamily": "{{family}} ailesini kaldır",
@@ -663,5 +733,26 @@
     "failed": "Önizleme işlenemedi: {{error}}",
     "cleanupLayers": "Orijinal + görünür boyama katmanları. Tek PNG; metin katmanları, maskeler ve seçim tutamaçları dahil değildir.",
     "restorationLayers": "Orijinal + görünür temizleme ve boyama katmanlarının katman sırasıyla birleştirilmiş seçili alanı. Tek PNG; metin katmanları, maskeler ve seçim tutamaçları dahil değildir."
+  },
+  "characters": {
+    "tab": "Kadro",
+    "title": "Karakterler",
+    "description": "Sahne işaretlemesi ve çevirinin kullandığı adlar ve cinsiyetler. Listeyi düzenlediğinizde size ait olur ve işaretleme artık değiştirmez.",
+    "empty": "Henüz karakter yok. Sahne işaretlemesi bu listeyi doldurur ya da buradan ekleyin.",
+    "name": "Ad",
+    "gender": "Cinsiyet",
+    "genders": {
+      "male": "Erkek",
+      "female": "Kadın",
+      "unknown": "Bilinmiyor"
+    },
+    "notes": "Notlar",
+    "notesPlaceholder": "Notlar, ör. nasıl konuştuğu",
+    "remove": "{{name}} karakterini kaldır",
+    "newName": "Yeni karakter adı",
+    "add": "Ekle",
+    "import": "Projeden içe aktar…",
+    "importNone": "Başka proje yok",
+    "imported": "Eklenen karakter: {{count}}"
   }
 }

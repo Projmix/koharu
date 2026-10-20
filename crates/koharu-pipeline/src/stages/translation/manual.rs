@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use anyhow::{Context as _, Result, ensure};
-use koharu_translator::Language;
+use koharu_translator::{Language, Translator};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -78,7 +78,11 @@ impl ChapterTranslation {
     }
 
     /// Validate the entire response before constructing one atomic scene edit.
-    pub fn patch_from_response(&self, response: &str) -> Result<koharu_scene::Patch> {
+    pub async fn patch_from_response(
+        &self,
+        translator: &Translator,
+        response: &str,
+    ) -> Result<koharu_scene::Patch> {
         let response: Response = serde_json::from_str(response)
             .context("manual translation file must contain project_id, target_language and translations; use the prompt from the export")?;
         ensure!(
@@ -126,11 +130,13 @@ impl ChapterTranslation {
             translated[index] = Some(segment.translated_text);
         }
         self.patch_from_translations(
+            translator,
             translated
                 .into_iter()
                 .map(|text| text.expect("all IDs validated"))
                 .collect(),
             "manual-import",
         )
+        .await
     }
 }

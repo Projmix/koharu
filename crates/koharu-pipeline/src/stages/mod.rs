@@ -1,6 +1,7 @@
 mod detection;
 mod fal;
 mod inpainting;
+mod markup;
 mod ocr;
 mod openrouter_image;
 mod replicate;
@@ -17,6 +18,8 @@ pub(crate) use fal::FalModel;
 pub(crate) use fal::normalize_cleanup_prompt;
 pub use fal::{ImageEditConfig, InpaintingApplyMode};
 pub use inpainting::{Flux2KleinConfig, RoremMixedConfig};
+pub use markup::open_unboxed_text;
+pub use ocr::ocr_unverified;
 pub(crate) use replicate::ReplicateModel;
 pub use translation::ChapterTranslation;
 
@@ -101,6 +104,7 @@ pub(crate) struct StageInput {
     image_edit_reviewer: Option<Arc<dyn crate::ImageEditReviewer>>,
     stop: StopToken,
     ocr_pass: crate::stage::OcrPass,
+    shorten: bool,
 }
 
 impl StageInput {
@@ -123,6 +127,7 @@ impl StageInput {
             image_edit_reviewer: None,
             stop: StopToken::default(),
             ocr_pass: crate::stage::OcrPass::Final,
+            shorten: false,
         }
     }
 
@@ -138,6 +143,7 @@ impl StageInput {
             image_edit_reviewer: None,
             stop: StopToken::default(),
             ocr_pass: crate::stage::OcrPass::Final,
+            shorten: false,
         }
     }
 
@@ -156,6 +162,11 @@ impl StageInput {
 
     pub(crate) fn with_ocr_pass(mut self, pass: crate::stage::OcrPass) -> Self {
         self.ocr_pass = pass;
+        self
+    }
+
+    pub(crate) fn with_shorten(mut self, shorten: bool) -> Self {
+        self.shorten = shorten;
         self
     }
 
@@ -205,6 +216,7 @@ trait StageProcessor: Send + Sync {
 pub(crate) struct Stages {
     detection: detection::Processor,
     ocr: ocr::Processor,
+    markup: markup::Processor,
     translation: translation::Processor,
     inpainting: inpainting::Processor,
     manual_inpainting: Option<inpainting::Processor>,
@@ -235,6 +247,11 @@ impl Stages {
                 translator.clone(),
                 device.clone(),
             ),
+            markup: markup::Processor::new(
+                config.markup.clone(),
+                config.translation.source_language,
+                translator.clone(),
+            ),
             translation: translation::Processor::new(config.translation.clone(), translator),
             inpainting: inpainting::Processor::new(automatic_inpainting, device.clone())?,
             manual_inpainting,
@@ -249,6 +266,7 @@ impl Stages {
         match stage {
             Stage::Detection => &self.detection,
             Stage::Ocr => &self.ocr,
+            Stage::Markup => &self.markup,
             Stage::Translation => &self.translation,
             Stage::Inpainting if input.inpainting_intent() == Some(InpaintingIntent::Remove) => {
                 self.manual_inpainting.as_ref().unwrap_or(&self.inpainting)
@@ -285,6 +303,7 @@ impl Stages {
         match stage {
             Stage::Detection => self.detection.unload(),
             Stage::Ocr => self.ocr.unload(),
+            Stage::Markup => self.markup.unload(),
             Stage::Translation => self.translation.unload(),
             Stage::Inpainting => {
                 let automatic = self.inpainting.unload();
@@ -456,6 +475,7 @@ mod tests {
             [
                 "koharu-layout-rfdetr-seg-2xl",
                 "paddleocr-vl-1.6",
+                "openrouter: google/gemini-3.7-flash",
                 "local",
                 "lama",
             ]
@@ -545,7 +565,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             Stage::ALL.map(|stage| local.recovers_from_memory_pressure(stage, &input)),
-            [true, true, true, true]
+            [true, true, false, true, true]
         );
 
         let mut remote_config = PipelineConfig::default();
@@ -556,7 +576,7 @@ mod tests {
         let remote = Stages::new(&remote_config, translator, &koharu_ml::Device::cpu()).unwrap();
         assert_eq!(
             Stage::ALL.map(|stage| remote.recovers_from_memory_pressure(stage, &input)),
-            [true, false, false, false]
+            [true, false, false, false, false]
         );
         let chapter = StageInput::chapter(session.snapshot(), Arc::from([page]));
         assert!(!remote.recovers_from_memory_pressure(Stage::Translation, &chapter));

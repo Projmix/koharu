@@ -58,13 +58,30 @@
     "empty": "ページを選択して開始します。",
     "fit": "ウィンドウに合わせる",
     "surface": "Koharu キャンバス",
-    "unavailable": "WebGPU キャンバスを利用できません"
+    "unavailable": "WebGPU キャンバスを利用できません",
+    "unboxedText": {
+      "create": "ここにテキストブロックを作成",
+      "dismiss": "文字ではない"
+    }
   },
   "colorPicker": {
     "brushColor": "ブラシカラー",
     "hexCode": "16進カラーコード",
     "sampleCanvas": "キャンバスから色を選択",
     "transparent": "透明"
+  },
+  "chapterCheck": {
+    "title": "書き出し前のチェック",
+    "checking": "ページを確認中…",
+    "issueCount": "確認が必要なテキストブロック：{{count}}。選択すると開きます。",
+    "issueCount_one": "確認が必要なテキストブロック：{{count}}。選択すると開きます。",
+    "issueCount_other": "確認が必要なテキストブロック：{{count}}。選択すると開きます。",
+    "emptyTranslation": "翻訳がありません",
+    "japaneseText": "翻訳に日本語の文字が残っています",
+    "unboxedText": "未検出の可能性がある文字: {{count}}",
+    "unboxedText_one": "未検出の可能性がある文字: {{count}}",
+    "unboxedText_other": "未検出の可能性がある文字: {{count}}",
+    "exportAnyway": "このまま書き出す"
   },
   "common": {
     "back": "戻る",
@@ -201,9 +218,12 @@
     "horizontal": "横書き",
     "increaseBorderWidth": "縁取り幅を拡大",
     "increaseFontSize": "フォントサイズを1pt大きくする",
+    "invertBorder": "文字色と縁取りの色を入れ替え",
     "opacity": "不透明度",
     "placement": "配置",
     "resetAutoFit": "自動調整に戻す",
+    "drawArea": "このテキストを収める範囲を描く",
+    "drawAreaShort": "範囲を描く",
     "selectPage": "ページを選択してレイヤーを確認します。",
     "size": "サイズ",
     "source": "原文",
@@ -211,11 +231,31 @@
     "textColor": "文字色",
     "textDirection": "文字方向",
     "translation": "翻訳",
+    "translationReview": "翻訳で罵倒表現が和らげられている可能性があります",
+    "shortenTranslation": "短くする",
+    "shortenTranslationHint": "収まるようにこの翻訳を短く書き直します。もう一度押すとさらに短くなります",
+    "translationReviewKeep": "このままにする",
+    "translationReviewKeepHint": "この翻訳を維持して警告を消す",
+    "translationReviewReference": "機械翻訳",
     "type": "タイポグラフィ",
     "unplaced": "未配置",
     "vertical": "縦書き",
     "weight": "太さ",
-    "width": "幅"
+    "width": "幅",
+    "speechKind": "種類",
+    "speechKindLabel": "{{name}}の種類",
+    "speechKinds": {
+      "speech": "セリフ",
+      "thought": "心の声",
+      "narration": "ナレーション",
+      "sound-effect": "効果音",
+      "sign": "看板・文字",
+      "aside": "ぼやき"
+    },
+    "speaker": "話者",
+    "speakerLabel": "{{name}}の話者",
+    "noSpeaker": "なし",
+    "unmarked": "未設定"
   },
   "languages": {
     "en-US": "English",
@@ -230,6 +270,10 @@
     "zh-TW": "繁體中文"
   },
   "layers": {
+    "textOverflow": "テキストが範囲に収まりません",
+    "textBelowReadableSize": "テキストが読める大きさより小さく縮小されています",
+    "textLowContrast": "テキストが下の画像とほとんど見分けられません",
+    "ocrUnverified": "OCR未確認：OCRをもう一度実行してください",
     "collapse": "{{name}}を折りたたむ",
     "delete": "{{name}}を削除",
     "edit": "{{name}}を編集",
@@ -344,7 +388,14 @@
     "rename": "名前を変更",
     "renameDescription": "このページの新しい名前を入力します。",
     "renameTitle": "ページ名を変更",
-    "selected": "{{count}}件選択中"
+    "selected": "{{count}}件選択中",
+    "markupMissing": {
+      "refused": "シーン解析: モデルがこのページを拒否しました",
+      "content-filter": "シーン解析: プロバイダーのコンテンツフィルターでブロックされました",
+      "empty": "シーン解析: モデルが何も返しませんでした",
+      "invalid": "シーン解析: 応答が無効なため破棄しました",
+      "failed": "シーン解析: リクエストに失敗しました"
+    }
   },
   "outputPicker": {
     "instructions": "翻訳指示",
@@ -356,18 +407,21 @@
     "detection": "検出",
     "inpainting": "インペイント",
     "ocr": "OCR",
+    "markup": "シーン解析",
     "translation": "翻訳"
   },
   "phaseShort": {
     "detection": "検出",
     "inpainting": "修復",
     "ocr": "OCR",
+    "markup": "解析",
     "translation": "翻訳"
   },
   "phaseDescription": {
     "detection": "ページ上のテキストを見つけます。",
     "inpainting": "文字を消した部分の絵を復元します。",
     "ocr": "各領域内の原文を読み取ります。",
+    "markup": "翻訳のために各テキストの種類・話者・続きを付けます。",
     "translation": "原文を対象言語に翻訳します。"
   },
   "providerDescriptions": {
@@ -455,7 +509,14 @@
         "localModel": "ローカルOCRモデル",
         "method": "OCR方式",
         "hybrid": "ローカル + API",
-        "hybridDescription": "章の全ページでローカルOCRを完了してから、各画像と認識テキストを選択したAPIに送信します。結果は自動適用されます。"
+        "hybridDescription": "章の全ページでローカルOCRを完了してから、選択したAPIで認識テキストを確認します。結果は自動適用されます。",
+        "crossCheck": "2つ目のローカルモデルで照合",
+        "crossCheckDescription": "各画像を2つ目のローカルモデルでも読み取り、結果が食い違った画像だけをAPIに送信します。オフにするとすべて送信します。費用は約3倍で、手書き文字はやや正確になります。"
+      },
+      "markup": {
+        "model": "解析モデル",
+        "instructions": "追加の指示",
+        "instructionsDescription": "解析リクエストに追加されます（例: 登場人物のヒント）。"
       },
       "inpainting": {
         "apiModel": "画像編集モデル",
@@ -491,6 +552,10 @@
         "ocr": {
           "description": "検出領域内の原文を読み取ります。",
           "title": "OCR"
+        },
+        "markup": {
+          "title": "シーン解析",
+          "description": "視覚モデルが各テキストの種類、話者、続いている行を付けます。テキスト自体は変更しません。"
         }
       },
       "title": "パイプライン"
@@ -557,12 +622,17 @@
     },
     "typesetting": {
       "addFamily": "フォントファミリーを追加",
+      "clearKindFont": "{{kind}} に既定のフォントを使う",
       "defaultFamilies": "既定のフォントファミリー",
       "description": "テキストレイヤーにファミリーが指定されていない場合に使う、順序付きフォントスタックを設定します。",
       "empty": "既定のファミリーがありません。Koharuはシステムの代替フォントを使用します。",
       "familyLabel": "既定のフォントファミリー {{index}}",
       "fontFallback": "代替フォント",
       "fontFallbackDescription": "Koharuは文字に対応する最初の利用可能なファミリーを使用します。",
+      "kindFontDefault": "既定のフォント",
+      "kindFontLabel": "フォント: {{kind}}",
+      "kindFonts": "テキスト種別ごとのフォント",
+      "kindFontsDescription": "シーンマークアップの種別に応じて、既定のフォントより先に使います。テキストレイヤーで選んだフォントが優先されます。",
       "loadError": "フォントを読み込めませんでした。既存のファミリーは削除できます。",
       "loadingFonts": "フォントを読み込み中…",
       "removeFamily": "{{family}}を削除",
@@ -663,5 +733,26 @@
     "failed": "プレビューを処理できませんでした：{{error}}",
     "cleanupLayers": "元画像＋表示中の描画レイヤー。PNG 1枚で送信します。テキストレイヤー、マスク、選択ハンドルは含まれません。",
     "restorationLayers": "元画像＋表示中のクリーニング・描画レイヤーをレイヤー順に合成した選択範囲。PNG 1枚で送信します。テキストレイヤー、マスク、選択ハンドルは含まれません。"
+  },
+  "characters": {
+    "tab": "登場人物",
+    "title": "登場人物",
+    "description": "シーン解析と翻訳で使う名前と性別です。一度編集するとリストはユーザーのものになり、シーン解析では変更されません。",
+    "empty": "登場人物はまだいません。シーン解析で追加されるか、ここで追加できます。",
+    "name": "名前",
+    "gender": "性別",
+    "genders": {
+      "male": "男性",
+      "female": "女性",
+      "unknown": "不明"
+    },
+    "notes": "メモ",
+    "notesPlaceholder": "メモ（例: 話し方）",
+    "remove": "{{name}}を削除",
+    "newName": "新しい登場人物の名前",
+    "add": "追加",
+    "import": "プロジェクトから読み込む…",
+    "importNone": "ほかのプロジェクトはありません",
+    "imported": "追加したキャラクター: {{count}}"
   }
 }

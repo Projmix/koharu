@@ -58,13 +58,30 @@
     "empty": "先选一页，就好开始。",
     "fit": "适应窗口",
     "surface": "Koharu 画布",
-    "unavailable": "WebGPU 画布用弗来"
+    "unavailable": "WebGPU 画布用弗来",
+    "unboxedText": {
+      "create": "辣此地建文字块",
+      "dismiss": "弗是文字"
+    }
   },
   "colorPicker": {
     "brushColor": "笔刷颜色",
     "hexCode": "十六进制颜色代码",
     "sampleCanvas": "从画布浪取颜色",
     "transparent": "透明"
+  },
+  "chapterCheck": {
+    "title": "导出前检查",
+    "checking": "来里检查页面…",
+    "issueCount": "有 {{count}} 个文字块要看一看。点一记就打开。",
+    "issueCount_one": "有 {{count}} 个文字块要看一看。点一记就打开。",
+    "issueCount_other": "有 {{count}} 个文字块要看一看。点一记就打开。",
+    "emptyTranslation": "呒没译文",
+    "japaneseText": "译文里向还有日文字",
+    "unboxedText": "可能漏脱个文字：{{count}} 处",
+    "unboxedText_one": "可能漏脱个文字：{{count}} 处",
+    "unboxedText_other": "可能漏脱个文字：{{count}} 处",
+    "exportAnyway": "照样导出"
   },
   "common": {
     "back": "返回",
@@ -201,9 +218,12 @@
     "horizontal": "横排",
     "increaseBorderWidth": "拿描边调粗点",
     "increaseFontSize": "字体大小增大 1 磅",
+    "invertBorder": "拿文字颜色搭描边颜色调一调",
     "opacity": "不透明度",
     "placement": "位置",
     "resetAutoFit": "重置成自动适配",
+    "drawArea": "画出搿段文字适配个区域",
+    "drawAreaShort": "画区域",
     "selectPage": "先选一页，再看箇页个图层。",
     "size": "字号",
     "source": "原文",
@@ -211,11 +231,31 @@
     "textColor": "文本颜色",
     "textDirection": "文本方向",
     "translation": "译文",
+    "translationReview": "译文可能拿粗话改软了",
+    "shortenTranslation": "缩短",
+    "shortenTranslationHint": "拿迭句翻译改得短一眼，好放得进；再揿一记会更短",
+    "translationReviewKeep": "保留",
+    "translationReviewKeepHint": "保留箇个译文，清除提醒",
+    "translationReviewReference": "机器翻译",
     "type": "排版",
     "unplaced": "还呒没放置",
     "vertical": "竖排",
     "weight": "字重",
-    "width": "宽度"
+    "width": "宽度",
+    "speechKind": "类型",
+    "speechKindLabel": "{{name}} 的类型",
+    "speechKinds": {
+      "speech": "对白",
+      "thought": "心声",
+      "narration": "旁白",
+      "sound-effect": "音效",
+      "sign": "标牌文字",
+      "aside": "旁注"
+    },
+    "speaker": "说话人",
+    "speakerLabel": "{{name}} 的说话人",
+    "noSpeaker": "无",
+    "unmarked": "未标注"
   },
   "languages": {
     "en-US": "English",
@@ -230,6 +270,10 @@
     "zh-TW": "繁體中文"
   },
   "layers": {
+    "textOverflow": "文字放勿进区域",
+    "textBelowReadableSize": "文字缩到看勿清个大小",
+    "textLowContrast": "文字搭下头个图像差勿多分勿清",
+    "ocrUnverified": "OCR 还呒没核对过：再跑一遍 OCR",
     "collapse": "折叠 {{name}}",
     "delete": "删除 {{name}}",
     "edit": "编辑 {{name}}",
@@ -344,7 +388,14 @@
     "rename": "改名",
     "renameDescription": "帮箇页取个新名字。",
     "renameTitle": "页面改名",
-    "selected": "拣中个页面：{{count}} 页"
+    "selected": "拣中个页面：{{count}} 页",
+    "markupMissing": {
+      "refused": "场景标注：模型拒绝了此页",
+      "content-filter": "场景标注：被服务商的内容过滤器拦截",
+      "empty": "场景标注：模型没有返回内容",
+      "invalid": "场景标注：回复无效，已丢弃",
+      "failed": "场景标注：请求失败"
+    }
   },
   "outputPicker": {
     "instructions": "翻译说明",
@@ -356,18 +407,21 @@
     "detection": "检测",
     "inpainting": "修补",
     "ocr": "OCR",
+    "markup": "场景标注",
     "translation": "翻译"
   },
   "phaseShort": {
     "detection": "检测",
     "inpainting": "修复",
     "ocr": "OCR",
+    "markup": "标注",
     "translation": "翻译"
   },
   "phaseDescription": {
     "detection": "寻出页面浪个文本。",
     "inpainting": "拿文字删脱仔，再重建原来文字底下个图稿。",
     "ocr": "读出每个区域里向个文本。",
+    "markup": "为翻译标注每段文字的类型、说话人和接续关系。",
     "translation": "拿原文翻译成目标语言。"
   },
   "providerDescriptions": {
@@ -455,7 +509,14 @@
         "localModel": "本地 OCR 模型",
         "method": "OCR 方法",
         "hybrid": "本地 + API",
-        "hybridDescription": "先完成整章所有页面的本地 OCR，再将每张裁剪图像及其识别文本发送给所选 API。结果自动应用。"
+        "hybridDescription": "先完成整章所有页面的本地 OCR，再由所选 API 核对识别文本。结果自动应用。",
+        "crossCheck": "用第二个本地模型交叉核对",
+        "crossCheckDescription": "每张裁剪图像也用第二个本地模型识别，只把两者结果不一致的发送给 API。关闭后全部发送：费用约为三倍，手写文字略更准确。"
+      },
+      "markup": {
+        "model": "标注模型",
+        "instructions": "附加说明",
+        "instructionsDescription": "附加到标注请求中，例如角色提示。"
       },
       "inpainting": {
         "apiModel": "图像编辑模型",
@@ -491,6 +552,10 @@
         "ocr": {
           "description": "读出检测区域里向个原文。",
           "title": "OCR"
+        },
+        "markup": {
+          "title": "场景标注",
+          "description": "视觉模型为每段文字标注类型、说话人和它接续的台词，不会修改文字。"
         }
       },
       "title": "处理流程"
@@ -557,12 +622,17 @@
     },
     "typesetting": {
       "addFamily": "添加字体系列",
+      "clearKindFont": "{{kind}} 用默认字体",
       "defaultFamilies": "默认字体系列",
       "description": "设定字体系列个使用次序。文本图层呒没指定字体系列个辰光，就照箇个次序选用字体。",
       "empty": "呒没默认字体系列。Koharu 会用系统后备字体。",
       "familyLabel": "默认字体系列 {{index}}",
       "fontFallback": "后备字体",
       "fontFallbackDescription": "Koharu 照次序寻，选第一个可用、又支持箇段文本个字体系列。",
+      "kindFontDefault": "默认字体",
+      "kindFontLabel": "字体：{{kind}}",
+      "kindFonts": "按文本类型设字体",
+      "kindFontsDescription": "根据场景标注个文本类型，比默认字体先用。文本图层上选个字体还是优先。",
       "loadError": "字体加载失败哉。列表里向原有个字体系列还是好移除。",
       "loadingFonts": "来勒加载字体…",
       "removeFamily": "从列表里向移除 {{family}}",
@@ -663,5 +733,26 @@
     "failed": "无法处理预览：{{error}}",
     "cleanupLayers": "原图 + 可见的绘画图层。发送单张 PNG，不包含文字图层、蒙版和选择控件。",
     "restorationLayers": "原图 + 按图层顺序合成的可见清理与绘画图层，仅发送选区。发送单张 PNG，不包含文字图层、蒙版和选择控件。"
+  },
+  "characters": {
+    "tab": "角色",
+    "title": "角色",
+    "description": "场景标注和翻译使用的姓名与性别。编辑后列表归你所有，场景标注不会再修改它。",
+    "empty": "还没有角色。场景标注会填写此列表，也可以在这里添加。",
+    "name": "姓名",
+    "gender": "性别",
+    "genders": {
+      "male": "男",
+      "female": "女",
+      "unknown": "未知"
+    },
+    "notes": "备注",
+    "notesPlaceholder": "备注，例如说话方式",
+    "remove": "移除 {{name}}",
+    "newName": "新角色姓名",
+    "add": "添加",
+    "import": "从项目导入…",
+    "importNone": "没有其他项目",
+    "imported": "已添加角色：{{count}}"
   }
 }

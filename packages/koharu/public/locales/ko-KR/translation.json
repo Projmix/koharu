@@ -58,13 +58,30 @@
     "empty": "시작할 페이지를 선택하세요.",
     "fit": "창에 맞춤",
     "surface": "Koharu 캔버스",
-    "unavailable": "WebGPU 캔버스를 사용할 수 없습니다"
+    "unavailable": "WebGPU 캔버스를 사용할 수 없습니다",
+    "unboxedText": {
+      "create": "여기에 텍스트 블록 만들기",
+      "dismiss": "텍스트 아님"
+    }
   },
   "colorPicker": {
     "brushColor": "브러시 색상",
     "hexCode": "16진수 색상 코드",
     "sampleCanvas": "캔버스에서 색상 선택",
     "transparent": "투명"
+  },
+  "chapterCheck": {
+    "title": "내보내기 전 검사",
+    "checking": "페이지 검사 중…",
+    "issueCount": "확인이 필요한 텍스트 블록: {{count}}개. 선택하면 열립니다.",
+    "issueCount_one": "확인이 필요한 텍스트 블록: {{count}}개. 선택하면 열립니다.",
+    "issueCount_other": "확인이 필요한 텍스트 블록: {{count}}개. 선택하면 열립니다.",
+    "emptyTranslation": "번역 없음",
+    "japaneseText": "번역에 일본어 문자가 남아 있습니다",
+    "unboxedText": "감지되지 않았을 수 있는 텍스트: {{count}}개",
+    "unboxedText_one": "감지되지 않았을 수 있는 텍스트: {{count}}개",
+    "unboxedText_other": "감지되지 않았을 수 있는 텍스트: {{count}}개",
+    "exportAnyway": "그래도 내보내기"
   },
   "common": {
     "back": "뒤로",
@@ -201,9 +218,12 @@
     "horizontal": "가로쓰기",
     "increaseBorderWidth": "테두리 너비 늘리기",
     "increaseFontSize": "글꼴 크기 1pt 늘리기",
+    "invertBorder": "글자 색상과 테두리 색상 바꾸기",
     "opacity": "불투명도",
     "placement": "배치",
     "resetAutoFit": "자동 맞춤으로 초기화",
+    "drawArea": "이 텍스트가 맞춰질 영역 그리기",
+    "drawAreaShort": "영역 그리기",
     "selectPage": "레이어를 확인할 페이지를 선택하세요.",
     "size": "크기",
     "source": "원문",
@@ -211,11 +231,31 @@
     "textColor": "텍스트 색상",
     "textDirection": "텍스트 방향",
     "translation": "번역",
+    "translationReview": "번역에서 욕설이 순화되었을 수 있습니다",
+    "shortenTranslation": "줄이기",
+    "shortenTranslationHint": "들어가도록 이 번역을 더 짧게 다시 씁니다. 다시 누르면 더 줄어듭니다",
+    "translationReviewKeep": "유지",
+    "translationReviewKeepHint": "이 번역을 유지하고 경고를 지웁니다",
+    "translationReviewReference": "기계 번역",
     "type": "타이포그래피",
     "unplaced": "배치되지 않음",
     "vertical": "세로쓰기",
     "weight": "굵기",
-    "width": "너비"
+    "width": "너비",
+    "speechKind": "종류",
+    "speechKindLabel": "{{name}} 종류",
+    "speechKinds": {
+      "speech": "대사",
+      "thought": "생각",
+      "narration": "내레이션",
+      "sound-effect": "효과음",
+      "sign": "표지판",
+      "aside": "혼잣말"
+    },
+    "speaker": "화자",
+    "speakerLabel": "{{name}} 화자",
+    "noSpeaker": "없음",
+    "unmarked": "지정 안 됨"
   },
   "languages": {
     "en-US": "English",
@@ -230,6 +270,10 @@
     "zh-TW": "繁體中文"
   },
   "layers": {
+    "textOverflow": "텍스트가 영역에 맞지 않습니다",
+    "textBelowReadableSize": "텍스트가 읽을 수 있는 크기보다 작게 줄었습니다",
+    "textLowContrast": "텍스트가 아래 이미지와 거의 구분되지 않습니다",
+    "ocrUnverified": "OCR 미확인: OCR을 다시 실행하세요",
     "collapse": "{{name}} 접기",
     "delete": "{{name}} 삭제",
     "edit": "{{name}} 편집",
@@ -344,7 +388,14 @@
     "rename": "이름 바꾸기",
     "renameDescription": "이 페이지의 새 이름을 정하세요.",
     "renameTitle": "페이지 이름 바꾸기",
-    "selected": "{{count}}개 선택됨"
+    "selected": "{{count}}개 선택됨",
+    "markupMissing": {
+      "refused": "장면 분석: 모델이 이 페이지를 거부했습니다",
+      "content-filter": "장면 분석: 제공자의 콘텐츠 필터에 차단되었습니다",
+      "empty": "장면 분석: 모델이 아무것도 반환하지 않았습니다",
+      "invalid": "장면 분석: 응답이 잘못되어 버렸습니다",
+      "failed": "장면 분석: 요청이 실패했습니다"
+    }
   },
   "outputPicker": {
     "instructions": "번역 지침",
@@ -356,18 +407,21 @@
     "detection": "감지",
     "inpainting": "인페인팅",
     "ocr": "OCR",
+    "markup": "장면 분석",
     "translation": "번역"
   },
   "phaseShort": {
     "detection": "감지",
     "inpainting": "복원",
     "ocr": "OCR",
+    "markup": "분석",
     "translation": "번역"
   },
   "phaseDescription": {
     "detection": "페이지의 텍스트를 찾습니다.",
     "inpainting": "텍스트를 지운 뒤 그림을 복원합니다.",
     "ocr": "각 영역 안의 텍스트를 읽습니다.",
+    "markup": "번역을 위해 각 텍스트의 종류, 화자, 이어지는 대사를 표시합니다.",
     "translation": "원문을 대상 언어로 번역합니다."
   },
   "providerDescriptions": {
@@ -455,7 +509,14 @@
         "localModel": "로컬 OCR 모델",
         "method": "OCR 방식",
         "hybrid": "로컬 + API",
-        "hybridDescription": "챕터의 모든 페이지에서 로컬 OCR을 완료한 뒤 각 이미지와 인식 텍스트를 선택한 API로 보냅니다. 결과는 자동 적용됩니다."
+        "hybridDescription": "챕터의 모든 페이지에서 로컬 OCR을 완료한 뒤 선택한 API로 인식 텍스트를 검토합니다. 결과는 자동 적용됩니다.",
+        "crossCheck": "두 번째 로컬 모델로 교차 확인",
+        "crossCheckDescription": "각 이미지를 두 번째 로컬 모델로도 읽고, 두 결과가 다른 이미지만 API로 보냅니다. 끄면 모든 이미지를 보냅니다. 비용은 약 3배이고 손글씨는 조금 더 정확합니다."
+      },
+      "markup": {
+        "model": "분석 모델",
+        "instructions": "추가 지시",
+        "instructionsDescription": "분석 요청에 추가됩니다(예: 등장인물 힌트)."
       },
       "inpainting": {
         "apiModel": "이미지 편집 모델",
@@ -491,6 +552,10 @@
         "ocr": {
           "description": "감지된 영역 안의 원문을 읽습니다.",
           "title": "OCR"
+        },
+        "markup": {
+          "title": "장면 분석",
+          "description": "비전 모델이 각 텍스트의 종류, 화자, 이어지는 줄을 표시합니다. 텍스트는 바꾸지 않습니다."
         }
       },
       "title": "파이프라인"
@@ -557,12 +622,17 @@
     },
     "typesetting": {
       "addFamily": "글꼴 패밀리 추가",
+      "clearKindFont": "{{kind}}에 기본 글꼴 사용",
       "defaultFamilies": "기본 글꼴 패밀리",
       "description": "텍스트 레이어에 글꼴 패밀리가 지정되지 않았을 때 사용할 순서 있는 글꼴 스택을 설정합니다.",
       "empty": "기본 패밀리가 없습니다. Koharu가 시스템 대체 글꼴을 사용합니다.",
       "familyLabel": "기본 글꼴 패밀리 {{index}}",
       "fontFallback": "대체 글꼴",
       "fontFallbackDescription": "Koharu는 텍스트를 지원하는 첫 번째 사용 가능한 패밀리를 사용합니다.",
+      "kindFontDefault": "기본 글꼴",
+      "kindFontLabel": "글꼴: {{kind}}",
+      "kindFonts": "텍스트 유형별 글꼴",
+      "kindFontsDescription": "장면 마크업의 해당 유형 텍스트에 기본 글꼴보다 먼저 사용됩니다. 텍스트 레이어에서 고른 글꼴이 여전히 우선합니다.",
       "loadError": "글꼴을 불러오지 못했습니다. 기존 패밀리는 삭제할 수 있습니다.",
       "loadingFonts": "글꼴 불러오는 중…",
       "removeFamily": "{{family}} 삭제",
@@ -663,5 +733,26 @@
     "failed": "미리보기를 처리하지 못했습니다: {{error}}",
     "cleanupLayers": "원본 + 표시된 그리기 레이어. PNG 한 장을 전송하며 텍스트 레이어, 마스크, 선택 핸들은 제외됩니다.",
     "restorationLayers": "원본 + 표시된 정리 및 그리기 레이어를 레이어 순서로 합성한 선택 영역. PNG 한 장을 전송하며 텍스트 레이어, 마스크, 선택 핸들은 제외됩니다."
+  },
+  "characters": {
+    "tab": "등장인물",
+    "title": "등장인물",
+    "description": "장면 분석과 번역에 쓰이는 이름과 성별입니다. 목록을 편집하면 사용자 소유가 되어 장면 분석이 더 이상 바꾸지 않습니다.",
+    "empty": "아직 등장인물이 없습니다. 장면 분석이 이 목록을 채우거나 여기서 추가할 수 있습니다.",
+    "name": "이름",
+    "gender": "성별",
+    "genders": {
+      "male": "남성",
+      "female": "여성",
+      "unknown": "알 수 없음"
+    },
+    "notes": "메모",
+    "notesPlaceholder": "메모(예: 말투)",
+    "remove": "{{name}} 삭제",
+    "newName": "새 등장인물 이름",
+    "add": "추가",
+    "import": "프로젝트에서 가져오기…",
+    "importNone": "다른 프로젝트가 없습니다",
+    "imported": "추가된 캐릭터: {{count}}"
   }
 }

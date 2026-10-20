@@ -58,13 +58,30 @@
     "empty": "Selecciona una página para empezar.",
     "fit": "Ajustar a la ventana",
     "surface": "Lienzo de Koharu",
-    "unavailable": "El lienzo WebGPU no está disponible"
+    "unavailable": "El lienzo WebGPU no está disponible",
+    "unboxedText": {
+      "create": "Crear un bloque de texto aquí",
+      "dismiss": "No es texto"
+    }
   },
   "colorPicker": {
     "brushColor": "Color del pincel",
     "hexCode": "Código de color hexadecimal",
     "sampleCanvas": "Elegir un color del lienzo",
     "transparent": "Transparente"
+  },
+  "chapterCheck": {
+    "title": "Revisión antes de exportar",
+    "checking": "Revisando páginas…",
+    "issueCount": "{{count}} bloques de texto necesitan revisión. Selecciona uno para abrirlo.",
+    "issueCount_one": "{{count}} bloque de texto necesita revisión. Selecciónalo para abrirlo.",
+    "issueCount_other": "{{count}} bloques de texto necesitan revisión. Selecciona uno para abrirlo.",
+    "emptyTranslation": "Sin traducción",
+    "japaneseText": "Quedan caracteres japoneses en la traducción",
+    "unboxedText": "Posible texto sin detectar: {{count}}",
+    "unboxedText_one": "Posible texto sin detectar: {{count}}",
+    "unboxedText_other": "Posible texto sin detectar: {{count}}",
+    "exportAnyway": "Exportar de todos modos"
   },
   "common": {
     "back": "Atrás",
@@ -201,9 +218,12 @@
     "horizontal": "Horizontal",
     "increaseBorderWidth": "Aumentar ancho del contorno",
     "increaseFontSize": "Aumentar el tamaño de fuente en 1 pt",
+    "invertBorder": "Intercambiar colores del texto y del contorno",
     "opacity": "Opacidad",
     "placement": "Colocación",
     "resetAutoFit": "Restablecer ajuste automático",
+    "drawArea": "Dibujar el área donde encaja este texto",
+    "drawAreaShort": "Dibujar área",
     "selectPage": "Selecciona una página para inspeccionar sus capas.",
     "size": "Tamaño",
     "source": "Texto original",
@@ -211,11 +231,31 @@
     "textColor": "Color del texto",
     "textDirection": "Dirección del texto",
     "translation": "Traducción",
+    "translationReview": "La traducción puede haber suavizado las groserías",
+    "shortenTranslation": "Acortar",
+    "shortenTranslationHint": "Reescribir esta traducción más corta para que quepa; pulsa otra vez para acortarla más",
+    "translationReviewKeep": "Conservar",
+    "translationReviewKeepHint": "Conservar esta traducción y quitar el aviso",
+    "translationReviewReference": "Traducción automática",
     "type": "Tipografía",
     "unplaced": "Sin colocar",
     "vertical": "Vertical",
     "weight": "Peso",
-    "width": "Anchura"
+    "width": "Anchura",
+    "speechKind": "Tipo",
+    "speechKindLabel": "Tipo de {{name}}",
+    "speechKinds": {
+      "speech": "Diálogo",
+      "thought": "Pensamiento",
+      "narration": "Narración",
+      "sound-effect": "Efecto de sonido",
+      "sign": "Letrero",
+      "aside": "Aparte"
+    },
+    "speaker": "Hablante",
+    "speakerLabel": "Hablante de {{name}}",
+    "noSpeaker": "Ninguno",
+    "unmarked": "Sin marcar"
   },
   "languages": {
     "en-US": "English",
@@ -230,6 +270,10 @@
     "zh-TW": "繁體中文"
   },
   "layers": {
+    "textOverflow": "El texto no cabe en su área",
+    "textBelowReadableSize": "El texto se reduce por debajo del tamaño legible",
+    "textLowContrast": "El texto apenas se distingue de la imagen que tiene debajo",
+    "ocrUnverified": "OCR sin verificar: vuelve a ejecutar el OCR",
     "collapse": "Contraer {{name}}",
     "delete": "Eliminar {{name}}",
     "edit": "Editar {{name}}",
@@ -344,7 +388,14 @@
     "rename": "Cambiar nombre",
     "renameDescription": "Elige un nombre nuevo para esta página.",
     "renameTitle": "Cambiar nombre de página",
-    "selected": "{{count}} seleccionadas"
+    "selected": "{{count}} seleccionadas",
+    "markupMissing": {
+      "refused": "Marcado de escena: el modelo rechazó esta página",
+      "content-filter": "Marcado de escena: bloqueado por el filtro de contenido del proveedor",
+      "empty": "Marcado de escena: el modelo no devolvió nada",
+      "invalid": "Marcado de escena: la respuesta no era válida y se descartó",
+      "failed": "Marcado de escena: la solicitud falló"
+    }
   },
   "outputPicker": {
     "instructions": "Instrucciones de traducción",
@@ -356,18 +407,21 @@
     "detection": "Detección",
     "inpainting": "Relleno",
     "ocr": "OCR",
+    "markup": "Marcado de escena",
     "translation": "Traducción"
   },
   "phaseShort": {
     "detection": "Detectar",
     "inpainting": "Limpiar",
     "ocr": "OCR",
+    "markup": "Marcado",
     "translation": "Traducir"
   },
   "phaseDescription": {
     "detection": "Localiza el texto en la página.",
     "inpainting": "Reconstruye el dibujo tras eliminar el texto.",
     "ocr": "Lee el texto dentro de cada región.",
+    "markup": "Marca el tipo, el hablante y la continuación de cada texto para la traducción.",
     "translation": "Convierte el texto original al idioma de destino."
   },
   "providerDescriptions": {
@@ -455,7 +509,14 @@
         "localModel": "Modelo OCR local",
         "method": "Método de OCR",
         "hybrid": "Local + API",
-        "hybridDescription": "Primero se ejecuta el OCR local en todas las páginas del capítulo; después se envían los recortes y sus textos a la API seleccionada. Los resultados se aplican automáticamente."
+        "hybridDescription": "Primero se ejecuta el OCR local en todas las páginas del capítulo; después la API seleccionada revisa los textos. Los resultados se aplican automáticamente.",
+        "crossCheck": "Verificar con un segundo modelo local",
+        "crossCheckDescription": "Lee también cada recorte con un segundo modelo local y envía a la API solo los recortes en los que no coinciden. Desactívalo para enviar todos: cuesta unas tres veces más y es algo más preciso con texto manuscrito."
+      },
+      "markup": {
+        "model": "Modelo de marcado",
+        "instructions": "Instrucciones adicionales",
+        "instructionsDescription": "Se añaden a la solicitud de marcado, por ejemplo pistas sobre los personajes."
       },
       "inpainting": {
         "apiModel": "Modelo de edición de imagen",
@@ -491,6 +552,10 @@
         "ocr": {
           "description": "Lee el texto original dentro de las regiones detectadas.",
           "title": "OCR"
+        },
+        "markup": {
+          "title": "Marcado de escena",
+          "description": "Un modelo con visión marca el tipo de cada texto, quién habla y qué línea continúa. Nunca cambia el texto."
         }
       },
       "title": "Canalización"
@@ -557,12 +622,17 @@
     },
     "typesetting": {
       "addFamily": "Añadir familia tipográfica",
+      "clearKindFont": "Usar familias predeterminadas para {{kind}}",
       "defaultFamilies": "Familias tipográficas predeterminadas",
       "description": "Define la pila ordenada de fuentes usada cuando una capa de texto no tiene una familia asignada.",
       "empty": "No hay familias predeterminadas. Koharu usará la alternativa del sistema.",
       "familyLabel": "Familia tipográfica predeterminada {{index}}",
       "fontFallback": "Fuentes de respaldo",
       "fontFallbackDescription": "Koharu usa la primera familia disponible compatible con el texto.",
+      "kindFontDefault": "Familias predeterminadas",
+      "kindFontLabel": "Fuente: {{kind}}",
+      "kindFonts": "Fuente por tipo de texto",
+      "kindFontsDescription": "Se usa antes de las familias predeterminadas para el texto de ese tipo según el marcado de escena. La fuente elegida en una capa de texto tiene prioridad.",
       "loadError": "No se pudieron cargar las fuentes. Las familias existentes aún se pueden eliminar.",
       "loadingFonts": "Cargando fuentes…",
       "removeFamily": "Eliminar {{family}}",
@@ -663,5 +733,26 @@
     "failed": "No se pudo resolver la vista previa: {{error}}",
     "cleanupLayers": "Original + capas de pintura visibles. Un PNG; se excluyen las capas de texto, máscaras y controles de selección.",
     "restorationLayers": "Área seleccionada del original + capas visibles de limpieza y pintura, en orden de capas. Un PNG; se excluyen las capas de texto, máscaras y controles de selección."
+  },
+  "characters": {
+    "tab": "Reparto",
+    "title": "Personajes",
+    "description": "Nombres y géneros que usan el marcado de escena y la traducción. Cuando editas la lista pasa a ser tuya y el marcado ya no la cambia.",
+    "empty": "Aún no hay personajes. El marcado de escena rellena esta lista, o añádelos aquí.",
+    "name": "Nombre",
+    "gender": "Género",
+    "genders": {
+      "male": "Masculino",
+      "female": "Femenino",
+      "unknown": "Desconocido"
+    },
+    "notes": "Notas",
+    "notesPlaceholder": "Notas, p. ej. cómo habla",
+    "remove": "Quitar a {{name}}",
+    "newName": "Nombre del nuevo personaje",
+    "add": "Añadir",
+    "import": "Importar de un proyecto…",
+    "importNone": "No hay otros proyectos",
+    "imported": "Personajes añadidos: {{count}}"
   }
 }
