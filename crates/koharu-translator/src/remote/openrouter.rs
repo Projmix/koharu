@@ -92,15 +92,17 @@ pub(super) async fn mark_up(
 /// OpenRouter rejects a disabled flag for a model whose listing marks
 /// reasoning mandatory, so "off" becomes the lowest effort that model lists.
 /// The live listing decides rather than the saved selection, whose capability
-/// flags can predate the model's mandatory marking.
+/// flags can predate the model's mandatory marking. A selection saved as
+/// non-reasoning reaches here as `None` and gets the same lowest effort;
+/// without it the endpoint reasons at its default effort.
 async fn reasoning(
     client: &Client,
     api_key: &str,
     model: &str,
     enabled: Option<bool>,
 ) -> Result<Option<ReasoningConfig>> {
-    if enabled != Some(false) {
-        return Ok(enabled.map(|enabled| ReasoningConfig::Toggle { enabled }));
+    if enabled == Some(true) {
+        return Ok(Some(ReasoningConfig::Toggle { enabled: true }));
     }
     static LISTING: tokio::sync::OnceCell<HashMap<String, ReasoningCapabilities>> =
         tokio::sync::OnceCell::const_new();
@@ -117,10 +119,16 @@ async fn reasoning(
             )
         })
         .await?;
-    Ok(disabled_reasoning(listing.get(model)))
+    Ok(unrequested_reasoning(listing.get(model), enabled))
 }
 
-fn disabled_reasoning(capabilities: Option<&ReasoningCapabilities>) -> Option<ReasoningConfig> {
+/// The reasoning field for a request that did not ask for reasoning:
+/// `enabled` is `Some(false)` for an explicit off and `None` for a model the
+/// selection lists as non-reasoning, which gets no field unless mandatory.
+fn unrequested_reasoning(
+    capabilities: Option<&ReasoningCapabilities>,
+    enabled: Option<bool>,
+) -> Option<ReasoningConfig> {
     match capabilities {
         Some(capabilities) if capabilities.mandatory => ["minimal", "low", "medium", "high"]
             .into_iter()
@@ -131,7 +139,7 @@ fn disabled_reasoning(capabilities: Option<&ReasoningCapabilities>) -> Option<Re
                     .any(|listed| listed == effort)
             })
             .map(|effort| ReasoningConfig::Effort { effort }),
-        _ => Some(ReasoningConfig::Toggle { enabled: false }),
+        _ => enabled.map(|enabled| ReasoningConfig::Toggle { enabled }),
     }
 }
 
@@ -263,29 +271,36 @@ mod tests {
     }
 
     #[test]
-    fn disabled_reasoning_uses_lowest_effort_when_mandatory() {
+    fn unrequested_reasoning_uses_lowest_effort_when_mandatory() {
         let mandatory = |efforts: &[&str]| ReasoningCapabilities {
             mandatory: true,
             supported_efforts: efforts.iter().map(|effort| (*effort).to_owned()).collect(),
         };
+        // A selection saved before the mandatory marking arrives as `None`.
+        for enabled in [Some(false), None] {
+            assert_eq!(
+                unrequested_reasoning(Some(&mandatory(&["high", "medium", "low"])), enabled),
+                Some(ReasoningConfig::Effort { effort: "low" })
+            );
+        }
         assert_eq!(
-            disabled_reasoning(Some(&mandatory(&["high", "medium", "low"]))),
-            Some(ReasoningConfig::Effort { effort: "low" })
-        );
-        assert_eq!(
-            disabled_reasoning(Some(&mandatory(&["high", "minimal", "low"]))),
+            unrequested_reasoning(Some(&mandatory(&["high", "minimal", "low"])), Some(false)),
             Some(ReasoningConfig::Effort { effort: "minimal" })
         );
-        assert_eq!(disabled_reasoning(Some(&mandatory(&[]))), None);
+        assert_eq!(
+            unrequested_reasoning(Some(&mandatory(&[])), Some(false)),
+            None
+        );
         let optional = ReasoningCapabilities {
             mandatory: false,
             supported_efforts: vec!["none".to_owned()],
         };
         for capabilities in [Some(&optional), None] {
             assert_eq!(
-                disabled_reasoning(capabilities),
+                unrequested_reasoning(capabilities, Some(false)),
                 Some(ReasoningConfig::Toggle { enabled: false })
             );
+            assert_eq!(unrequested_reasoning(capabilities, None), None);
         }
     }
 }
