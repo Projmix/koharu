@@ -31,10 +31,18 @@ const PRODUCER: &str = "dev.koharu.pipeline.markup";
 /// How many marked texts of the previous page the model sees for continuity.
 const PREVIOUS_CONTEXT: usize = 6;
 
+/// A page with at least this many texts is retried in two halves when the
+/// whole-page answer is invalid: dense pages are where a model drops or
+/// misnumbers boxes.
+const SPLIT_MIN_TEXTS: usize = 8;
+
+/// `(left, top, right, bottom)` in page units.
+type Bounds = (f64, f64, f64, f64);
+
 struct PageText {
     content: EntityId,
     source: String,
-    bounds: (f64, f64, f64, f64),
+    bounds: Bounds,
 }
 
 pub(super) struct Processor {
@@ -132,8 +140,31 @@ async fn process(
     source_language: Language,
 ) -> Result<koharu_scene::Patch> {
     let context = PageContext::read(&input.scene, input.page()?, source_language)?;
+    let every = (0..context.texts.len()).collect::<Vec<_>>();
+    let outcome = match request(
+        input,
+        config,
+        translator,
+        source_language,
+        &context,
+        &every,
+        &[],
+        &[],
+    )
+    .await
+    {
+        Err(error)
+            if invalid_markup(&error)
+                && context.texts.len() >= SPLIT_MIN_TEXTS
+                && !input.stop.stopped() =>
+        {
+            tracing::info!(page = %context.page, texts = context.texts.len(), "retrying invalid scene markup in two halves");
+            request_in_halves(input, config, translator, source_language, &context).await
+        }
+        outcome => outcome,
+    };
     // Stopping discards the uncommitted result instead of recording a miss.
-    let outcome = match request(input, config, translator, source_language, &context).await {
+    let outcome = match outcome {
         Err(error) if input.stop.stopped() => return Err(error),
         outcome => outcome,
     };
@@ -141,12 +172,104 @@ async fn process(
     page_patch(&input.scene, &context, &generated, outcome)
 }
 
+fn invalid_markup(error: &anyhow::Error) -> bool {
+    error
+        .downcast_ref::<koharu_translator::Error>()
+        .is_some_and(|error| matches!(error, koharu_translator::Error::InvalidMarkup { .. }))
+}
+
+/// Marks up the first half of the page, then the second half with the first
+/// half's answers as earlier context, and joins them in page order.
+async fn request_in_halves(
+    input: &StageInput,
+    config: &SceneMarkupConfig,
+    translator: &Translator,
+    source_language: Language,
+    context: &PageContext,
+) -> Result<MarkupOutcome> {
+    let middle = context.texts.len() / 2;
+    let first = (0..middle).collect::<Vec<_>>();
+    let second = (middle..context.texts.len()).collect::<Vec<_>>();
+    let (regions, new_characters) = match request(
+        input,
+        config,
+        translator,
+        source_language,
+        context,
+        &first,
+        &[],
+        &[],
+    )
+    .await?
+    {
+        MarkupOutcome::Marked {
+            regions,
+            new_characters,
+        } => (regions, new_characters),
+        withheld => return Ok(withheld),
+    };
+    let earlier = earlier_markup(&context.texts, &regions);
+    let rest = request(
+        input,
+        config,
+        translator,
+        source_language,
+        context,
+        &second,
+        &earlier,
+        &new_characters,
+    )
+    .await?;
+    Ok(join_halves(regions, new_characters, rest))
+}
+
+/// The first half's answers, shown to the second half like the previous page.
+fn earlier_markup(texts: &[PageText], regions: &[MarkedRegion]) -> Vec<PreviousMarkup> {
+    texts
+        .iter()
+        .zip(regions)
+        .map(|(text, region)| PreviousMarkup {
+            id: region.id.clone(),
+            text: text.source.clone(),
+            kind: region.kind,
+            speaker: region.speaker.clone(),
+        })
+        .collect()
+}
+
+fn join_halves(
+    mut regions: Vec<MarkedRegion>,
+    mut new_characters: Vec<MarkupCharacter>,
+    rest: MarkupOutcome,
+) -> MarkupOutcome {
+    match rest {
+        MarkupOutcome::Marked {
+            regions: more,
+            new_characters: more_characters,
+        } => {
+            regions.extend(more);
+            new_characters.extend(more_characters);
+            MarkupOutcome::Marked {
+                regions,
+                new_characters,
+            }
+        }
+        withheld => withheld,
+    }
+}
+
+/// Marks up the texts at `indices`, keeping their page numbers. `earlier`
+/// and `cast` add this page's already answered texts and characters.
+#[allow(clippy::too_many_arguments)]
 async fn request(
     input: &StageInput,
     config: &SceneMarkupConfig,
     translator: &Translator,
     source_language: Language,
     context: &PageContext,
+    indices: &[usize],
+    earlier: &[PreviousMarkup],
+    cast: &[MarkupCharacter],
 ) -> Result<MarkupOutcome> {
     let scene = &input.scene;
     let size = scene.page(context.page)?.page()?;
@@ -155,10 +278,9 @@ async fn request(
         .get(scene, context.page, "source")
         .await?
         .context("scene markup needs the page source image")?;
-    let boxes = context
-        .texts
+    let boxes = indices
         .iter()
-        .map(|text| text.bounds)
+        .map(|&index| (index + 1, context.texts[index].bounds))
         .collect::<Vec<_>>();
     let scale = (
         f64::from(image.width()) / size.width,
@@ -168,20 +290,19 @@ async fn request(
     let request = MarkupRequest {
         image: Arc::new(DynamicImage::ImageRgb8(image)),
         source_language: Some(source_language),
-        regions: context
-            .texts
+        regions: indices
             .iter()
-            .enumerate()
-            .map(|(index, text)| MarkupRegion {
+            .map(|&index| MarkupRegion {
                 id: region_id(index),
-                text: text.source.clone(),
-                bbox: normalized(text.bounds, size.width, size.height),
+                text: context.texts[index].source.clone(),
+                bbox: normalized(context.texts[index].bounds, size.width, size.height),
             })
             .collect(),
         previous: context
             .previous
             .iter()
             .map(|(_, markup)| markup.clone())
+            .chain(earlier.iter().cloned())
             .collect(),
         characters: context
             .list
@@ -193,6 +314,7 @@ async fn request(
                 gender: translator_gender(character.gender),
                 notes: character.notes.clone(),
             })
+            .chain(cast.iter().cloned())
             .collect(),
         instructions: config.instructions.clone(),
     };
@@ -240,12 +362,7 @@ fn page_patch(
         }
         Err(error) => {
             tracing::warn!(%page, error = %format!("{error:#}"), "scene markup failed");
-            let invalid = error
-                .downcast_ref::<koharu_translator::Error>()
-                .is_some_and(|error| {
-                    matches!(error, koharu_translator::Error::InvalidMarkup { .. })
-                });
-            PageMarkupStatus::Missing(if invalid {
+            PageMarkupStatus::Missing(if invalid_markup(&error) {
                 PageMarkupMissing::Invalid
             } else {
                 PageMarkupMissing::Failed
@@ -499,10 +616,10 @@ const DIGITS: [[u8; 5]; 10] = [
     [0b111, 0b101, 0b111, 0b001, 0b111],
 ];
 
-/// Draws every region's box and its 1-based number on a copy of the page.
+/// Draws each region's box and its 1-based page number on a copy of the page.
 fn draw_regions(
     image: &DynamicImage,
-    boxes: &[(f64, f64, f64, f64)],
+    boxes: &[(usize, Bounds)],
     scale: (f64, f64),
 ) -> RgbImage {
     let mut canvas = image.to_rgb8();
@@ -510,7 +627,7 @@ fn draw_regions(
     let shortest = width.min(height).max(1);
     let thickness = (shortest / 400).max(2);
     let cell = (shortest / 250).max(2);
-    for (index, (left, top, right, bottom)) in boxes.iter().copied().enumerate() {
+    for (number, (left, top, right, bottom)) in boxes.iter().copied() {
         let x0 = (left * scale.0).round().clamp(0.0, f64::from(width - 1)) as i32;
         let y0 = (top * scale.1).round().clamp(0.0, f64::from(height - 1)) as i32;
         let x1 = (right * scale.0).round().clamp(0.0, f64::from(width - 1)) as i32;
@@ -525,7 +642,7 @@ fn draw_regions(
             );
         }
 
-        let digits = (index + 1)
+        let digits = number
             .to_string()
             .bytes()
             .map(|digit| DIGITS[usize::from(digit - b'0')])
@@ -962,11 +1079,69 @@ mod tests {
     }
 
     #[test]
+    fn the_second_half_sees_the_first_half_and_the_halves_join_in_page_order() {
+        let text = |source: &str| PageText {
+            content: EntityId::new(),
+            source: source.to_owned(),
+            bounds: (0.0, 0.0, 10.0, 10.0),
+        };
+        let texts = [text("一"), text("二"), text("三"), text("四")];
+        let first = vec![
+            region("1", MarkupKind::Speech, Some("hero"), None),
+            region("2", MarkupKind::SoundEffect, None, None),
+        ];
+        let earlier = earlier_markup(&texts[..2], &first);
+        assert_eq!(earlier[0].id, "1");
+        assert_eq!(earlier[0].text, "一");
+        assert_eq!(earlier[0].speaker.as_deref(), Some("hero"));
+        assert_eq!(earlier[1].kind, MarkupKind::SoundEffect);
+
+        let hero = character("hero", "Hero", CharacterGender::Male);
+        let joined = join_halves(
+            first.clone(),
+            vec![hero.clone()],
+            MarkupOutcome::Marked {
+                regions: vec![
+                    region("3", MarkupKind::Speech, Some("hero"), Some("1")),
+                    region("4", MarkupKind::Thought, None, None),
+                ],
+                new_characters: Vec::new(),
+            },
+        );
+        let MarkupOutcome::Marked {
+            regions,
+            new_characters,
+        } = joined
+        else {
+            panic!("expected joined markup");
+        };
+        assert_eq!(
+            regions
+                .iter()
+                .map(|region| region.id.as_str())
+                .collect::<Vec<_>>(),
+            ["1", "2", "3", "4"]
+        );
+        assert_eq!(new_characters, [hero]);
+        assert_eq!(
+            join_halves(
+                first,
+                Vec::new(),
+                MarkupOutcome::Withheld(MarkupWithheld::ContentFilter)
+            ),
+            MarkupOutcome::Withheld(MarkupWithheld::ContentFilter)
+        );
+    }
+
+    #[test]
     fn numbered_boxes_are_drawn_inside_the_page() {
         let image = DynamicImage::new_rgb8(400, 800);
         let drawn = draw_regions(
             &image,
-            &[(10.0, 10.0, 60.0, 90.0), (190.0, 380.0, 200.0, 400.0)],
+            &[
+                (1, (10.0, 10.0, 60.0, 90.0)),
+                (2, (190.0, 380.0, 200.0, 400.0)),
+            ],
             (2.0, 2.0),
         );
         assert_eq!(drawn.dimensions(), (400, 800));

@@ -45,8 +45,9 @@ owner's outlined blocks from the rest.
 
 ## Scene markup
 
-1. **Dense pages** (p19) fail the output schema: retry such a page in
-   halves of its boxes.
+1. **Dense pages** (p19) fail the output schema. **Done:** a page with at
+   least 8 texts and an invalid answer is retried in two halves; the second
+   half sees the first half's answers as earlier context.
 2. **Unstable 18+ refusals:** retry a refused page with the next
    configured model instead of leaving it unmarked.
 3. **Soft vs hard sound effects** (くにっ/ぬちゅ vs ドン) so typesetting can
