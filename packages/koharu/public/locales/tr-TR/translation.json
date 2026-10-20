@@ -66,6 +66,15 @@
     "sampleCanvas": "Tuvalden renk seç",
     "transparent": "Şeffaf"
   },
+  "chapterCheck": {
+    "title": "Dışa aktarmadan önce denetim",
+    "checking": "Sayfalar denetleniyor…",
+    "issueCount_one": "{{count}} metin bloğunun gözden geçirilmesi gerekiyor. Açmak için seçin.",
+    "issueCount_other": "{{count}} metin bloğunun gözden geçirilmesi gerekiyor. Açmak için birini seçin.",
+    "emptyTranslation": "Çeviri yok",
+    "japaneseText": "Çeviride Japonca karakterler kaldı",
+    "exportAnyway": "Yine de dışa aktar"
+  },
   "common": {
     "back": "Geri",
     "cancel": "İptal",

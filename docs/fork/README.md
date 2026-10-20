@@ -104,6 +104,11 @@ Known gaps after the rebuild:
   its region (rotated regions keep their area). Text whose fill and outline
   both stay below a 1.5 contrast ratio with the image layers under it gets
   the existing fit warning (`TextFitWarningKind::LowContrast`).
+- Choosing an export format first runs a chapter check (`check_chapter`):
+  one list of visible text blocks with an empty translation, kana (or kanji
+  outside a Chinese target) left in the translation, or a fit warning from
+  the export render. Selecting a row opens that page and layer; a clean
+  chapter exports at once, otherwise "Export anyway" proceeds.
 
 
 ## JEV

@@ -20,6 +20,7 @@ import { useTranslation } from 'react-i18next'
 import { DeleteAllPagesDialog } from '@/components/app/DeleteAllPagesDialog'
 import { ResourceMonitor } from '@/components/editor/ResourceMonitor'
 import { call } from '@/lib/backend'
+import { abandonPageSwitch, switchPage } from '@/lib/navigation'
 import {
   pageKey,
   pagesKey,
@@ -32,11 +33,10 @@ import {
   usePages,
 } from '@/lib/queries'
 import { useKoharuStore } from '@/lib/store'
-import { prefetchCanvasPages, showCanvasPage } from '@koharu/bridge/canvas'
+import { prefetchCanvasPages } from '@koharu/bridge/canvas'
 import {
   commands,
   type CanvasPagePreparation,
-  type Page,
   type PageImportSource,
   type PageSummary,
   type ProjectInfo,
@@ -80,7 +80,6 @@ export function PageRail() {
   const setSettingsOpen = useKoharuStore((state) => state.setSettingsOpen)
   const { importPages, importing } = useImportPages()
   const anchor = useRef<number | null>(null)
-  const selectionRequest = useRef(0)
   const intentPrefetch = useRef<IntentPrefetchState | null>(null)
   const [dragged, setDragged] = useState<string | null>(null)
   const [query, setQuery] = useState('')
@@ -113,12 +112,7 @@ export function PageRail() {
       ),
   })
 
-  useEffect(
-    () => () => {
-      selectionRequest.current += 1
-    },
-    [],
-  )
+  useEffect(() => abandonPageSwitch, [])
 
   const select = (index: number, additive: boolean, range: boolean) => {
     const page = pages[index]
@@ -138,38 +132,7 @@ export function PageRail() {
       next = [page.id]
       anchor.current = index
     }
-    const previousProject = queryClient.getQueryData<ProjectInfo | null>(projectKey)
-    const previousPage = queryClient.getQueryData<Page | null>(pageKey)
-    const prepared = queryClient.getQueryData<CanvasPagePreparation>(preparedPageKey(page.id))
-    const activated = showCanvasPage(page.id, previousProject?.revision ?? null)
-    const request = ++selectionRequest.current
-    const synchronize = () => {
-      if (selectionRequest.current !== request) return
-      if (activated && previousProject && prepared?.revision === previousProject.revision) {
-        queryClient.setQueryData(projectKey, { ...previousProject, active_page: page.id })
-        queryClient.setQueryData(pageKey, prepared.page)
-      }
-      selectPages(next)
-      selectLayers([])
-      void call(commands.selectPage, page.id)
-        .then((selection) => {
-          if (selectionRequest.current !== request) return
-          queryClient.setQueryData(projectKey, selection.project)
-          queryClient.setQueryData(pageKey, selection.page)
-        })
-        .catch(() => {
-          if (selectionRequest.current !== request) return
-          if (queryClient.getQueryData<ProjectInfo | null>(projectKey)?.active_page === page.id) {
-            queryClient.setQueryData(projectKey, previousProject)
-            queryClient.setQueryData(pageKey, previousPage)
-          }
-        })
-    }
-    if (activated) {
-      requestAnimationFrame(() => window.setTimeout(synchronize, 0))
-    } else {
-      synchronize()
-    }
+    switchPage(page.id, next)
   }
 
   const prefetchOnIntent = (page: string) => {
@@ -216,7 +179,7 @@ export function PageRail() {
     const targets = selected.includes(page) ? selectedPageIds : [page]
     void call(commands.duplicatePages, targets)
       .then((result) => {
-        selectionRequest.current += 1
+        abandonPageSwitch()
         queryClient.setQueryData(projectKey, result.project)
         queryClient.setQueryData(pageKey, result.page)
         selectPages(result.duplicated)

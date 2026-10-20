@@ -66,6 +66,15 @@
     "sampleCanvas": "Pick color from canvas",
     "transparent": "Transparent"
   },
+  "chapterCheck": {
+    "title": "Check before export",
+    "checking": "Checking pages…",
+    "issueCount_one": "{{count}} text block needs a look. Select one to open it.",
+    "issueCount_other": "{{count}} text blocks need a look. Select one to open it.",
+    "emptyTranslation": "No translation",
+    "japaneseText": "Japanese characters left in the translation",
+    "exportAnyway": "Export anyway"
+  },
   "common": {
     "back": "Back",
     "cancel": "Cancel",

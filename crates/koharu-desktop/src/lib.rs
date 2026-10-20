@@ -260,6 +260,24 @@ impl Desktop {
         }
     }
 
+    /// Fit warnings of every page in project order, as the export render lays
+    /// them out. A page prepared at this revision is reused instead of rendered.
+    pub async fn chapter_text_fit_warnings(
+        &self,
+        snapshot: &Snapshot,
+    ) -> Result<Vec<(EntityId, Vec<TextFitWarning>)>> {
+        let mut warnings = Vec::new();
+        for page in snapshot.pages().map(|page| page.id()) {
+            let cached = self.page_frames.lock().get(page, snapshot.revision());
+            let frame = match cached {
+                Some(frame) => frame,
+                None => self.renderer.render(snapshot, page).await?,
+            };
+            warnings.push((page, text_fit_warnings(frame.diagnostics())));
+        }
+        Ok(warnings)
+    }
+
     pub fn transform_geometries(
         &self,
         expected_revision: Revision,

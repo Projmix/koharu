@@ -72,6 +72,7 @@ export const commands = {
 	resolveImageEditPreview: (id: string, prompt: string | null) => __TAURI_INVOKE<null>("resolve_image_edit_preview", { id, prompt }),
 	exportChapterTranslation: () => __TAURI_INVOKE<boolean>("export_chapter_translation"),
 	importChapterTranslation: () => __TAURI_INVOKE<boolean>("import_chapter_translation"),
+	checkChapter: () => __TAURI_INVOKE<ChapterIssue[]>("check_chapter"),
 	export: (format: ExportFormat) => __TAURI_INVOKE<null>("export", { format }),
 	getThumbnail: (page: EntityId) => __TAURI_INVOKE<ThumbnailBytes>("get_thumbnail", { page }),
 	getFonts: () => __TAURI_INVOKE<FontFamily[]>("get_fonts"),
@@ -165,6 +166,19 @@ export type CanvasState = {
 	element_frames: TransformFrame[],
 	/**  Text the renderer could not fit at a readable size on the presented page. */
 	text_fit_warnings: TextFitWarning[],
+};
+
+/**
+ *  A text block the final chapter check flags before export. Export is not
+ *  blocked; the list only points at what still needs a look.
+ */
+export type ChapterIssue = {
+	page: EntityId,
+	element: EntityId,
+	/**  The translation, or the source text when there is none, to name the block. */
+	text: string,
+	translation: TranslationIssue | null,
+	fit: TextFitWarningKind | null,
 };
 
 export type Character = {
@@ -770,6 +784,12 @@ export type TranslationConfig = {
 	page: TranslationProfile,
 	chapter: TranslationProfile,
 };
+
+export type TranslationIssue = 
+/**  Source text was recognized but has no translation. */
+"empty" | 
+/**  The translation still holds Japanese characters. */
+"japanese_text";
 
 export type TranslationProfile = {
 	model: ModelSelection,

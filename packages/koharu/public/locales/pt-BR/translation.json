@@ -66,6 +66,15 @@
     "sampleCanvas": "Escolher cor da tela",
     "transparent": "Transparente"
   },
+  "chapterCheck": {
+    "title": "Verificação antes de exportar",
+    "checking": "Verificando páginas…",
+    "issueCount_one": "{{count}} bloco de texto precisa de revisão. Selecione-o para abri-lo.",
+    "issueCount_other": "{{count}} blocos de texto precisam de revisão. Selecione um para abri-lo.",
+    "emptyTranslation": "Sem tradução",
+    "japaneseText": "Restaram caracteres japoneses na tradução",
+    "exportAnyway": "Exportar mesmo assim"
+  },
   "common": {
     "back": "Voltar",
     "cancel": "Cancelar",

@@ -7,6 +7,7 @@ import { useState, type ComponentProps } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { AboutDialog } from '@/components/app/AboutDialog'
+import { ChapterCheckDialog } from '@/components/app/ChapterCheckDialog'
 import { DeleteAllPagesDialog } from '@/components/app/DeleteAllPagesDialog'
 import { ProjectVersionsDialog } from '@/components/app/ProjectVersionsDialog'
 import { useMacOS, WindowControls } from '@/components/app/WindowChrome'
@@ -25,7 +26,13 @@ import {
   useProject,
 } from '@/lib/queries'
 import { useKoharuStore } from '@/lib/store'
-import { commands, type Operation, type Scope, type Stage } from '@koharu/bridge/protocol'
+import {
+  commands,
+  type ExportFormat,
+  type Operation,
+  type Scope,
+  type Stage,
+} from '@koharu/bridge/protocol'
 import {
   Menubar,
   MenubarContent as UiMenubarContent,
@@ -46,6 +53,7 @@ export function TitleBar() {
   const [clearProjectOpen, setClearProjectOpen] = useState(false)
   const [versionsOpen, setVersionsOpen] = useState(false)
   const [clearingProject, setClearingProject] = useState(false)
+  const [checkedFormat, setCheckedFormat] = useState<ExportFormat | null>(null)
   const macOS = useMacOS()
   const project = useProject().data
   const pagesQuery = usePages(Boolean(project))
@@ -146,7 +154,7 @@ export function TitleBar() {
                     <MenubarItem
                       key={format}
                       disabled={exporting}
-                      onClick={() => exportProject(format)}
+                      onClick={() => setCheckedFormat(format)}
                     >
                       {format.toUpperCase()}…
                     </MenubarItem>
@@ -313,6 +321,11 @@ export function TitleBar() {
         {!macOS && <WindowControls />}
       </header>
       <AboutDialog open={aboutOpen} onOpenChange={setAboutOpen} />
+      <ChapterCheckDialog
+        format={checkedFormat}
+        onClose={() => setCheckedFormat(null)}
+        onExport={exportProject}
+      />
       <ProjectVersionsDialog open={versionsOpen} onOpenChange={setVersionsOpen} />
       <DeleteAllPagesDialog
         open={clearProjectOpen}

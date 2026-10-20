@@ -7,16 +7,17 @@ use image::{
 use koharu_psd::{PsdExportOptions, export_page};
 use koharu_rasterizer::{Raster, RasterOptions, Rasterizer};
 use koharu_renderer::{Frame, Renderer};
-use koharu_scene::{AssetRole, EntityId, Snapshot};
+use koharu_scene::{AssetRole, EntityId, Snapshot, Visibility};
+use koharu_translator::Language;
 use rayon::prelude::*;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::{io::Write as _, sync::Arc};
 use tauri::{State, WebviewWindow, ipc::IpcResponse};
 use tauri_runtime_cef::CefRuntime;
 
 use super::{Error, project::CurrentProject};
-use koharu_desktop::Desktop;
+use koharu_desktop::{Desktop, TextFitWarningKind};
 
 const THUMBNAIL_EDGE: u32 = 128;
 
@@ -156,6 +157,121 @@ pub(crate) async fn export(
     Ok(())
 }
 
+/// A text block the final chapter check flags before export. Export is not
+/// blocked; the list only points at what still needs a look.
+#[derive(Clone, Debug, Serialize, Type)]
+pub struct ChapterIssue {
+    pub page: EntityId,
+    pub element: EntityId,
+    /// The translation, or the source text when there is none, to name the block.
+    pub text: String,
+    pub translation: Option<TranslationIssue>,
+    pub fit: Option<TextFitWarningKind>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum TranslationIssue {
+    /// Source text was recognized but has no translation.
+    Empty,
+    /// The translation still holds Japanese characters.
+    JapaneseText,
+}
+
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn check_chapter(
+    project: State<'_, CurrentProject>,
+    desktop: State<'_, Desktop>,
+) -> std::result::Result<Vec<ChapterIssue>, Error> {
+    let (source_language, target_language) = {
+        let config = koharu_pipeline::PipelineConfig::load()?;
+        let config = config.read()?;
+        (
+            config.translation.source_language,
+            config.translation.target_language,
+        )
+    };
+    let snapshot = project
+        .project
+        .lock()
+        .await
+        .as_ref()
+        .context("no project is open")?
+        .snapshot();
+    let fit = desktop.chapter_text_fit_warnings(&snapshot).await?;
+    let mut issues = Vec::new();
+    for (page, warnings) in fit {
+        let Some(group) = snapshot.page(page)?.text_group()? else {
+            continue;
+        };
+        for layer in group.text_layers()? {
+            if snapshot
+                .component::<Visibility>(layer.id())?
+                .is_some_and(|visibility| !visibility.visible || visibility.opacity <= 0.0)
+            {
+                continue;
+            }
+            let content = layer.content()?;
+            let source = content.source()?.map(|source| source.text.value);
+            let translation = content
+                .translation()?
+                .map(|translation| translation.text.value);
+            let text = translation
+                .clone()
+                .filter(|text| !text.trim().is_empty())
+                .or_else(|| source.clone())
+                .unwrap_or_default();
+            let translation = match translation.as_deref().map(str::trim) {
+                None | Some("")
+                    if source
+                        .as_deref()
+                        .is_some_and(|text| !text.trim().is_empty()) =>
+                {
+                    Some(TranslationIssue::Empty)
+                }
+                Some(text) if keeps_japanese(text, source_language, target_language) => {
+                    Some(TranslationIssue::JapaneseText)
+                }
+                _ => None,
+            };
+            let fit = warnings
+                .iter()
+                .find(|warning| warning.element == layer.id())
+                .map(|warning| warning.kind);
+            if translation.is_some() || fit.is_some() {
+                issues.push(ChapterIssue {
+                    page,
+                    element: layer.id(),
+                    text,
+                    translation,
+                    fit,
+                });
+            }
+        }
+    }
+    Ok(issues)
+}
+
+/// Kana never belongs in a translation out of Japanese; kanji does only when
+/// the target is Chinese. The prolonged sound mark and the middle dot stay
+/// allowed because translators use them as a dash and an ellipsis.
+fn keeps_japanese(text: &str, source: Language, target: Language) -> bool {
+    if source != Language::Japanese || target == Language::Japanese {
+        return false;
+    }
+    let chinese = matches!(
+        target,
+        Language::ChineseSimplified | Language::ChineseTraditional
+    );
+    text.chars().any(|character| match character {
+        'ー' | '・' => false,
+        '\u{3040}'..='\u{30FF}' | '\u{FF66}'..='\u{FF9D}' => true,
+        '\u{3400}'..='\u{4DBF}' | '\u{4E00}'..='\u{9FFF}' => !chinese,
+        _ => false,
+    })
+}
+
 #[tauri::command]
 #[specta::specta]
 pub(crate) async fn get_thumbnail(
@@ -218,4 +334,21 @@ async fn rasterize(
     tokio_rayon::spawn(move || rasterizer.rasterize(&frame, options))
         .await
         .map_err(Into::into)
+}
+
+#[cfg(test)]
+mod tests {
+    use koharu_translator::Language;
+
+    use super::keeps_japanese;
+
+    #[test]
+    fn japanese_left_in_a_translation_depends_on_the_target_script() {
+        let check = |text, target| keeps_japanese(text, Language::Japanese, target);
+        assert!(check("Офис 事務所", Language::Russian));
+        assert!(check("Ну ぬちゅ", Language::Russian));
+        assert!(!check("Да-а-ー… ・・・", Language::Russian));
+        assert!(!check("事務所", Language::ChineseSimplified));
+        assert!(check("事務所です", Language::ChineseSimplified));
+    }
 }

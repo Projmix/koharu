@@ -66,6 +66,15 @@
     "sampleCanvas": "從畫布選取色彩",
     "transparent": "透明"
   },
+  "chapterCheck": {
+    "title": "匯出前檢查",
+    "checking": "正在檢查頁面…",
+    "issueCount_one": "有 {{count}} 個文字區塊需要查看。選擇即可開啟。",
+    "issueCount_other": "有 {{count}} 個文字區塊需要查看。選擇即可開啟。",
+    "emptyTranslation": "沒有譯文",
+    "japaneseText": "譯文中仍有日文字元",
+    "exportAnyway": "仍然匯出"
+  },
   "common": {
     "back": "返回",
     "cancel": "取消",

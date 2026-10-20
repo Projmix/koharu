@@ -106,6 +106,7 @@ pub fn bindings() -> tauri_specta::Builder<tauri_runtime_cef::CefRuntime> {
             image_edit_preview::resolve_image_edit_preview,
             translation::export_chapter_translation,
             translation::import_chapter_translation,
+            output::check_chapter,
             output::export,
             output::get_thumbnail,
             fonts::get_fonts,

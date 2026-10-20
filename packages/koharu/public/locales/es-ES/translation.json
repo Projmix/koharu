@@ -66,6 +66,15 @@
     "sampleCanvas": "Elegir un color del lienzo",
     "transparent": "Transparente"
   },
+  "chapterCheck": {
+    "title": "Revisión antes de exportar",
+    "checking": "Revisando páginas…",
+    "issueCount_one": "{{count}} bloque de texto necesita revisión. Selecciónalo para abrirlo.",
+    "issueCount_other": "{{count}} bloques de texto necesitan revisión. Selecciona uno para abrirlo.",
+    "emptyTranslation": "Sin traducción",
+    "japaneseText": "Quedan caracteres japoneses en la traducción",
+    "exportAnyway": "Exportar de todos modos"
+  },
   "common": {
     "back": "Atrás",
     "cancel": "Cancelar",
