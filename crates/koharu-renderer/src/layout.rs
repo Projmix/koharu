@@ -2943,33 +2943,47 @@ mod tests {
 
     #[test]
     fn comic_auto_fit_trades_a_little_size_for_fewer_lone_short_words() -> anyhow::Result<()> {
-        const WIDTH: f32 = 110.0;
         const HEIGHT: f32 = 160.0;
         let font = any_system_font();
         let text = "В том-то и дело.";
-        let layout = |policy| {
+        let layout = |width: f32, policy| {
             TextLayout::new(&font)
                 .with_min_font_size(9.0)
                 .with_max_font_size(60.0)
                 .with_hyphenation_policy(policy)
                 .with_alignment(TextAlign::Center)
-                .with_max_width(WIDTH)
+                .with_max_width(width)
                 .with_max_height(HEIGHT)
                 .with_comic_balloon(
-                    WIDTH,
+                    width,
                     HEIGHT,
-                    vec![(0.0, 0.0), (WIDTH, 0.0), (WIDTH, HEIGHT), (0.0, HEIGHT)],
+                    vec![(0.0, 0.0), (width, 0.0), (width, HEIGHT), (0.0, HEIGHT)],
                     0.0,
                 )
                 .run(text)
         };
-        let largest = layout(HyphenationPolicy::Disabled)?;
-        let chosen = layout(HyphenationPolicy::LastResort)?;
-
-        assert!(short_inner_lines(text, &largest) > 0);
-        assert_eq!(short_inner_lines(text, &chosen), 0);
-        assert!(chosen.lines.len() < largest.lines.len());
-        assert!(chosen.font_size >= largest.font_size * BALANCE_MIN_SIZE_RATIO);
+        // Glyph metrics differ between the system fonts the tests pick, so
+        // sweep balloon widths: the balanced fit never strands more short
+        // words than the largest fit, and clears them somewhere in the sweep.
+        let mut balanced = 0;
+        for width in (60..=200).step_by(5).map(|width| width as f32) {
+            let largest = layout(width, HyphenationPolicy::Disabled)?;
+            let chosen = layout(width, HyphenationPolicy::LastResort)?;
+            let stranded = short_inner_lines(text, &largest);
+            assert!(
+                short_inner_lines(text, &chosen) <= stranded,
+                "width {width}"
+            );
+            assert!(
+                chosen.font_size >= largest.font_size * BALANCE_MIN_SIZE_RATIO,
+                "width {width}"
+            );
+            if stranded > 0 && short_inner_lines(text, &chosen) == 0 {
+                assert!(chosen.lines.len() < largest.lines.len(), "width {width}");
+                balanced += 1;
+            }
+        }
+        assert!(balanced > 0);
         Ok(())
     }
 
