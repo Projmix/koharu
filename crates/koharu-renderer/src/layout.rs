@@ -199,8 +199,11 @@ pub struct TextLayout<'a> {
 /// were pinned to the readability floor: on the owner's chapter that left short
 /// lines in narrow balloons at 55-65% of the hand-set size, where he
 /// hyphenated instead. Above the floor, one split word is accepted when it buys
-/// at least this much size over whole words.
-const HYPHENATION_SIZE_GAIN: f32 = 1.25;
+/// at least this much size over whole words. The owner splits a word in 43 of
+/// 140 balloons; 1.15 agrees with his choice most often (22 balloons differ,
+/// against 25 at 1.25 and 26 at 1.1) and reproduces his narrow-oval splits such
+/// as «кося- / чат» and «изме- / нится».
+const HYPHENATION_SIZE_GAIN: f32 = 1.15;
 
 /// See `TextLayout::balance_comic_lines`.
 const SHORT_INNER_LINE_FACTOR: f32 = 0.9;
@@ -2938,6 +2941,49 @@ mod tests {
         assert_eq!(chosen.lines.len(), 2);
         assert_eq!(layout_split_words("prosperity", &chosen), 1);
         assert!(chosen.font_size >= clean.font_size * HYPHENATION_SIZE_GAIN);
+        Ok(())
+    }
+
+    #[test]
+    fn comic_auto_fit_splits_a_word_in_a_narrow_oval_for_a_moderate_gain() -> anyhow::Result<()> {
+        let font = any_system_font();
+        let text = "И дальше нихера не изменится.";
+        let layout = |width: f32, height: f32, policy| {
+            TextLayout::new(&font)
+                .with_min_font_size(9.0)
+                .with_max_font_size(40.0)
+                .with_hyphenation_language_tag("ru")
+                .with_hyphenation_policy(policy)
+                .with_alignment(TextAlign::Center)
+                .with_max_width(width)
+                .with_max_height(height)
+                .with_comic_balloon(width, height, Vec::new(), 4.0)
+                .run(text)
+        };
+        // Glyph metrics differ between the system fonts the tests pick, so sweep
+        // narrow ovals: a split word buys the gain, and somewhere a gain
+        // below the former 1.25 threshold is taken.
+        let mut moderate = 0;
+        for (width, aspect) in (80..=160)
+            .step_by(20)
+            .flat_map(|width| (8..=22).map(move |aspect| (width as f32, aspect as f32 * 0.1)))
+        {
+            let height = width * aspect;
+            let clean = layout(width, height, HyphenationPolicy::Disabled)?;
+            let chosen = layout(width, height, HyphenationPolicy::LastResort)?;
+            let splits = layout_split_words(text, &chosen);
+            // At the readability floor a split only has to recover a pixel.
+            if clean.font_size.floor() <= 9.0 {
+                continue;
+            }
+            assert!(splits <= 1, "width {width}");
+            if splits == 1 {
+                let gain = chosen.font_size / clean.font_size;
+                assert!(gain >= HYPHENATION_SIZE_GAIN - 1e-3, "width {width}");
+                moderate += usize::from(gain < 1.25);
+            }
+        }
+        assert!(moderate > 0);
         Ok(())
     }
 
