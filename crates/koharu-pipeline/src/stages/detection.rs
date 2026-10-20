@@ -295,6 +295,7 @@ struct DetectedText<'a> {
     content: EntityId,
     layer: EntityId,
     role: &'static str,
+    typography: Typography,
 }
 
 enum RegionOutput<'a> {
@@ -533,26 +534,22 @@ fn write_region<'a>(
     )?;
     write_text_role(edit, content, text_role, generation)
         .context("failed to set the detected text role")?;
-    edit.set(
-        layer,
-        &Typography {
-            origin: Origin::Generated(generation.clone()),
-            preferred_font: None,
-            font_weight: None,
-            font_style: None,
-            size: None,
-            auto_fit: true,
-            color: inferred.map(|value| [value.color[0], value.color[1], value.color[2], u8::MAX]),
-            stroke_color: inferred
-                .and_then(|value| value.stroke_color)
-                .map(|color| [color[0], color[1], color[2], u8::MAX]),
-            stroke_width: inferred.and_then(|value| value.stroke_width),
-            alignment: None,
-            writing_mode: inferred.map(|value| value.writing_mode),
-            extensions: Default::default(),
-        },
-    )
-    .context("failed to set detected typography")?;
+    let typography = Typography {
+        origin: Origin::Generated(generation.clone()),
+        preferred_font: None,
+        font_weight: None,
+        font_style: None,
+        size: None,
+        auto_fit: true,
+        color: inferred.map(|value| [value.color[0], value.color[1], value.color[2], u8::MAX]),
+        stroke_color: inferred
+            .and_then(|value| value.stroke_color)
+            .map(|color| [color[0], color[1], color[2], u8::MAX]),
+        stroke_width: inferred.and_then(|value| value.stroke_width),
+        alignment: None,
+        writing_mode: inferred.map(|value| value.writing_mode),
+        extensions: Default::default(),
+    };
     edit.relate::<RecognizedFrom>(content, entity)
         .context("failed to associate detected text content with its region")?;
 
@@ -563,6 +560,7 @@ fn write_region<'a>(
         content,
         layer,
         role: text_role,
+        typography,
     }))
 }
 
@@ -577,6 +575,16 @@ fn link_dialogue_regions(
         .map(|text| containing_bubble(&regions.bubbles, text).map(|bubble| bubble.entity))
         .collect::<Vec<_>>();
     for (text, bubble_entity) in regions.texts.iter().zip(&containing) {
+        // Fork divergence: the measured outline is the rim of the source
+        // lettering. A balloon already separates its text from the art, so text
+        // inside one, sound effects and dark balloons included, gets no outline.
+        let mut typography = text.typography.clone();
+        if bubble_entity.is_some() {
+            typography.stroke_color = None;
+            typography.stroke_width = None;
+        }
+        edit.set(text.layer, &typography)
+            .context("failed to set detected typography")?;
         if text.role == ONOMATOPOEIA_ROLE {
             // Fork divergence: a sound effect that is the only text in a balloon
             // (often a dark balloon with light lettering) lays out in that balloon,
@@ -2963,13 +2971,13 @@ mod tests {
 
     use super::{
         DIALOGUE_MASK_CONTAINMENT_THRESHOLD, DetectedRegion, DetectedText, DetectionModel,
-        FREE_TEXT_ROLE, ImageSize, KoharuLayoutRFDetrSeg2XLConfig, LayoutItem, LayoutKind,
-        MaskPixel, ONOMATOPOEIA_ROLE, PageRegions, Processor, RecognizedFrom, RegionOutput,
-        StageInput, StageProcessor, best_container, clamp_to_image, closed_mask_for, color_palette,
-        dark_balloons, generation, infer_typography, layout_order, link_dialogue_regions,
-        mask_containment, mask_for, mask_geometry, non_maximum_suppression, normalize_text_color,
-        remove_nested_text_detections, remove_page_numbers, remove_spurious_onomatopoeia,
-        write_region,
+        FREE_TEXT_ROLE, ImageSize, InferredTypography, KoharuLayoutRFDetrSeg2XLConfig, LayoutItem,
+        LayoutKind, MaskPixel, ONOMATOPOEIA_ROLE, PageRegions, Processor, RecognizedFrom,
+        RegionOutput, StageInput, StageProcessor, best_container, clamp_to_image, closed_mask_for,
+        color_palette, dark_balloons, generation, infer_typography, layout_order,
+        link_dialogue_regions, mask_containment, mask_for, mask_geometry, non_maximum_suppression,
+        normalize_text_color, remove_nested_text_detections, remove_page_numbers,
+        remove_spurious_onomatopoeia, write_region,
     };
 
     #[test]
@@ -3269,6 +3277,20 @@ mod tests {
                             content,
                             layer,
                             role: FREE_TEXT_ROLE,
+                            typography: Typography {
+                                origin: Origin::Generated(generation.clone()),
+                                preferred_font: None,
+                                font_weight: None,
+                                font_style: None,
+                                size: None,
+                                auto_fit: true,
+                                color: None,
+                                stroke_color: None,
+                                stroke_width: None,
+                                alignment: None,
+                                writing_mode: None,
+                                extensions: Default::default(),
+                            },
                         }],
                     },
                     &generation,
@@ -3300,6 +3322,80 @@ mod tests {
                 .target,
             bubble
         );
+    }
+
+    #[tokio::test]
+    async fn a_measured_outline_is_kept_only_for_text_outside_a_balloon() {
+        let mut session = Session::memory().await.unwrap();
+        let detected = |label: &str, x: u32| KoharuLayoutDetection {
+            label_id: 0,
+            label: label.to_owned(),
+            score: 1.0,
+            bbox: [x as f32, 0.0, x as f32 + 1.0, 1.0],
+            area: 1,
+            mask: KoharuLayoutMask {
+                x,
+                y: 0,
+                width: 1,
+                height: 1,
+                pixels: vec![u8::MAX],
+            },
+        };
+        let outlined = InferredTypography {
+            color: [0, 0, 0],
+            stroke_color: Some([255, 255, 255]),
+            stroke_width: Some(4.0),
+            angle_degrees: 0.0,
+            oriented_extent: [0.0, 0.0, 1.0, 1.0],
+            writing_mode: WritingMode::Horizontal,
+        };
+        let bubble_detection = detected("bubble", 0);
+        let inside = [detected("text", 0), detected("onomatopoeia", 0)];
+        let outside = detected("onomatopoeia", 50);
+        let generation = generation(super::PRODUCER, super::OUTPUT_MODEL_ID).unwrap();
+        let mut layers = Vec::new();
+        let patch = session
+            .snapshot()
+            .patch(|edit| {
+                let page = edit.add_page(PageDraft::new("page", 100.0, 100.0), At::End)?;
+                let RegionOutput::Bubble(bubble) =
+                    write_region(edit, page, &bubble_detection, None, &generation).unwrap()
+                else {
+                    panic!("expected a bubble region");
+                };
+                let mut texts = Vec::new();
+                for detection in inside.iter().chain([&outside]) {
+                    let RegionOutput::Text(text) =
+                        write_region(edit, page, detection, Some(outlined), &generation).unwrap()
+                    else {
+                        panic!("expected an OCR text region");
+                    };
+                    layers.push(text.layer);
+                    texts.push(text);
+                }
+                link_dialogue_regions(
+                    edit,
+                    &PageRegions {
+                        bubbles: vec![bubble],
+                        texts,
+                    },
+                    &generation,
+                )
+                .unwrap();
+                Ok(())
+            })
+            .unwrap();
+        let snapshot = session.commit(patch).await.unwrap().snapshot;
+
+        let outlines = layers
+            .iter()
+            .map(|layer| {
+                let typography = snapshot.component::<Typography>(*layer).unwrap().unwrap();
+                assert_eq!(typography.color, Some([0, 0, 0, u8::MAX]));
+                typography.stroke_width
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(outlines, [None, None, Some(4.0)]);
     }
 
     #[tokio::test]
