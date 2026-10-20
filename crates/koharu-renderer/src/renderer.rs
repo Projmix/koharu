@@ -11,10 +11,10 @@ use futures::future::try_join_all;
 use koharu_rasterizer::{RasterOptions, Rasterizer};
 use koharu_scene::{
     Asset, AssetRole, BlobId, Change, Component, ComponentOwner, EntityChange, EntityId, FitsTo,
-    FlowsIn, Geometry, Group, OcrAnalysis, Origin, Page, Presents, RasterLayer, RasterLayerKind,
-    RecognizedFrom, Region, RelationChange, RelationId, RelationSpec, Revision, Snapshot,
-    SpeechKind, SpeechMarkup, TextAlignment, TextDirection, TextLayout as SceneTextLayout,
-    TextLayoutKind, TextRole, Translation, Typography, Visibility,
+    FlowsIn, Geometry, Group, OcrAnalysis, Origin, Page, PanelRegion, Presents, RasterLayer,
+    RasterLayerKind, RecognizedFrom, Region, RegionSpec, RelationChange, RelationId, RelationSpec,
+    Revision, Snapshot, SpeechKind, SpeechMarkup, TextAlignment, TextDirection,
+    TextLayout as SceneTextLayout, TextLayoutKind, TextRole, Translation, Typography, Visibility,
 };
 use parking_lot::Mutex;
 use rayon::prelude::*;
@@ -502,6 +502,7 @@ impl Renderer {
             font_families: &typesetting.font_families,
             kind_fonts: &typesetting.kind_fonts,
             balloon_flows: flow_plan.placements,
+            panels: page_panels(snapshot, page)?,
             layers: Vec::new(),
             dependencies: BTreeSet::from([
                 RenderDependency::Entity(page),
@@ -577,6 +578,7 @@ struct Traversal<'a> {
     font_families: &'a [String],
     kind_fonts: &'a KindFonts,
     balloon_flows: HashMap<EntityId, ResolvedPlacement>,
+    panels: Vec<(EntityId, LayoutBox)>,
     layers: Vec<LayerDraft>,
     dependencies: BTreeSet<RenderDependency>,
     diagnostics: Vec<RenderDiagnostic>,
@@ -916,12 +918,75 @@ impl Traversal<'_> {
         let Some(frame) = geometry_frame(&geometry, None) else {
             return Ok(None);
         };
+        let (geometry, frame) = self.clip_to_panel(geometry, frame, dependencies);
         Ok(Some(ResolvedPlacement {
             geometry,
             frame,
             balloon_contour: None,
             dependencies: Arc::from([]),
         }))
+    }
+
+    /// Fork divergence: free text fits to its detected region, and a vertical
+    /// Japanese box can run across a gutter into the next panel. The fit area
+    /// stops at the edges of the detected panel holding most of it. A rotated
+    /// region, or one mostly outside every panel, keeps its own area.
+    fn clip_to_panel(
+        &self,
+        geometry: Geometry,
+        frame: GeometryFrame,
+        dependencies: &mut BTreeSet<RenderDependency>,
+    ) -> (Geometry, GeometryFrame) {
+        if self.panels.is_empty() {
+            return (geometry, frame);
+        }
+        // Adding or removing a panel changes which one holds the region.
+        dependencies.insert(RenderDependency::Hierarchy(self.page));
+        for &(panel, _) in &self.panels {
+            dependencies.insert(component_dependency::<Geometry>(panel));
+            dependencies.insert(component_dependency::<Region>(panel));
+        }
+        if frame.angle_degrees != 0.0 {
+            return (geometry, frame);
+        }
+        let bounds = frame.bounds;
+        let area = bounds.width * bounds.height;
+        let clipped = self
+            .panels
+            .iter()
+            .filter_map(|(_, panel)| {
+                let left = bounds.x.max(panel.x);
+                let top = bounds.y.max(panel.y);
+                let right = (bounds.x + bounds.width).min(panel.x + panel.width);
+                let bottom = (bounds.y + bounds.height).min(panel.y + panel.height);
+                let share = (right - left).max(0.0) * (bottom - top).max(0.0) / area;
+                (share >= 0.5).then_some((share, [left, top, right, bottom]))
+            })
+            .max_by(|left, right| left.0.total_cmp(&right.0))
+            .map(|(_, clipped)| clipped);
+        let Some([left, top, right, bottom]) = clipped else {
+            return (geometry, frame);
+        };
+        if left == bounds.x
+            && top == bounds.y
+            && right == bounds.x + bounds.width
+            && bottom == bounds.y + bounds.height
+        {
+            return (geometry, frame);
+        }
+        let clipped = Geometry {
+            origin: geometry.origin.clone(),
+            ..Geometry::rectangle(
+                f64::from(left),
+                f64::from(top),
+                f64::from(right - left),
+                f64::from(bottom - top),
+            )
+        };
+        match geometry_frame(&clipped, None) {
+            Some(frame) => (clipped, frame),
+            None => (geometry, frame),
+        }
     }
 
     fn balloon_flow(
@@ -1424,6 +1489,24 @@ fn component_dependency<T: Component>(entity: EntityId) -> RenderDependency {
         entity,
         kind: T::KIND.to_owned(),
     }
+}
+
+fn page_panels(snapshot: &Snapshot, page: EntityId) -> Result<Vec<(EntityId, LayoutBox)>> {
+    let mut panels = Vec::new();
+    for entity in snapshot.descendants(page)? {
+        let is_panel = snapshot
+            .component::<Region>(entity.id())?
+            .is_some_and(|region| region.kind == PanelRegion::kind());
+        if !is_panel {
+            continue;
+        }
+        if let Some(geometry) = snapshot.component::<Geometry>(entity.id())?
+            && let Some(bounds) = geometry_bounds(&geometry)
+        {
+            panels.push((entity.id(), bounds));
+        }
+    }
+    Ok(panels)
 }
 
 fn belongs_to_page(snapshot: &Snapshot, mut entity: EntityId, page: EntityId) -> Result<bool> {
@@ -2259,6 +2342,86 @@ mod tests {
         let affected = AffectedDependencies::new(&removed.snapshot, &removed.changes).unwrap();
         assert!(affected.intersects(first_dependencies));
         assert!(!affected.intersects(second_dependencies));
+    }
+
+    #[tokio::test]
+    async fn free_text_fit_area_stops_at_the_panel_holding_most_of_it() {
+        let mut session = Session::memory().await.unwrap();
+        let mut ids = None;
+        let create = session
+            .snapshot()
+            .patch(|edit| {
+                let page = edit.add_page(PageDraft::new("page", 200.0, 120.0), At::End)?;
+                for x in [0.0, 105.0] {
+                    edit.add_analysis_region::<PanelRegion>(
+                        page,
+                        At::End,
+                        &Geometry::rectangle(x, 0.0, 95.0, 120.0),
+                        None,
+                    )?;
+                }
+                let mut layers = Vec::new();
+                // The first region lies mostly in the left panel and runs over
+                // the gutter; the second sits mostly in the gutter itself.
+                for (x, width) in [(20.0, 100.0), (80.0, 40.0)] {
+                    let region = edit.add_analysis_region::<koharu_scene::TextRegion>(
+                        page,
+                        At::End,
+                        &Geometry::rectangle(x, 20.0, width, 60.0),
+                        None,
+                    )?;
+                    let content = edit.add_text_content(page, At::End)?;
+                    edit.set(
+                        content,
+                        &SourceText {
+                            text: Authored::user("source".to_owned()),
+                            language: None,
+                        },
+                    )?;
+                    edit.set(
+                        content,
+                        &Translation {
+                            text: Authored::user("text".to_owned()),
+                            language: None,
+                        },
+                    )?;
+                    let layer = edit.add_text_layer(
+                        page,
+                        At::End,
+                        content,
+                        &SceneTextLayout {
+                            origin: Origin::User,
+                            kind: TextLayoutKind::Paragraph,
+                            angle_degrees: None,
+                        },
+                    )?;
+                    edit.relate::<FitsTo>(layer, region)?;
+                    layers.push(layer);
+                }
+                ids = Some((page, layers));
+                Ok(())
+            })
+            .unwrap();
+        let snapshot = session.commit(create).await.unwrap().snapshot;
+        let (page, layers) = ids.unwrap();
+        let compiled = Renderer::default().compile(&snapshot, page).unwrap();
+        let bounds = |entity| {
+            let frame = compiled
+                .layers
+                .iter()
+                .find(|layer| layer.entity == entity)
+                .unwrap()
+                .frame
+                .bounds;
+            [
+                frame.x,
+                frame.y,
+                frame.x + frame.width,
+                frame.y + frame.height,
+            ]
+        };
+        assert_eq!(bounds(layers[0]), [20.0, 20.0, 95.0, 80.0]);
+        assert_eq!(bounds(layers[1]), [80.0, 20.0, 120.0, 80.0]);
     }
 
     #[tokio::test]

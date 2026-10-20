@@ -17,6 +17,11 @@ chapter that needs no manual edits. Each lands as its own change.
 2. **Vertical-text boxes cross panel borders.** The fit area of free text
    follows the Japanese vertical box, which can reach into the next panel
    (p7 «ДА БЛЯТЬ»). Clip the free-text fit area to its panel.
+   **Done:** the fit area stops at the detected panel holding at least
+   half of it. On the chapter's 78 free-text blocks at automatic size,
+   text crossing its panel by more than 2 px fell from 12 to 5, with no
+   overflow and the median size against the owner's unchanged (1.00). The
+   five left are rotated regions, which keep their own area.
 3. Remaining box errors. Of the 78 owner blocks outside balloons, 25 have
    no matching fresh detection box (all 140 balloon blocks match). Sorted
    by hand on 2026-10-20: 12 are found, but the owner moved or split the
