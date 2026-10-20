@@ -39,9 +39,7 @@ impl Default for GenerationConfig {
 impl GenerationConfig {
     pub(crate) fn for_model(self, model: &ModelSelection) -> Self {
         Self {
-            reasoning: if model.reasoning_required {
-                Some(true)
-            } else if model.reasoning {
+            reasoning: if model.reasoning {
                 self.reasoning
             } else {
                 None
@@ -215,24 +213,6 @@ mod tests {
         let unsupported = generation.for_model(&selection(false, false));
         assert_eq!(unsupported.vision, None);
         assert_eq!(unsupported.reasoning, None);
-    }
-
-    #[test]
-    fn mandatory_reasoning_cannot_be_disabled() {
-        let required = ModelSelection {
-            provider: Provider::OpenRouter,
-            model: Some("google/gemini-3.5-flash-lite".to_owned()),
-            quantization: None,
-            vision: true,
-            reasoning: true,
-            reasoning_required: true,
-        };
-        let generation = GenerationConfig {
-            reasoning: Some(false),
-            ..GenerationConfig::default()
-        };
-
-        assert_eq!(generation.for_model(&required).reasoning, Some(true));
     }
 
     #[test]

@@ -164,7 +164,7 @@ pub(super) fn translation_request_body(
         frequency_penalty: backend.frequency_penalty,
         presence_penalty: backend.presence_penalty,
         reasoning_effort: backend.reasoning_effort,
-        reasoning: backend.reasoning.map(|enabled| ReasoningConfig { enabled }),
+        reasoning: backend.reasoning,
         thinking: backend.thinking.map(|kind| ThinkingConfig { kind }),
         response_format: backend
             .response_mode
@@ -278,7 +278,7 @@ async fn vision_chat(
         frequency_penalty: backend.frequency_penalty,
         presence_penalty: backend.presence_penalty,
         reasoning_effort: backend.reasoning_effort,
-        reasoning: backend.reasoning.map(|enabled| ReasoningConfig { enabled }),
+        reasoning: backend.reasoning,
         thinking: backend.thinking.map(|kind| ThinkingConfig { kind }),
         response_format: backend.response_mode.response_format(schema_name, schema),
     };
@@ -307,7 +307,7 @@ pub(super) struct ChatBackend<'a> {
     pub(super) frequency_penalty: Option<f32>,
     pub(super) presence_penalty: Option<f32>,
     pub(super) reasoning_effort: Option<&'static str>,
-    pub(super) reasoning: Option<bool>,
+    pub(super) reasoning: Option<ReasoningConfig>,
     pub(super) thinking: Option<&'static str>,
     pub(super) response_mode: ResponseMode,
     pub(super) require_parameters: bool,
@@ -413,9 +413,11 @@ struct ThinkingConfig {
     kind: &'static str,
 }
 
-#[derive(Clone, Copy, Serialize)]
-struct ReasoningConfig {
-    enabled: bool,
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+#[serde(untagged)]
+pub(super) enum ReasoningConfig {
+    Toggle { enabled: bool },
+    Effort { effort: &'static str },
 }
 
 #[derive(Clone, Copy)]
@@ -621,7 +623,7 @@ mod tests {
             frequency_penalty: None,
             presence_penalty: None,
             reasoning_effort: Some("none"),
-            reasoning: Some(ReasoningConfig { enabled: true }),
+            reasoning: Some(ReasoningConfig::Toggle { enabled: true }),
             thinking: None,
             response_format: None,
         };

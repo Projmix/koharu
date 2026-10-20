@@ -256,8 +256,8 @@ impl Default for SceneMarkupConfig {
                 model: Some("google/gemini-3.7-flash".to_owned()),
                 quantization: None,
                 vision: true,
-                reasoning: false,
-                reasoning_required: false,
+                reasoning: true,
+                reasoning_required: true,
             },
             generation: GenerationConfig {
                 temperature: Some(0.0),
@@ -377,8 +377,8 @@ impl Default for TranslationConfig {
                     model: Some("google/gemini-3.7-flash".to_owned()),
                     quantization: None,
                     vision: true,
-                    reasoning: false,
-                    reasoning_required: false,
+                    reasoning: true,
+                    reasoning_required: true,
                 },
                 unit_policy: TranslationUnitPolicy::AdaptiveV1,
                 ..TranslationProfile::default()
@@ -1177,7 +1177,7 @@ mod tests {
             markup.model.model.as_deref(),
             Some("google/gemini-3.7-flash")
         );
-        assert!(markup.model.vision && !markup.model.reasoning);
+        assert!(markup.model.vision && markup.model.reasoning_required);
         assert_eq!(markup.generation.temperature, Some(0.0));
         assert_eq!(markup.generation.max_tokens, Some(8192));
         assert_eq!(markup.generation.reasoning, Some(false));

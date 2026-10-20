@@ -2,12 +2,14 @@
 // https://openrouter.ai/docs/api/api-reference/models/get-models
 // https://openrouter.ai/docs/guides/best-practices/reasoning-tokens
 
+use std::collections::HashMap;
+
 use anyhow::Context;
 use koharu_secrets::ExposeSecret;
 use reqwest::Client;
 use serde::Deserialize;
 
-use super::openai_compatible::{ChatBackend, ResponseMode};
+use super::openai_compatible::{ChatBackend, ReasoningConfig, ResponseMode};
 use crate::{
     GenerationConfig, MarkupOutcome, MarkupRequest, Model, OcrRequest, Provider, Result,
     TranslationRequest,
@@ -29,7 +31,9 @@ pub(super) async fn translate(
 ) -> Result<Vec<String>> {
     let api_key =
         koharu_secrets::get("openrouter")?.context("openrouter API key is not configured")?;
-    let backend = translation_backend(Some(api_key.expose_secret()), model, generation);
+    let api_key = api_key.expose_secret();
+    let reasoning = reasoning(client, api_key, model, generation.reasoning).await?;
+    let backend = translation_backend(Some(api_key), model, generation, reasoning);
     super::openai_compatible::translate(client, backend, request).await
 }
 
@@ -37,10 +41,11 @@ fn translation_backend<'a>(
     api_key: Option<&'a str>,
     model: &'a str,
     generation: &GenerationConfig,
+    reasoning: Option<ReasoningConfig>,
 ) -> ChatBackend<'a> {
     ChatBackend {
         require_parameters: true,
-        reasoning: generation.reasoning,
+        reasoning,
         ..ChatBackend::new(
             "openrouter",
             CHAT_URL,
@@ -63,7 +68,9 @@ pub(super) async fn recognize(
         koharu_secrets::get("openrouter")?.context("openrouter API key is not configured")?;
     // Enforce the OCR schema natively, as translation does; without it some
     // models (Gemini Flash among them) wrap the JSON in a Markdown fence.
-    let backend = translation_backend(Some(api_key.expose_secret()), model, generation);
+    let api_key = api_key.expose_secret();
+    let reasoning = reasoning(client, api_key, model, generation.reasoning).await?;
+    let backend = translation_backend(Some(api_key), model, generation, reasoning);
     super::openai_compatible::recognize(client, backend, request).await
 }
 
@@ -76,8 +83,56 @@ pub(super) async fn mark_up(
 ) -> Result<MarkupOutcome> {
     let api_key =
         koharu_secrets::get("openrouter")?.context("openrouter API key is not configured")?;
-    let backend = translation_backend(Some(api_key.expose_secret()), model, generation);
+    let api_key = api_key.expose_secret();
+    let reasoning = reasoning(client, api_key, model, generation.reasoning).await?;
+    let backend = translation_backend(Some(api_key), model, generation, reasoning);
     super::openai_compatible::mark_up(client, backend, request).await
+}
+
+/// OpenRouter rejects a disabled flag for a model whose listing marks
+/// reasoning mandatory, so "off" becomes the lowest effort that model lists.
+/// The live listing decides rather than the saved selection, whose capability
+/// flags can predate the model's mandatory marking.
+async fn reasoning(
+    client: &Client,
+    api_key: &str,
+    model: &str,
+    enabled: Option<bool>,
+) -> Result<Option<ReasoningConfig>> {
+    if enabled != Some(false) {
+        return Ok(enabled.map(|enabled| ReasoningConfig::Toggle { enabled }));
+    }
+    static LISTING: tokio::sync::OnceCell<HashMap<String, ReasoningCapabilities>> =
+        tokio::sync::OnceCell::const_new();
+    let listing = LISTING
+        .get_or_try_init(|| async {
+            let listed: ModelsResponse =
+                super::send_json("openrouter", client.get(MODELS_URL).bearer_auth(api_key)).await?;
+            Ok::<_, crate::Error>(
+                listed
+                    .data
+                    .into_iter()
+                    .filter_map(|model| Some((model.id, model.reasoning?)))
+                    .collect(),
+            )
+        })
+        .await?;
+    Ok(disabled_reasoning(listing.get(model)))
+}
+
+fn disabled_reasoning(capabilities: Option<&ReasoningCapabilities>) -> Option<ReasoningConfig> {
+    match capabilities {
+        Some(capabilities) if capabilities.mandatory => ["minimal", "low", "medium", "high"]
+            .into_iter()
+            .find(|effort| {
+                capabilities
+                    .supported_efforts
+                    .iter()
+                    .any(|listed| listed == effort)
+            })
+            .map(|effort| ReasoningConfig::Effort { effort }),
+        _ => Some(ReasoningConfig::Toggle { enabled: false }),
+    }
 }
 
 pub(super) async fn models(client: &Client) -> Result<Vec<Model>> {
@@ -145,6 +200,8 @@ impl ListedModel {
 struct ReasoningCapabilities {
     #[serde(default)]
     mandatory: bool,
+    #[serde(default)]
+    supported_efforts: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -159,7 +216,7 @@ mod tests {
     #[test]
     fn translation_requests_strict_structured_output() {
         let request = TranslationRequest::new(["こんにちは"], crate::Language::Russian);
-        let backend = translation_backend(None, "test/model", &GenerationConfig::default());
+        let backend = translation_backend(None, "test/model", &GenerationConfig::default(), None);
         let body =
             super::super::openai_compatible::translation_request_body(&backend, &request).unwrap();
         assert_eq!(body["provider"]["require_parameters"], true);
@@ -203,5 +260,32 @@ mod tests {
         assert!(models[0].reasoning_required);
         assert!(!models[1].reasoning);
         assert!(!models[1].reasoning_required);
+    }
+
+    #[test]
+    fn disabled_reasoning_uses_lowest_effort_when_mandatory() {
+        let mandatory = |efforts: &[&str]| ReasoningCapabilities {
+            mandatory: true,
+            supported_efforts: efforts.iter().map(|effort| (*effort).to_owned()).collect(),
+        };
+        assert_eq!(
+            disabled_reasoning(Some(&mandatory(&["high", "medium", "low"]))),
+            Some(ReasoningConfig::Effort { effort: "low" })
+        );
+        assert_eq!(
+            disabled_reasoning(Some(&mandatory(&["high", "minimal", "low"]))),
+            Some(ReasoningConfig::Effort { effort: "minimal" })
+        );
+        assert_eq!(disabled_reasoning(Some(&mandatory(&[]))), None);
+        let optional = ReasoningCapabilities {
+            mandatory: false,
+            supported_efforts: vec!["none".to_owned()],
+        };
+        for capabilities in [Some(&optional), None] {
+            assert_eq!(
+                disabled_reasoning(capabilities),
+                Some(ReasoningConfig::Toggle { enabled: false })
+            );
+        }
     }
 }
