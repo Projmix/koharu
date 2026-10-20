@@ -179,6 +179,8 @@ export type ChapterIssue = {
 	text: string,
 	translation: TranslationIssue | null,
 	fit: TextFitWarningKind | null,
+	/**  The source text is a local OCR draft no API read has confirmed yet. */
+	ocr_unverified: boolean,
 };
 
 export type Character = {
@@ -729,6 +731,8 @@ export type TextContent = {
 	translation: Translation | null,
 	/**  Present only while the review still applies to `translation`. */
 	translation_review: TranslationReview | null,
+	/**  The source text is a local OCR draft no API read has confirmed yet. */
+	ocr_unverified: boolean,
 	markup: TextMarkup | null,
 	role: string | null,
 	source_region: EntityId | null,

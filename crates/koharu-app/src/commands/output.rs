@@ -167,6 +167,8 @@ pub struct ChapterIssue {
     pub text: String,
     pub translation: Option<TranslationIssue>,
     pub fit: Option<TextFitWarningKind>,
+    /// The source text is a local OCR draft no API read has confirmed yet.
+    pub ocr_unverified: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Type)]
@@ -239,13 +241,15 @@ pub(crate) async fn check_chapter(
                 .iter()
                 .find(|warning| warning.element == layer.id())
                 .map(|warning| warning.kind);
-            if translation.is_some() || fit.is_some() {
+            let ocr_unverified = koharu_pipeline::ocr_unverified(content)?;
+            if translation.is_some() || fit.is_some() || ocr_unverified {
                 issues.push(ChapterIssue {
                     page,
                     element: layer.id(),
                     text,
                     translation,
                     fit,
+                    ocr_unverified,
                 });
             }
         }

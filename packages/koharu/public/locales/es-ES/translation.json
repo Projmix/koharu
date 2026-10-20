@@ -266,6 +266,7 @@
     "textOverflow": "El texto no cabe en su área",
     "textBelowReadableSize": "El texto se reduce por debajo del tamaño legible",
     "textLowContrast": "El texto apenas se distingue de la imagen que tiene debajo",
+    "ocrUnverified": "OCR sin verificar: vuelve a ejecutar el OCR",
     "collapse": "Contraer {{name}}",
     "delete": "Eliminar {{name}}",
     "edit": "Editar {{name}}",

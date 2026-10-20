@@ -14,7 +14,7 @@ use koharu_ml::{
 };
 use koharu_scene::{
     Authored, EntityId, Geometry, LanguageTag, OcrAnalysis, Origin, RecognizedFrom, Region,
-    RegionSpec, SourceText, TextDirection, TextRegion,
+    RegionSpec, SourceText, TextContentRef, TextDirection, TextRegion,
 };
 use koharu_translator::{Language, OcrRequest, Translator};
 
@@ -246,6 +246,31 @@ fn source_is_complete(
                     }))
         }
     }
+}
+
+/// A cross-checked local draft the two readers disagreed on that no API read
+/// has replaced yet, because its request failed or never ran. The next hybrid
+/// OCR run sends it to the API again.
+pub fn ocr_unverified(content: TextContentRef<'_>) -> Result<bool> {
+    let Some(source) = content.source()? else {
+        return Ok(false);
+    };
+    let analysis = content
+        .source_region()?
+        .map(|region| region.ocr())
+        .transpose()?
+        .flatten();
+    Ok(draft_is_unverified(&source, analysis.as_ref()))
+}
+
+fn draft_is_unverified(source: &SourceText, analysis: Option<&OcrAnalysis>) -> bool {
+    matches!(source.text.origin, Origin::Generated(_))
+        && analysis.is_some_and(|analysis| {
+            analysis.origin == source.text.origin
+                && analysis
+                    .confidence
+                    .is_some_and(|confidence| confidence != AGREED_CONFIDENCE)
+        })
 }
 
 /// Mark each primary reading with whether the second local reader produced
@@ -783,7 +808,9 @@ fn point_in_geometry(x: f64, y: f64, geometry: &Geometry) -> bool {
 mod tests {
     use std::{collections::BTreeMap, io::Cursor, sync::Arc};
 
-    use koharu_scene::{AssetInput, AssetMetadata, AssetRole, At, PageDraft, TextRegion};
+    use koharu_scene::{
+        AssetInput, AssetMetadata, AssetRole, At, Generation, PageDraft, TextRegion,
+    };
 
     use super::*;
     use crate::ImageCache;
@@ -907,6 +934,41 @@ mod tests {
             Some(&analysis(0.0)),
             Some(&api)
         ));
+    }
+
+    #[test]
+    fn only_a_disagreed_local_draft_is_unverified() {
+        let local = generation(PRODUCER, "hayai-ocr + manga-ocr").unwrap();
+        let api = generation(PRODUCER, "hayai-ocr + manga-ocr → openrouter: model").unwrap();
+        let source = |owner: &Generation| SourceText {
+            text: Authored::generated("デデ!?".to_owned(), owner.clone()),
+            language: None,
+        };
+        let analysis = |owner: &Generation, confidence| OcrAnalysis {
+            origin: Origin::Generated(owner.clone()),
+            direction: TextDirection::Vertical,
+            confidence,
+            line_boundaries: Vec::new(),
+        };
+        let disagreed = analysis(&local, Some(0.0));
+        assert!(draft_is_unverified(&source(&local), Some(&disagreed)));
+        assert!(!draft_is_unverified(
+            &source(&local),
+            Some(&analysis(&local, Some(1.0)))
+        ));
+        assert!(!draft_is_unverified(
+            &source(&api),
+            Some(&analysis(&api, None))
+        ));
+        assert!(!draft_is_unverified(
+            &source(&local),
+            Some(&analysis(&local, None))
+        ));
+        let edited = SourceText {
+            text: Authored::user("デデ!?".to_owned()),
+            language: None,
+        };
+        assert!(!draft_is_unverified(&edited, Some(&disagreed)));
     }
 
     #[test]

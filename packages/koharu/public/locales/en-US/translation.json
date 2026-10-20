@@ -266,6 +266,7 @@
     "textOverflow": "Text does not fit its area",
     "textBelowReadableSize": "Text is shrunk below the readable size",
     "textLowContrast": "Text barely stands out from the image under it",
+    "ocrUnverified": "OCR not verified: run OCR again",
     "collapse": "Collapse {{name}}",
     "delete": "Delete {{name}}",
     "edit": "Edit {{name}}",

@@ -266,6 +266,7 @@
     "textOverflow": "文字放不進區域",
     "textBelowReadableSize": "文字縮小到可讀大小以下",
     "textLowContrast": "文字與下方影像幾乎無法區分",
+    "ocrUnverified": "OCR 未經核對：請重新執行 OCR",
     "collapse": "收合 {{name}}",
     "delete": "刪除 {{name}}",
     "edit": "編輯 {{name}}",

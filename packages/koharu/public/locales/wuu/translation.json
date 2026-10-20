@@ -266,6 +266,7 @@
     "textOverflow": "文字放勿进区域",
     "textBelowReadableSize": "文字缩到看勿清个大小",
     "textLowContrast": "文字搭下头个图像差勿多分勿清",
+    "ocrUnverified": "OCR 还呒没核对过：再跑一遍 OCR",
     "collapse": "折叠 {{name}}",
     "delete": "删除 {{name}}",
     "edit": "编辑 {{name}}",

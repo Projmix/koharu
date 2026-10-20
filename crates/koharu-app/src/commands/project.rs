@@ -146,6 +146,8 @@ pub struct TextContent {
     pub translation: Option<Translation>,
     /// Present only while the review still applies to `translation`.
     pub translation_review: Option<TranslationReview>,
+    /// The source text is a local OCR draft no API read has confirmed yet.
+    pub ocr_unverified: bool,
     pub markup: Option<TextMarkup>,
     pub role: Option<String>,
     pub source_region: Option<EntityId>,
@@ -2198,6 +2200,7 @@ impl Project {
         if let Some(layout) = snapshot.component::<SceneTextLayout>(layer)? {
             let text_layer = snapshot.text_layer(layer)?;
             let content = text_layer.content()?;
+            let ocr_unverified = koharu_pipeline::ocr_unverified(content)?;
             let source = content.source()?.map(|source| SourceText {
                 text: source.text.value,
                 language: source.language.map(|language| language.to_string()),
@@ -2243,6 +2246,7 @@ impl Project {
                     source,
                     translation,
                     translation_review,
+                    ocr_unverified,
                     markup,
                     role,
                     source_region,

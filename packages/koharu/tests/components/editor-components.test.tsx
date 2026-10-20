@@ -139,6 +139,7 @@ const textLayer: Layer = {
     source: { text: 'こんにちは', language: 'ja' },
     translation: { text: 'Hello', language: null, generated: true },
     translation_review: null,
+    ocr_unverified: false,
     markup: null,
     role: null,
     source_region: null,
@@ -1455,8 +1456,24 @@ describe('greenfield editor', () => {
     useKoharuStore.setState({ textFitWarnings: { element: 'overflow' } })
     render(<Inspector />)
 
-    expect(screen.getByTestId('text-fit-warning-element')).toHaveAccessibleName(
+    expect(screen.getByTestId('text-warning-element')).toHaveAccessibleName(
       'Text does not fit its area',
+    )
+  })
+
+  it('folds unverified OCR into the one layer warning marker', () => {
+    installProject()
+    const unverified = {
+      ...textLayer,
+      content: { ...textLayer.content, ocr_unverified: true },
+    }
+    queryClient.setQueryData(pageKey, (page: Page) => ({ ...page, layers: [unverified] }))
+    useKoharuStore.setState({ textFitWarnings: { element: 'overflow' } })
+    render(<Inspector />)
+
+    expect(screen.getAllByRole('img', { name: /OCR not verified/ })).toHaveLength(1)
+    expect(screen.getByTestId('text-warning-element')).toHaveAccessibleName(
+      'Text does not fit its area · OCR not verified: run OCR again',
     )
   })
 

@@ -67,6 +67,14 @@ owner's outlined blocks from the rest.
    readings) in the layer list, like fit warnings. Two of the chapter's
    three regressions are this case: the readers disagreed, the API
    request failed and Hayai's draft stayed silently.
+   **Done:** in the cross-check mode a block whose source text is still a
+   disagreed local draft gets the fit-warning marker in the layer list
+   ("OCR not verified: run OCR again") and is an issue in the chapter
+   check before export. It is derived from the stored OCR analysis, with
+   no schema change. Running OCR again sends those blocks to the API; no
+   retry was added. On a new copy of the chapter exactly two blocks are
+   flagged (デデ!? and ピン); the 106 agreed, 110 API-read and 13
+   hand-edited blocks are not.
 
 ## Scene markup
 

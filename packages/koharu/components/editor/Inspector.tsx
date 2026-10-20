@@ -985,6 +985,12 @@ function LayerRow({
   const currentRole = isTextLayer(layer) ? supportedTextRole(layer.content.role) : null
   const Icon = layerIcon(layer)
   const fitWarning = useKoharuStore((state) => state.textFitWarnings[layer.id])
+  const warning = [
+    fitWarning && t(textFitWarningLabels[fitWarning]),
+    isTextLayer(layer) && layer.content.ocr_unverified && t('layers.ocrUnverified'),
+  ]
+    .filter(Boolean)
+    .join(' · ')
   const [numberValue, setNumberValue] = useState(number?.toString() ?? '')
 
   useEffect(() => setNumberValue(number?.toString() ?? ''), [number])
@@ -1094,14 +1100,14 @@ function LayerRow({
             <span className='min-w-0 flex-1'>
               <span className='flex min-w-0 items-center gap-1'>
                 <span className='truncate text-[11px] font-medium'>{name}</span>
-                {fitWarning && (
+                {warning && (
                   <TriangleAlert
                     role='img'
-                    data-testid={`text-fit-warning-${layer.id}`}
-                    aria-label={t(textFitWarningLabels[fitWarning])}
+                    data-testid={`text-warning-${layer.id}`}
+                    aria-label={warning}
                     className='size-3 shrink-0 text-amber-500'
                   >
-                    <title>{t(textFitWarningLabels[fitWarning])}</title>
+                    <title>{warning}</title>
                   </TriangleAlert>
                 )}
               </span>

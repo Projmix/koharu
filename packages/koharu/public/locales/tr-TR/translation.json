@@ -266,6 +266,7 @@
     "textOverflow": "Metin alanına sığmıyor",
     "textBelowReadableSize": "Metin okunabilir boyutun altına küçültüldü",
     "textLowContrast": "Metin altındaki görüntüden neredeyse ayırt edilemiyor",
+    "ocrUnverified": "OCR doğrulanmadı: OCR'ı yeniden çalıştırın",
     "collapse": "{{name}} grubunu daralt",
     "delete": "{{name}} öğesini sil",
     "edit": "{{name}} öğesini düzenle",

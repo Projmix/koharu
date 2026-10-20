@@ -120,6 +120,7 @@ export function ChapterCheckDialog({
                         {[
                           issue.translation && t(translationIssueLabels[issue.translation]),
                           issue.fit && t(fitIssueLabels[issue.fit]),
+                          issue.ocr_unverified && t('layers.ocrUnverified'),
                         ]
                           .filter(Boolean)
                           .join(' · ')}

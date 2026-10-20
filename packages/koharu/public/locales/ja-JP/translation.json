@@ -266,6 +266,7 @@
     "textOverflow": "テキストが範囲に収まりません",
     "textBelowReadableSize": "テキストが読める大きさより小さく縮小されています",
     "textLowContrast": "テキストが下の画像とほとんど見分けられません",
+    "ocrUnverified": "OCR未確認：OCRをもう一度実行してください",
     "collapse": "{{name}}を折りたたむ",
     "delete": "{{name}}を削除",
     "edit": "{{name}}を編集",

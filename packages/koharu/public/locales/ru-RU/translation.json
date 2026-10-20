@@ -266,6 +266,7 @@
     "textOverflow": "Текст не помещается в область",
     "textBelowReadableSize": "Текст ужат меньше читаемого размера",
     "textLowContrast": "Текст почти не виден на изображении под ним",
+    "ocrUnverified": "OCR не проверен: повторите OCR",
     "collapse": "Свернуть {{name}}",
     "delete": "Удалить {{name}}",
     "edit": "Изменить {{name}}",
