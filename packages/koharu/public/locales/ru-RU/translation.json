@@ -201,6 +201,7 @@
     "horizontal": "Горизонтально",
     "increaseBorderWidth": "Увеличить ширину обводки",
     "increaseFontSize": "Увеличить размер шрифта на 1 пт",
+    "invertBorder": "Поменять местами цвет текста и обводки",
     "opacity": "Непрозрачность",
     "placement": "Размещение",
     "resetAutoFit": "Вернуть автоподгонку",

@@ -201,6 +201,7 @@
     "horizontal": "Horizontal",
     "increaseBorderWidth": "Aumentar largura do contorno",
     "increaseFontSize": "Aumentar o tamanho da fonte em 1 pt",
+    "invertBorder": "Trocar as cores do texto e do contorno",
     "opacity": "Opacidade",
     "placement": "Posicionamento",
     "resetAutoFit": "Redefinir para ajuste automático",

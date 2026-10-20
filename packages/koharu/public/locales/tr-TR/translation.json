@@ -201,6 +201,7 @@
     "horizontal": "Yatay",
     "increaseBorderWidth": "Kenarlık genişliğini artır",
     "increaseFontSize": "Yazı tipi boyutunu 1 pt artır",
+    "invertBorder": "Metin ve kenarlık renklerini değiştir",
     "opacity": "Opaklık",
     "placement": "Yerleşim",
     "resetAutoFit": "Otomatik sığdırmaya sıfırla",

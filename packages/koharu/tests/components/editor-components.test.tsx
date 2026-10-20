@@ -1182,6 +1182,52 @@ describe('greenfield editor', () => {
     )
   })
 
+  it('inverts the text and border colors in one edit', async () => {
+    const user = userEvent.setup()
+    installProject()
+    const setTypography = vi.spyOn(commands, 'setTypography').mockResolvedValue(null)
+    render(<Inspector />)
+
+    await user.click(screen.getByRole('button', { name: 'Swap text and border colors' }))
+    await waitFor(() =>
+      expect(setTypography).toHaveBeenCalledWith([
+        expect.objectContaining({
+          layer: 'element',
+          typography: expect.objectContaining({
+            color: [255, 255, 255, 255],
+            stroke_color: [0, 0, 0, 255],
+            stroke_width: 1.5,
+          }),
+        }),
+      ]),
+    )
+
+    const outlined: Layer = {
+      ...textLayer,
+      typography: {
+        ...textLayer.typography!,
+        color: [255, 255, 255, 255],
+        stroke_color: [200, 0, 0, 255],
+        stroke_width: 3,
+      },
+    }
+    act(() => {
+      queryClient.setQueryData(pageKey, (page: object) => ({ ...page, layers: [outlined] }))
+    })
+    await user.click(screen.getByRole('button', { name: 'Swap text and border colors' }))
+    await waitFor(() =>
+      expect(setTypography).toHaveBeenLastCalledWith([
+        expect.objectContaining({
+          typography: expect.objectContaining({
+            color: [200, 0, 0, 255],
+            stroke_color: [255, 255, 255, 255],
+            stroke_width: 3,
+          }),
+        }),
+      ]),
+    )
+  })
+
   it('only offers styles and weights available for the selected font family', async () => {
     const user = userEvent.setup()
     installProject()

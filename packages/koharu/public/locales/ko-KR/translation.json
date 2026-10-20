@@ -201,6 +201,7 @@
     "horizontal": "가로쓰기",
     "increaseBorderWidth": "테두리 너비 늘리기",
     "increaseFontSize": "글꼴 크기 1pt 늘리기",
+    "invertBorder": "글자 색상과 테두리 색상 바꾸기",
     "opacity": "불투명도",
     "placement": "배치",
     "resetAutoFit": "자동 맞춤으로 초기화",

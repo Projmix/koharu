@@ -201,6 +201,7 @@
     "horizontal": "Horizontal",
     "increaseBorderWidth": "Increase border width",
     "increaseFontSize": "Increase font size by 1 pt",
+    "invertBorder": "Swap text and border colors",
     "opacity": "Opacity",
     "placement": "Placement",
     "resetAutoFit": "Reset to auto fit",

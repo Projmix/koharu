@@ -201,6 +201,7 @@
     "horizontal": "横排",
     "increaseBorderWidth": "增大描边宽度",
     "increaseFontSize": "字体大小增大 1 磅",
+    "invertBorder": "交换文字颜色和描边颜色",
     "opacity": "不透明度",
     "placement": "位置",
     "resetAutoFit": "重置为自动适配",

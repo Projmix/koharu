@@ -201,6 +201,7 @@
     "horizontal": "横書き",
     "increaseBorderWidth": "縁取り幅を拡大",
     "increaseFontSize": "フォントサイズを1pt大きくする",
+    "invertBorder": "文字色と縁取りの色を入れ替え",
     "opacity": "不透明度",
     "placement": "配置",
     "resetAutoFit": "自動調整に戻す",
