@@ -134,12 +134,14 @@ API (Fal, Replicate, OpenRouter image models).
 | FLUX Kontext dev / pro / max, FLUX.2 dev / pro / flex / max / Klein 4B / 9B (Fal, Replicate) | in use | Prompted edits. |
 | Qwen Image Edit 2511, Seedream 4.5 Edit (Fal) | in use | |
 | Any OpenRouter image model | in use | Free-form model id. |
-| FLUX 3 Image (BFL, Replicate, Fal, OpenRouter) | candidate (high) | Released 2026-10-01. ~$0.048 per 1K image (third-party figure). `safety_tolerance` 0–4 on Replicate and BFL; whether 4 passes explicit input pages is untested. Needs a Replicate catalog entry; reachable now through OpenRouter without moderation control. |
+| FLUX 3 Image (BFL, Replicate, Fal, OpenRouter) | candidate (high) | Released 2026-10-01. Owner's manual check 2026-10-20: gentlest on the art, but leaves small handwritten text, and BFL blocked page 23 as sexual content. ~$0.048 per 1K image (third-party figure). `safety_tolerance` 0–4 on Replicate and BFL; whether 4 passes explicit input pages is untested. Needs a Replicate catalog entry; reachable now through OpenRouter without moderation control. |
 | FLUX 3 Image Klein API (BFL, Runware) | candidate (medium) | ~$0.009 per 1K image at BFL (third-party figure). Not wired. |
 | Qwen Image Edit 2511 on Replicate | candidate (high) | $0.03 per image; `disable_safety_checker` disables the output check. Not in the Replicate catalog yet. First pick for adult pages. |
-| Grok Imagine Image 2.0 (xAI, OpenRouter, Replicate) | candidate (medium) | ~$0.04 + $0.01 per input image (third-party figure). #4 on Image Edit Arena 2026-10-06. API adult-content policy unknown. |
 | MAI Image 2.6 / 2.6 Flash (OpenRouter) | candidate (quality ceiling only) | Refuses adult input (`Input content violated safety policies`). Flash is about half the price. |
 | GPT-Image-2.5, Nano Banana 2.1 (OpenRouter) | candidate (quality ceiling only) | Top of Image Edit Arena; provider policies forbid sexual content, so expected to fail adult pages. Test on ordinary pages only. |
+| Krea 3 | candidate (high) | Best overall in the owner's manual P1 check on 6 pages (2026-10-20): clean on 4 pages; on page 23 it erased a dark balloon and left text in another; it leaves white outline shapes where outlined SFX were. Provider and price not recorded yet. |
+| Ideogram 4.5 | candidate (medium) | Same check: best at removing outlined SFX and rebuilding the art, but missed a large SFX (page 6) and a large caption (page 18), and erased a balloon on page 7. |
+| Grok Imagine Image 2.0 | rejected 2026-10-20 | Same check: redraws the whole page (balloons and panel backgrounds vanish on page 6, lines shift on page 18). |
 | Seedream 5.0 Pro Edit | candidate (low) | Official API refuses even mild content and checks edits harder than generation (third-party tests); only resellers claim otherwise. |
 
 Candidates, prompts and the test plan (including cleaning with balloons already emptied versus not) are in [cleaning-models.ru.md](cleaning-models.ru.md), checked 2026-10-19. No cloud cleaning model has been measured on the owner's pages. When the
