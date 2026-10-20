@@ -69,6 +69,7 @@
   "chapterCheck": {
     "title": "导出前检查",
     "checking": "来里检查页面…",
+    "issueCount": "有 {{count}} 个文字块要看一看。点一记就打开。",
     "issueCount_one": "有 {{count}} 个文字块要看一看。点一记就打开。",
     "issueCount_other": "有 {{count}} 个文字块要看一看。点一记就打开。",
     "emptyTranslation": "呒没译文",

@@ -69,6 +69,7 @@
   "chapterCheck": {
     "title": "書き出し前のチェック",
     "checking": "ページを確認中…",
+    "issueCount": "確認が必要なテキストブロック：{{count}}。選択すると開きます。",
     "issueCount_one": "確認が必要なテキストブロック：{{count}}。選択すると開きます。",
     "issueCount_other": "確認が必要なテキストブロック：{{count}}。選択すると開きます。",
     "emptyTranslation": "翻訳がありません",

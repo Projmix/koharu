@@ -643,6 +643,7 @@ describe('greenfield editor', () => {
       const user = userEvent.setup()
       installProject()
       let finishExport: (() => void) | undefined
+      vi.spyOn(commands, 'checkChapter').mockResolvedValue([])
       const exportProject = vi.spyOn(commands, 'export').mockImplementation(
         () =>
           new Promise<null>((resolve) => {
@@ -689,6 +690,7 @@ describe('greenfield editor', () => {
       const user = userEvent.setup()
       installProject()
       let fail: ((error: Error) => void) | undefined
+      vi.spyOn(commands, 'checkChapter').mockResolvedValue([])
       vi.spyOn(commands, command).mockImplementation(
         () =>
           new Promise<null>((_resolve, reject) => {

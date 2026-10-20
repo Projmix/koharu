@@ -69,6 +69,7 @@
   "chapterCheck": {
     "title": "Revisión antes de exportar",
     "checking": "Revisando páginas…",
+    "issueCount": "{{count}} bloques de texto necesitan revisión. Selecciona uno para abrirlo.",
     "issueCount_one": "{{count}} bloque de texto necesita revisión. Selecciónalo para abrirlo.",
     "issueCount_other": "{{count}} bloques de texto necesitan revisión. Selecciona uno para abrirlo.",
     "emptyTranslation": "Sin traducción",

@@ -69,6 +69,7 @@
   "chapterCheck": {
     "title": "내보내기 전 검사",
     "checking": "페이지 검사 중…",
+    "issueCount": "확인이 필요한 텍스트 블록: {{count}}개. 선택하면 열립니다.",
     "issueCount_one": "확인이 필요한 텍스트 블록: {{count}}개. 선택하면 열립니다.",
     "issueCount_other": "확인이 필요한 텍스트 블록: {{count}}개. 선택하면 열립니다.",
     "emptyTranslation": "번역 없음",

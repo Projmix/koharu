@@ -69,6 +69,7 @@
   "chapterCheck": {
     "title": "Check before export",
     "checking": "Checking pages…",
+    "issueCount": "{{count}} text blocks need a look. Select one to open it.",
     "issueCount_one": "{{count}} text block needs a look. Select one to open it.",
     "issueCount_other": "{{count}} text blocks need a look. Select one to open it.",
     "emptyTranslation": "No translation",

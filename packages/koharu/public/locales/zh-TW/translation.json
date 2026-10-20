@@ -69,6 +69,7 @@
   "chapterCheck": {
     "title": "匯出前檢查",
     "checking": "正在檢查頁面…",
+    "issueCount": "有 {{count}} 個文字區塊需要查看。選擇即可開啟。",
     "issueCount_one": "有 {{count}} 個文字區塊需要查看。選擇即可開啟。",
     "issueCount_other": "有 {{count}} 個文字區塊需要查看。選擇即可開啟。",
     "emptyTranslation": "沒有譯文",

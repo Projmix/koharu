@@ -69,6 +69,7 @@
   "chapterCheck": {
     "title": "Dışa aktarmadan önce denetim",
     "checking": "Sayfalar denetleniyor…",
+    "issueCount": "{{count}} metin bloğunun gözden geçirilmesi gerekiyor. Açmak için birini seçin.",
     "issueCount_one": "{{count}} metin bloğunun gözden geçirilmesi gerekiyor. Açmak için seçin.",
     "issueCount_other": "{{count}} metin bloğunun gözden geçirilmesi gerekiyor. Açmak için birini seçin.",
     "emptyTranslation": "Çeviri yok",
