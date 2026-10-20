@@ -617,11 +617,7 @@ const DIGITS: [[u8; 5]; 10] = [
 ];
 
 /// Draws each region's box and its 1-based page number on a copy of the page.
-fn draw_regions(
-    image: &DynamicImage,
-    boxes: &[(usize, Bounds)],
-    scale: (f64, f64),
-) -> RgbImage {
+fn draw_regions(image: &DynamicImage, boxes: &[(usize, Bounds)], scale: (f64, f64)) -> RgbImage {
     let mut canvas = image.to_rgb8();
     let (width, height) = canvas.dimensions();
     let shortest = width.min(height).max(1);
