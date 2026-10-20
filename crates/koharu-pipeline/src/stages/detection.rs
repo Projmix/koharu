@@ -48,6 +48,9 @@ const ANGLE_SEARCH_STEP_DEGREES: f64 = 0.5;
 // as the background and the stroke is lost.
 const TYPOGRAPHY_SAMPLE_MARGIN: f32 = 14.0;
 const HALFTONE_SAMPLE_RADIUS: u32 = 2;
+const GROUND_RING_INNER: u8 = 2;
+const GROUND_RING_OUTER: u8 = 4;
+const GLYPH_GROUND_MIN_DISTANCE_SQUARED: u32 = 96 * 96;
 const COLOR_SNAP_DARK_LUMINANCE: u32 = 64 * 256;
 const COLOR_SNAP_LIGHT_LUMINANCE: u32 = 191 * 256;
 const COLOR_CLUSTER_MIN_DISTANCE_SQUARED: u32 = 32 * 32;
@@ -732,8 +735,9 @@ fn infer_typography(
     };
     let (angle_degrees, vertical) = mask_angle(&points, detection.bbox);
     let oriented_extent = oriented_extent(&points, angle_degrees);
+    let ground = local_ground(image, &pixels, [left, top], local_width, local_height);
     let (color, stroke_color, stroke_width) =
-        infer_text_paint(&pixels, background, local_width, local_height);
+        infer_text_paint(&pixels, background, ground, local_width, local_height);
     Some(InferredTypography {
         color,
         stroke_color,
@@ -746,6 +750,48 @@ fn infer_typography(
             WritingMode::Horizontal
         },
     })
+}
+
+/// Median shade two to four pixels outside the text mask: the ground the
+/// glyphs sit on, past their anti-aliased edge.
+fn local_ground(
+    image: &RgbImage,
+    pixels: &[MaskPixel],
+    [left, top]: [u32; 2],
+    width: u32,
+    height: u32,
+) -> Option<[u8; 3]> {
+    let index = |x: u32, y: u32| y as usize * width as usize + x as usize;
+    let mut distance = vec![u8::MAX; width as usize * height as usize];
+    for pixel in pixels.iter().filter(|pixel| pixel.inside_mask) {
+        distance[index(pixel.x, pixel.y)] = 0;
+    }
+    for step in 1..=GROUND_RING_OUTER {
+        let previous = distance.clone();
+        for y in 0..height {
+            for x in 0..width {
+                if previous[index(x, y)] != u8::MAX {
+                    continue;
+                }
+                let near = (y.saturating_sub(1)..=(y + 1).min(height - 1)).any(|ny| {
+                    (x.saturating_sub(1)..=(x + 1).min(width - 1))
+                        .any(|nx| previous[index(nx, ny)] == step - 1)
+                });
+                if near {
+                    distance[index(x, y)] = step;
+                }
+            }
+        }
+    }
+    let ring = pixels
+        .iter()
+        .filter(|pixel| {
+            let d = distance[index(pixel.x, pixel.y)];
+            (GROUND_RING_INNER..=GROUND_RING_OUTER).contains(&d)
+        })
+        .map(|pixel| halftone_mean(image, pixel.x - 1 + left, pixel.y - 1 + top))
+        .collect::<Vec<_>>();
+    (!ring.is_empty()).then(|| median_color(&ring))
 }
 
 /// Fork divergence: a screentone is black dots on white paper, so a per-pixel
@@ -891,11 +937,13 @@ fn histogram_median(histogram: &[u32; 256], count: usize) -> u8 {
 fn infer_text_paint(
     pixels: &[MaskPixel],
     background_seed: [u8; 3],
+    ground: Option<[u8; 3]>,
     width: u32,
     height: u32,
 ) -> ([u8; 3], Option<[u8; 3]>, Option<f32>) {
     let clusters = color_clusters(pixels, background_seed);
-    if let Some(outline) = infer_outline(&clusters, background_seed, width, height) {
+    let (outline, enclosed_glyphs) = infer_outline(&clusters, background_seed, width, height);
+    if let Some(outline) = outline {
         return (
             outline.fill_color,
             Some(outline.stroke_color),
@@ -917,6 +965,24 @@ fn infer_text_paint(
         );
     }
 
+    // A glyph that the outline search found enclosed by its ground is read
+    // against the ground right around the text rather than the sample border,
+    // which for a dark balloon is its light border or the art outside it.
+    if let Some(ground) = ground
+        && let Some((glyph, _)) = enclosed_glyphs
+            .iter()
+            .copied()
+            .filter(|(glyph, _)| {
+                let luminance = color_luminance(*glyph);
+                (luminance <= COLOR_SNAP_DARK_LUMINANCE || luminance >= COLOR_SNAP_LIGHT_LUMINANCE)
+                    && color_distance_squared(*glyph, ground) >= GLYPH_GROUND_MIN_DISTANCE_SQUARED
+            })
+            .max_by_key(|(glyph, enclosed)| {
+                u64::from(color_distance_squared(*glyph, ground)) * *enclosed as u64
+            })
+    {
+        return (normalize_text_color(glyph), None, None);
+    }
     let background_index = nonempty
         .iter()
         .copied()
@@ -946,7 +1012,7 @@ fn infer_outline(
     background: [u8; 3],
     width: u32,
     height: u32,
-) -> Option<OutlinePaint> {
+) -> (Option<OutlinePaint>, Vec<([u8; 3], usize)>) {
     let mut assignments = vec![usize::MAX; width as usize * height as usize];
     let mut colors = vec![[0_u8; 3]; width as usize * height as usize];
     for (index, cluster) in clusters.iter().enumerate() {
@@ -957,13 +1023,18 @@ fn infer_outline(
         }
     }
 
-    let background_index = clusters
+    let Some(background_index) = clusters
         .iter()
         .enumerate()
         .filter(|(_, cluster)| !cluster.pixels.is_empty())
         .min_by_key(|(_, cluster)| color_distance_squared(cluster.color, background))
-        .map(|(index, _)| index)?;
+        .map(|(index, _)| index)
+    else {
+        return (None, Vec::new());
+    };
     let mut best = None;
+    let mut enclosed_by: [Option<Vec<bool>>; COLOR_CLUSTER_COUNT] = Default::default();
+    let mut enclosed_glyphs = Vec::new();
     for (stroke_index, stroke_cluster) in clusters.iter().enumerate() {
         if stroke_cluster.pixels.len() < 8 || stroke_index == background_index {
             continue;
@@ -1002,8 +1073,7 @@ fn infer_outline(
             // a light fill, but such an outline is not surrounded by something much
             // closer to its fill than to itself. Dark text outlined in light on a
             // dark ground keeps its outline.
-            if false
-                && color_luminance(fill_color) > color_luminance(stroke_color)
+            if color_luminance(fill_color) > color_luminance(stroke_color)
                 && band_exterior_mean(
                     &colors,
                     &assignments,
@@ -1018,6 +1088,26 @@ fn infer_outline(
                         < color_distance_squared(exterior, stroke_color)
                 })
             {
+                continue;
+            }
+            // Fork divergence: light glyphs in a dark balloon enclose dark counters,
+            // and the balloon itself sits in a light border band, so either reading
+            // looks like an outline. A real outline is never mostly enclosed by its
+            // fill; a glyph read as the "outline" of its own ground is. Such a glyph
+            // is kept for plain-text inference.
+            let ground = enclosed_by[fill_index].get_or_insert_with(|| {
+                reachable_without_cluster(&assignments, fill_index, width, height)
+            });
+            let (in_mask, enclosed) = stroke_cluster
+                .pixels
+                .iter()
+                .filter(|pixel| pixel.inside_mask)
+                .fold((0_usize, 0_usize), |(total, enclosed), pixel| {
+                    let position = pixel.y as usize * width as usize + pixel.x as usize;
+                    (total + 1, enclosed + usize::from(!ground[position]))
+                });
+            if enclosed * 3 > in_mask {
+                enclosed_glyphs.push((stroke_color, enclosed));
                 continue;
             }
             let contrast = color_distance_squared(fill_color, stroke_color);
@@ -1069,7 +1159,7 @@ fn infer_outline(
             }
         }
     }
-    best
+    (best, enclosed_glyphs)
 }
 
 fn reachable_without_cluster(
@@ -4549,6 +4639,42 @@ mod tests {
             (2, 0..2) => Rgb([170, 170, 170]),
             _ => Rgb([255, 255, 255]),
         })
+    }
+
+    #[test]
+    fn light_text_in_a_dark_balloon_on_screentone_is_light_without_outline() {
+        let (width, height) = (140, 160);
+        let [left, top, right, bottom] = [40, 40, 100, 120];
+        let mut image = light_screentone(width, height);
+        let fill = |image: &mut RgbImage, inset: u32, color: [u8; 3]| {
+            for y in top - inset..bottom + inset {
+                for x in left - inset..right + inset {
+                    image.put_pixel(x, y, Rgb(color));
+                }
+            }
+        };
+        // A white border band around a black balloon a few pixels past the text.
+        fill(&mut image, 10, [255, 255, 255]);
+        fill(&mut image, 6, [0, 0, 0]);
+        for bar in [left + 4, left + 24, left + 44] {
+            for y in top + 4..bottom - 4 {
+                for x in bar..bar + 10 {
+                    image.put_pixel(x, y, Rgb([255, 255, 255]));
+                }
+            }
+        }
+        // A dark counter inside one glyph.
+        for y in top + 30..top + 40 {
+            for x in left + 27..left + 31 {
+                image.put_pixel(x, y, Rgb([0, 0, 0]));
+            }
+        }
+        let detection = boxed_detection(width, height, [left, top, right, bottom]);
+
+        let inferred = infer_typography(&image, &detection).unwrap();
+
+        assert_eq!(inferred.color, [255, 255, 255]);
+        assert_eq!(inferred.stroke_color, None);
     }
 
     #[test]
