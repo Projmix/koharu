@@ -141,7 +141,7 @@ API (Fal, Replicate, OpenRouter image models).
 | GPT-Image-2.5, Nano Banana 2.1 (OpenRouter) | candidate (quality ceiling only) | Top of Image Edit Arena; provider policies forbid sexual content, so expected to fail adult pages. Test on ordinary pages only. |
 | Krea 3 | candidate (high) | Best overall in the owner's manual P1 check on 6 pages (2026-10-20): clean on 4 pages; on page 23 it erased a dark balloon and left text in another; it leaves white outline shapes where outlined SFX were. Provider and price not recorded yet. |
 | Ideogram 4.5 | candidate (medium) | Same check: best at removing outlined SFX and rebuilding the art, but missed a large SFX (page 6) and a large caption (page 18), and erased a balloon on page 7. |
-| Grok Imagine Image 2.0 | rejected 2026-10-20 | Same check: redraws the whole page (balloons and panel backgrounds vanish on page 6, lines shift on page 18). |
+| Grok Imagine Image 2.0 | candidate (medium) | Owner's manual P1 check 2026-10-20: the only model that removed every letter on the dense adult page 19, leaving empty white SFX outline shapes. It redraws the rest of the page (balloons and panel backgrounds vanish on page 6, lines shift on page 18), so it is usable only with mask compositing. |
 | Seedream 5.0 Pro Edit | candidate (low) | Official API refuses even mild content and checks edits harder than generation (third-party tests); only resellers claim otherwise. |
 
 Candidates, prompts and the test plan (including cleaning with balloons already emptied versus not) are in [cleaning-models.ru.md](cleaning-models.ru.md), checked 2026-10-19. No cloud cleaning model has been measured on the owner's pages. When the
