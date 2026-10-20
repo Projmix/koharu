@@ -942,7 +942,17 @@ fn infer_text_paint(
     height: u32,
 ) -> ([u8; 3], Option<[u8; 3]>, Option<f32>) {
     let clusters = color_clusters(pixels, background_seed);
-    let (outline, enclosed_glyphs) = infer_outline(&clusters, background_seed, width, height);
+    let (mut outline, enclosed_glyphs) = infer_outline(&clusters, background_seed, width, height);
+    // Fork divergence: a sound effect at a panel edge has gutter paper on its
+    // sample border, so a light outline on a dark panel reads as background.
+    // The ground right around the glyphs is then the panel; search again
+    // against it.
+    if outline.is_none()
+        && let Some(ground) = ground
+        && color_distance_squared(ground, background_seed) >= GLYPH_GROUND_MIN_DISTANCE_SQUARED
+    {
+        outline = infer_outline(&clusters, ground, width, height).0;
+    }
     if let Some(outline) = outline {
         return (
             outline.fill_color,
@@ -4701,6 +4711,54 @@ mod tests {
 
         assert_eq!(inferred.color, [0, 0, 0]);
         assert_eq!(inferred.stroke_color, Some([255, 255, 255]));
+    }
+
+    #[test]
+    fn white_outline_on_a_dark_panel_framed_by_paper_keeps_the_outline() {
+        // The sample border lies mostly on the gutter paper around a dark
+        // panel, while the text with its white outline sits on the panel.
+        // Sweep the outline width the measurement has to resolve.
+        let (width, height) = (200, 140);
+        let [left, top, right, bottom] = [40, 40, 160, 100];
+        for outline in 3..=8 {
+            let mut image = RgbImage::from_pixel(width, height, Rgb([255, 255, 255]));
+            let fill = |image: &mut RgbImage, inset: u32, color: [u8; 3]| {
+                for y in top - inset..bottom + inset {
+                    for x in left - inset..right + inset {
+                        image.put_pixel(x, y, Rgb(color));
+                    }
+                }
+            };
+            fill(&mut image, 5, [90, 96, 95]);
+            // The panel continues past the sample window below the text.
+            for y in bottom + 5..height {
+                for x in left + 50..left + 70 {
+                    image.put_pixel(x, y, Rgb([90, 96, 95]));
+                }
+            }
+            for bar in [left + 10, left + 50, left + 90] {
+                for y in top + 4..bottom - 4 {
+                    for x in bar - outline..bar + 12 + outline {
+                        image.put_pixel(x, y, Rgb([255, 255, 255]));
+                    }
+                }
+                for y in top + 4 + outline..bottom - 4 - outline {
+                    for x in bar..bar + 12 {
+                        image.put_pixel(x, y, Rgb([0, 0, 0]));
+                    }
+                }
+            }
+            let detection = boxed_detection(width, height, [left, top, right, bottom]);
+
+            let inferred = infer_typography(&image, &detection).unwrap();
+
+            assert_eq!(inferred.color, [0, 0, 0], "outline {outline}");
+            assert_eq!(
+                inferred.stroke_color,
+                Some([255, 255, 255]),
+                "outline {outline}"
+            );
+        }
     }
 
     #[test]
