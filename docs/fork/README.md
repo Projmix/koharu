@@ -82,6 +82,18 @@ Known gaps after the rebuild:
   text blocks, page duplication.
 - Fork updater against `Projmix/koharu` releases (`docs/fork-releases.md`).
 - Research notes in `docs/research/` and plans in `docs/superpowers/plans/`.
+- Automatic typesetting diverges from upstream to match the owner's
+  hand-set Russian pages (numbers in [results.ru.md](results.ru.md#тайпинг)):
+  text inside a balloon that detection marks as dialogue takes the speech
+  kind font before scene markup; a word is split only when that buys at
+  least 1.25x the whole-word size; a line never ends on a one-letter
+  Cyrillic word, and a chain of them binds through to the next real word;
+  balloon auto-fit trades up to 20% of size for fewer lone one- or
+  two-letter inner lines and penalises a hyphen break that leaves such a
+  tail. Detection reads text paint against a screentone's 5x5 mean shade,
+  and rejects outline readings whose band is surrounded by its fill or
+  whose "outline" is a glyph enclosed by its own ground.
+
 
 ## JEV
 
