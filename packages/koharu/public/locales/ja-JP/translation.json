@@ -225,6 +225,8 @@
     "textDirection": "文字方向",
     "translation": "翻訳",
     "translationReview": "翻訳で罵倒表現が和らげられている可能性があります",
+    "shortenTranslation": "短くする",
+    "shortenTranslationHint": "収まるようにこの翻訳を短く書き直します。もう一度押すとさらに短くなります",
     "translationReviewKeep": "このままにする",
     "translationReviewKeepHint": "この翻訳を維持して警告を消す",
     "translationReviewReference": "機械翻訳",

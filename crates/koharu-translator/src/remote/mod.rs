@@ -51,6 +51,15 @@ pub(crate) async fn translate(
         )
         .into());
     }
+    // A shortening rewrite reads the current translation and its limit from
+    // the prompt; machine translation would only translate the source again.
+    if request.has_shorten() && !supports_structured_chapter(selection.provider) {
+        return Err(anyhow::anyhow!(
+            "{} cannot shorten a translation; choose a language-model provider",
+            selection.provider
+        )
+        .into());
+    }
     let model = || {
         selection
             .model

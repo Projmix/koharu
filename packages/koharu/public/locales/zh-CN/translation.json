@@ -225,6 +225,8 @@
     "textDirection": "文本方向",
     "translation": "译文",
     "translationReview": "译文可能弱化了粗口",
+    "shortenTranslation": "缩短",
+    "shortenTranslationHint": "将此译文改写得更短以便放下；再次点击可进一步缩短",
     "translationReviewKeep": "保留",
     "translationReviewKeepHint": "保留此译文并清除提醒",
     "translationReviewReference": "机器翻译",

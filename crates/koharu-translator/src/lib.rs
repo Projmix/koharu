@@ -39,7 +39,7 @@ fn chapter_output_budget(request: &TranslationRequest) -> anyhow::Result<u32> {
 
 pub use backend::{
     CharacterGender, MarkedRegion, MarkupCharacter, MarkupKind, MarkupOutcome, MarkupRegion,
-    MarkupRequest, MarkupWithheld, OcrRequest, PreviousMarkup, SegmentSpeaker,
+    MarkupRequest, MarkupWithheld, OcrRequest, PreviousMarkup, SegmentSpeaker, Shorten,
     TranslationCharacter, TranslationContext, TranslationRequest, TranslationSegmentMetadata,
     TranslationUnit,
 };

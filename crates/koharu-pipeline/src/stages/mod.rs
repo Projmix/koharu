@@ -102,6 +102,7 @@ pub(crate) struct StageInput {
     image_edit_reviewer: Option<Arc<dyn crate::ImageEditReviewer>>,
     stop: StopToken,
     ocr_pass: crate::stage::OcrPass,
+    shorten: bool,
 }
 
 impl StageInput {
@@ -124,6 +125,7 @@ impl StageInput {
             image_edit_reviewer: None,
             stop: StopToken::default(),
             ocr_pass: crate::stage::OcrPass::Final,
+            shorten: false,
         }
     }
 
@@ -139,6 +141,7 @@ impl StageInput {
             image_edit_reviewer: None,
             stop: StopToken::default(),
             ocr_pass: crate::stage::OcrPass::Final,
+            shorten: false,
         }
     }
 
@@ -157,6 +160,11 @@ impl StageInput {
 
     pub(crate) fn with_ocr_pass(mut self, pass: crate::stage::OcrPass) -> Self {
         self.ocr_pass = pass;
+        self
+    }
+
+    pub(crate) fn with_shorten(mut self, shorten: bool) -> Self {
+        self.shorten = shorten;
         self
     }
 

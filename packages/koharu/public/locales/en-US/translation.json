@@ -225,6 +225,8 @@
     "textDirection": "Text direction",
     "translation": "Translation",
     "translationReview": "Translation may have softened profanity",
+    "shortenTranslation": "Shorten",
+    "shortenTranslationHint": "Rewrite this translation shorter so it fits; press again to shorten further",
     "translationReviewKeep": "Keep",
     "translationReviewKeepHint": "Keep this translation and clear the warning",
     "translationReviewReference": "Machine translation",

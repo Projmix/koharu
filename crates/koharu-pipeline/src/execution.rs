@@ -37,6 +37,7 @@ pub(crate) struct Execution<'a> {
     started: Instant,
     inpainting_mask: Option<crate::InpaintingMask>,
     image_edit_reviewer: Option<Arc<dyn crate::ImageEditReviewer>>,
+    shorten: bool,
 }
 
 impl<'a> Execution<'a> {
@@ -53,6 +54,14 @@ impl<'a> Execution<'a> {
             .operation
             .stages()
             .map_err(|error| PipelineError::new(ErrorKind::InvalidInput, None, error))?;
+        let shorten = request.operation == crate::Operation::Shorten;
+        if shorten && !matches!(request.scope, crate::Scope::Entities(_)) {
+            return Err(PipelineError::new(
+                ErrorKind::InvalidInput,
+                Some(Stage::Translation),
+                anyhow::anyhow!("shortening applies to selected texts only"),
+            ));
+        }
         let scope = NormalizedScope::new(&snapshot, &request.scope, &stages)
             .map_err(|error| PipelineError::new(ErrorKind::InvalidInput, None, error))?;
         let pages = scope.pages().to_vec();
@@ -100,6 +109,7 @@ impl<'a> Execution<'a> {
             started,
             inpainting_mask: request.inpainting_mask,
             image_edit_reviewer: request.image_edit_reviewer,
+            shorten,
         })
     }
 
@@ -168,7 +178,8 @@ impl<'a> Execution<'a> {
         }
         .with_stop(self.stop.clone())
         .with_image_edit_reviewer(self.image_edit_reviewer.clone())
-        .with_ocr_pass(self.scheduler.ocr_pass(target));
+        .with_ocr_pass(self.scheduler.ocr_pass(target))
+        .with_shorten(self.shorten);
         Some(StageJob::new(
             stage,
             input,

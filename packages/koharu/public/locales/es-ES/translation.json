@@ -225,6 +225,8 @@
     "textDirection": "Dirección del texto",
     "translation": "Traducción",
     "translationReview": "La traducción puede haber suavizado las groserías",
+    "shortenTranslation": "Acortar",
+    "shortenTranslationHint": "Reescribir esta traducción más corta para que quepa; pulsa otra vez para acortarla más",
     "translationReviewKeep": "Conservar",
     "translationReviewKeepHint": "Conservar esta traducción y quitar el aviso",
     "translationReviewReference": "Traducción automática",

@@ -498,7 +498,9 @@ export type OpenAiConfig = Record<string, never>;
 
 export type OpenRouterConfig = Record<string, never>;
 
-export type Operation = { operation: "full" } | { operation: "through"; stage: Stage } | { operation: "only"; stage: Stage } | { operation: "stages"; stages: Stage[] };
+export type Operation = { operation: "full" } | { operation: "through"; stage: Stage } | { operation: "only"; stage: Stage } | { operation: "stages"; stages: Stage[] } | 
+/**  Rewrite the generated translations of the selected texts shorter. */
+{ operation: "shorten" };
 
 export type Page = {
 	id: EntityId,
@@ -775,6 +777,8 @@ export type TransformFrame = {
 export type Translation = {
 	text: string,
 	language: string | null,
+	/**  Written by the pipeline rather than typed by the user. */
+	generated: boolean,
 };
 
 export type TranslationConfig = {

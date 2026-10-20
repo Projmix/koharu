@@ -8,7 +8,7 @@ use koharu_scene::{
     Translation, TranslationReview,
 };
 use koharu_translator::{
-    Language, Provider, SegmentSpeaker, TranslationCharacter, TranslationContext,
+    Language, Provider, SegmentSpeaker, Shorten, TranslationCharacter, TranslationContext,
     TranslationRequest, TranslationSegmentMetadata, TranslationUnit, Translator,
 };
 
@@ -250,6 +250,13 @@ impl StageProcessor for Processor {
             !targets.is_empty() || !context.is_empty(),
             "Translation found no OCR text. Run Detection and OCR before Translation."
         );
+        if input.shorten {
+            anyhow::ensure!(
+                !targets.is_empty(),
+                "Only a generated translation can be shortened. Edit a typed translation directly."
+            );
+            return Ok(false);
+        }
         if targets.is_empty() {
             return Ok(true);
         }
@@ -365,14 +372,16 @@ fn collect_inputs(
             let Some(source) = content.source()? else {
                 continue;
             };
-            if source.text.value.trim().is_empty() {
+            let source = source.text.value;
+            if source.trim().is_empty() {
                 continue;
             }
+            let translation = input.scene.component::<Translation>(content.id())?;
             let source_region = content.source_region()?;
             if chapter && source_region.is_none() {
                 anyhow::bail!(
                     "Translation found OCR text '{}' without a source region on page {}",
-                    source.text.value,
+                    source,
                     page
                 );
             }
@@ -405,22 +414,34 @@ fn collect_inputs(
                 || role
                     .as_deref()
                     .is_some_and(|role| role.ends_with(".onomatopoeia") || role == "onomatopoeia");
-            if let Some(translation) = input.scene.component::<Translation>(content.id())?
+            if let Some(translation) = translation.as_ref()
                 && matches!(translation.text.origin, Origin::User)
             {
                 entries.push(OrderedEntry {
                     entry: TranslationEntry::Context(TranslationContext {
-                        source: source.text.value.clone(),
-                        translation: translation.text.value,
+                        source: source.clone(),
+                        translation: translation.text.value.clone(),
                     }),
                     bounds,
                 });
                 continue;
             }
+            // Shortening rewrites only a generated translation: a typed one
+            // stays the user's, and an untranslated text has nothing to shorten.
+            let shorten = match translation {
+                Some(translation) if input.shorten && !translation.text.value.trim().is_empty() => {
+                    Some(Shorten {
+                        max_chars: shortened_length(&translation.text.value),
+                        current: translation.text.value,
+                    })
+                }
+                _ if input.shorten => continue,
+                _ => None,
+            };
             entries.push(OrderedEntry {
                 entry: TranslationEntry::Target(Box::new(Target {
                     entity: content.id(),
-                    source: source.text.value,
+                    source,
                     page: page_index + 1,
                     metadata: TranslationSegmentMetadata {
                         role,
@@ -435,6 +456,7 @@ fn collect_inputs(
                         speech_kind: speech_kind.map(markup::translator_kind),
                         speaker,
                         continues,
+                        shorten,
                     },
                 })),
                 bounds,
@@ -458,6 +480,12 @@ fn collect_inputs(
         }
     }
     Ok((targets, context))
+}
+
+/// Each shortening asks for at most 70% of the current length, so pressing it
+/// again shortens further.
+fn shortened_length(current: &str) -> usize {
+    (current.trim().chars().count() * 7 / 10).max(1)
 }
 
 /// The project cast as the translation prompt sees it.
@@ -1352,6 +1380,67 @@ mod tests {
         session.commit(edit.finish().unwrap()).await.unwrap();
 
         assert!(processor().skip(&page_input(&session, page)).unwrap());
+    }
+
+    #[tokio::test]
+    async fn shortening_rewrites_only_generated_translations_within_a_limit() {
+        let mut session = koharu_scene::Session::memory().await.unwrap();
+        let mut edit = session.snapshot().edit();
+        let page = edit
+            .add_page(PageDraft::new("page", 120.0, 180.0), At::End)
+            .unwrap();
+        let (generated_content, _, _) = add_text(
+            &mut edit,
+            page,
+            "generated source",
+            (80.0, 10.0, 20.0, 30.0),
+        );
+        let (user_content, _, _) =
+            add_text(&mut edit, page, "user source", (50.0, 10.0, 20.0, 30.0));
+        add_text(&mut edit, page, "untranslated", (10.0, 10.0, 20.0, 30.0));
+        edit.set(
+            user_content,
+            &Translation {
+                text: Authored::user("Ты меня слышишь".to_owned()),
+                language: None,
+            },
+        )
+        .unwrap();
+        session.commit(edit.finish().unwrap()).await.unwrap();
+        let user_only = page_input(&session, page).with_shorten(true);
+        let generated = generation(PRODUCER, "test-translator").unwrap();
+        let mut edit = session.snapshot().edit_as(generated.clone());
+        edit.set(
+            generated_content,
+            &Translation {
+                text: Authored::generated("Да что ты вообще творишь".to_owned(), generated),
+                language: None,
+            },
+        )
+        .unwrap();
+        session.commit(edit.finish().unwrap()).await.unwrap();
+        let input = page_input(&session, page).with_shorten(true);
+
+        assert!(!processor().skip(&input).unwrap());
+        let (targets, context) = collect_inputs(&input, Language::Japanese).unwrap();
+        assert_eq!(context.len(), 1);
+        assert_eq!(
+            targets
+                .iter()
+                .map(|target| target.metadata.shorten.clone())
+                .collect::<Vec<_>>(),
+            [Some(Shorten {
+                current: "Да что ты вообще творишь".to_owned(),
+                max_chars: 16,
+            })]
+        );
+        assert!(
+            processor()
+                .skip(&user_only)
+                .unwrap_err()
+                .to_string()
+                .contains("generated translation")
+        );
     }
 
     #[tokio::test]

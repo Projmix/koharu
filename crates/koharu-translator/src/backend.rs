@@ -327,6 +327,12 @@ impl TranslationRequest {
             })
     }
 
+    pub(crate) fn has_shorten(&self) -> bool {
+        self.segment_metadata
+            .iter()
+            .any(|metadata| metadata.shorten.is_some())
+    }
+
     pub(crate) fn remove_image(&mut self) {
         self.image = None;
     }
@@ -431,6 +437,17 @@ pub struct TranslationSegmentMetadata {
     /// The stable segment ID of the earlier text this one continues.
     #[serde(default)]
     pub continues: Option<String>,
+    /// Rewrite this existing translation shorter instead of translating anew.
+    #[serde(default)]
+    pub shorten: Option<Shorten>,
+}
+
+/// An existing translation that does not fit its box, and the length its
+/// rewrite must not exceed.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Shorten {
+    pub current: String,
+    pub max_chars: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

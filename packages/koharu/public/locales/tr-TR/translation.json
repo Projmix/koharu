@@ -225,6 +225,8 @@
     "textDirection": "Metin yönü",
     "translation": "Çeviri",
     "translationReview": "Çeviri küfürleri yumuşatmış olabilir",
+    "shortenTranslation": "Kısalt",
+    "shortenTranslationHint": "Bu çeviriyi sığması için daha kısa yeniden yaz; daha da kısaltmak için tekrar bas",
     "translationReviewKeep": "Koru",
     "translationReviewKeepHint": "Bu çeviriyi koru ve uyarıyı kaldır",
     "translationReviewReference": "Makine çevirisi",

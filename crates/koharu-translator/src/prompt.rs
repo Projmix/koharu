@@ -52,6 +52,11 @@ pub fn translation_material(request: &TranslationRequest) -> anyhow::Result<(Str
                 speech_kind: metadata.speech_kind,
                 speaker: metadata.speaker.as_ref(),
                 continues: metadata.continues.as_deref(),
+                current_translation: metadata
+                    .shorten
+                    .as_ref()
+                    .map(|shorten| shorten.current.as_str()),
+                max_chars: metadata.shorten.as_ref().map(|shorten| shorten.max_chars),
             }
         })
         .collect::<Vec<_>>();
@@ -292,6 +297,10 @@ fn translation_system_prompt(request: &TranslationRequest) -> String {
 
     if request.has_markup() {
         prompt.push_str("\n- Scene markup describes some segments: `speech_kind` is speech, thought, narration, sound-effect, sign, or aside; `speaker` names who says it and their gender; `continues` is the ID of the earlier segment whose sentence this one carries on; `characters` lists the cast. Use the speaker's gender for grammatical agreement (for example Russian and other Slavic past-tense verbs and adjectives), keep each character's voice, and translate a `continues` chain as one sentence split across its boxes while keeping every segment separate.");
+    }
+
+    if request.has_shorten() {
+        prompt.push_str("\n- A segment with `current_translation` and `max_chars` already has a translation that does not fit its box. Rewrite that translation shorter, in at most `max_chars` characters, keeping its meaning, the speaker's voice and gender agreement, and the strength of any profanity. Drop filler words and restate concisely instead of cutting the sentence off.");
     }
 
     if request.is_chapter() {
@@ -745,6 +754,10 @@ struct TranslationInputSegment<'a> {
     speaker: Option<&'a SegmentSpeaker>,
     #[serde(skip_serializing_if = "Option::is_none")]
     continues: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    current_translation: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_chars: Option<usize>,
 }
 
 #[derive(Serialize)]
@@ -1153,6 +1166,34 @@ mod tests {
         assert_eq!(input["segments"][0]["source_text"], "sound");
         assert_eq!(input["segments"][0]["role"], "dev.koharu.text.onomatopoeia");
         assert_eq!(input["segments"][0]["inside_balloon"], false);
+    }
+
+    #[test]
+    fn shortening_passes_the_current_translation_and_its_limit() {
+        let request = TranslationRequest::new(["source", "other"], Language::Russian)
+            .with_segment_metadata([
+                TranslationSegmentMetadata {
+                    shorten: Some(crate::Shorten {
+                        current: "Длинный перевод".to_owned(),
+                        max_chars: 10,
+                    }),
+                    ..Default::default()
+                },
+                TranslationSegmentMetadata::default(),
+            ])
+            .unwrap();
+        let (system, user) = prompts(&request).unwrap();
+        let input: serde_json::Value = serde_json::from_str(&user).unwrap();
+        assert_eq!(
+            input["segments"][0]["current_translation"],
+            "Длинный перевод"
+        );
+        assert_eq!(input["segments"][0]["max_chars"], 10);
+        assert!(input["segments"][1].get("max_chars").is_none());
+        assert!(system.contains("`max_chars`"));
+
+        let (system, _) = prompts(&TranslationRequest::new(["source"], Language::Russian)).unwrap();
+        assert!(!system.contains("`max_chars`"));
     }
 
     #[test]

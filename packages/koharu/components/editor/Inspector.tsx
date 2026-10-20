@@ -20,6 +20,7 @@ import {
   Minus,
   Plus,
   RotateCcw,
+  Scissors,
   SquareDashed,
   Trash2,
   TriangleAlert,
@@ -1220,6 +1221,10 @@ function LayerEditor({ layer, onDelete }: { layer: Layer; onDelete?: () => void 
   const translationInput = useRef<HTMLTextAreaElement>(null)
   const pendingTextFocus = useKoharuStore((state) => state.pendingTextFocus)
   const textTransformTarget = useKoharuStore((state) => state.textTransformTarget)
+  const fitWarning = useKoharuStore((state) => state.textFitWarnings[layer.id])
+  const processing = useKoharuStore((state) =>
+    Object.values(state.jobs).some((job) => job.state === 'running'),
+  )
   useEffect(() => {
     if (pendingTextFocus !== layer.id || !translationInput.current) return
     translationInput.current.focus()
@@ -1403,6 +1408,35 @@ function LayerEditor({ layer, onDelete }: { layer: Layer; onDelete?: () => void 
               }
             />
           </InspectorField>
+          {(fitWarning === 'overflow' || fitWarning === 'below_readable_size') &&
+            layer.content.translation?.generated &&
+            layer.content.translation.text.trim() && (
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      type='button'
+                      variant='outline'
+                      size='xs'
+                      data-testid={`shorten-translation-${layer.id}`}
+                      disabled={processing}
+                      className='h-5 gap-1 justify-self-start rounded-md px-1.5 text-[9px] font-normal'
+                      onClick={() =>
+                        void call(
+                          commands.process,
+                          { scope: 'entities', value: [layer.id] },
+                          { operation: 'shorten' },
+                        ).catch(() => undefined)
+                      }
+                    />
+                  }
+                >
+                  <Scissors className='size-3' />
+                  {t('inspector.shortenTranslation')}
+                </TooltipTrigger>
+                <TooltipContent side='left'>{t('inspector.shortenTranslationHint')}</TooltipContent>
+              </Tooltip>
+            )}
           {layer.content.translation_review && (
             <div
               data-testid={`translation-review-${layer.id}`}

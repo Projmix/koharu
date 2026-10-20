@@ -225,6 +225,8 @@
     "textDirection": "Направление текста",
     "translation": "Перевод",
     "translationReview": "Перевод мог смягчить ругательства",
+    "shortenTranslation": "Сократить",
+    "shortenTranslationHint": "Переписать перевод короче, чтобы он поместился; повторное нажатие сокращает ещё",
     "translationReviewKeep": "Оставить",
     "translationReviewKeepHint": "Оставить этот перевод и снять предупреждение",
     "translationReviewReference": "Машинный перевод",

@@ -282,7 +282,7 @@ describe('canvas interaction adapter', () => {
       content: {
         id: `${id}-content`,
         source: { text: source, language: 'ja' },
-        translation: { text: translation, language: 'en' },
+        translation: { text: translation, language: 'en', generated: true },
         translation_review: null,
         markup: null,
         role: 'dev.koharu.text.dialogue',

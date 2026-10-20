@@ -137,7 +137,7 @@ const textLayer: Layer = {
   content: {
     id: 'content',
     source: { text: 'こんにちは', language: 'ja' },
-    translation: { text: 'Hello', language: null },
+    translation: { text: 'Hello', language: null, generated: true },
     translation_review: null,
     markup: null,
     role: null,
@@ -165,7 +165,7 @@ const secondLayer: Layer = {
   content: {
     ...textLayer.content,
     id: 'second-content',
-    translation: { text: 'Second', language: null },
+    translation: { text: 'Second', language: null, generated: true },
   },
 }
 
@@ -175,7 +175,7 @@ const thirdLayer: Layer = {
   content: {
     ...textLayer.content,
     id: 'third-content',
-    translation: { text: 'Third', language: null },
+    translation: { text: 'Third', language: null, generated: true },
   },
 }
 
@@ -1457,6 +1457,45 @@ describe('greenfield editor', () => {
 
     expect(screen.getByTestId('text-fit-warning-element')).toHaveAccessibleName(
       'Text does not fit its area',
+    )
+  })
+
+  it('offers shortening only for a generated translation too long for its area', async () => {
+    installProject()
+    const process = vi.spyOn(commands, 'process').mockResolvedValue('job')
+    const inspector = (
+      <TooltipProvider>
+        <Inspector />
+      </TooltipProvider>
+    )
+    const typed = {
+      ...textLayer,
+      content: {
+        ...textLayer.content,
+        translation: { text: 'Hello', language: null, generated: false },
+      },
+    } satisfies Layer
+    for (const [layer, warning] of [
+      [textLayer, 'low_contrast'],
+      [typed, 'overflow'],
+    ] as const) {
+      queryClient.setQueryData(pageKey, (page: Page) => ({ ...page, layers: [layer] }))
+      useKoharuStore.setState({ textFitWarnings: { element: warning } })
+      const { unmount } = render(inspector)
+      expect(screen.getByTestId('edit-translation-element')).toBeInTheDocument()
+      expect(screen.queryByTestId('shorten-translation-element')).not.toBeInTheDocument()
+      unmount()
+    }
+
+    queryClient.setQueryData(pageKey, (page: Page) => ({ ...page, layers: [textLayer] }))
+    useKoharuStore.setState({ textFitWarnings: { element: 'overflow' } })
+    render(inspector)
+    fireEvent.click(screen.getByTestId('shorten-translation-element'))
+    await waitFor(() =>
+      expect(process).toHaveBeenCalledWith(
+        { scope: 'entities', value: ['element'] },
+        { operation: 'shorten' },
+      ),
     )
   })
 

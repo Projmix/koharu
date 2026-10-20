@@ -205,6 +205,8 @@ pub struct SourceText {
 pub struct Translation {
     pub text: String,
     pub language: Option<String>,
+    /// Written by the pipeline rather than typed by the user.
+    pub generated: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize, Type)]
@@ -2201,6 +2203,7 @@ impl Project {
                 language: source.language.map(|language| language.to_string()),
             });
             let translation = content.translation()?.map(|translation| Translation {
+                generated: matches!(translation.text.origin, koharu_scene::Origin::Generated(_)),
                 text: translation.text.value,
                 language: translation.language.map(|language| language.to_string()),
             });

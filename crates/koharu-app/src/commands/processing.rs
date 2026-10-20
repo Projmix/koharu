@@ -156,9 +156,9 @@ fn requests_inpainting(operation: &koharu_pipeline::Operation) -> bool {
         | koharu_pipeline::Operation::Only {
             stage: koharu_pipeline::Stage::Inpainting,
         } => true,
-        koharu_pipeline::Operation::Through { .. } | koharu_pipeline::Operation::Only { .. } => {
-            false
-        }
+        koharu_pipeline::Operation::Through { .. }
+        | koharu_pipeline::Operation::Only { .. }
+        | koharu_pipeline::Operation::Shorten => false,
         koharu_pipeline::Operation::Stages { stages } => {
             stages.contains(&koharu_pipeline::Stage::Inpainting)
         }
