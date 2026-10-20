@@ -24,9 +24,8 @@ chapter that needs no manual edits. Each lands as its own change.
 
 1. **Measure the cross-check mode on the chapter.** The test copy was read
    before the mode existed, so its effect on translation is unmeasured.
-2. **Hayai repetition loops** («かかかか…»): treat a repeated glyph or
-   syllable run as a failure and send the crop to the API even if Manga
-   OCR agrees.
+2. **Hayai repetition loops** («かかかか…»). **Done:** a run of one to three
+   characters repeated 8 times is never an agreement and goes to the API.
 3. **Flag disputed text** (API failed, or disagreed with both local
    readings) in the layer list, like fit warnings.
 

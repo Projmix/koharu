@@ -251,13 +251,31 @@ fn source_is_complete(
 /// Mark each primary reading with whether the second local reader produced
 /// the same text. Comparison ignores width, whitespace and the ellipsis
 /// spelling, which the two models write differently for the same glyphs.
+/// A reading that repeats a short run many times is how a decoder loop looks
+/// (Hayai's "かかかか…"), so it goes to the API even when both readers agree;
+/// a real drawn-out scream costs one API read there.
 fn cross_check(mut results: Vec<OcrResult>, checks: &[OcrResult]) -> Vec<OcrResult> {
     for (result, check) in results.iter_mut().zip(checks) {
         let agreed = !result.text.trim().is_empty()
+            && !repeats_like_a_decoder_loop(&result.text)
             && agreement_key(&result.text) == agreement_key(&check.text);
         result.confidence = Some(if agreed { AGREED_CONFIDENCE } else { 0.0 });
     }
     results
+}
+
+const LOOP_REPEATS: usize = 8;
+const LOOP_UNIT_MAX: usize = 3;
+
+fn repeats_like_a_decoder_loop(text: &str) -> bool {
+    let characters = agreement_key(text).chars().collect::<Vec<_>>();
+    (1..=LOOP_UNIT_MAX).any(|unit| {
+        let span = unit * LOOP_REPEATS;
+        characters.len() >= span
+            && characters
+                .windows(span)
+                .any(|window| window.chunks(unit).all(|chunk| chunk == &window[..unit]))
+    })
 }
 
 fn agreement_key(text: &str) -> String {
@@ -889,6 +907,29 @@ mod tests {
             Some(&analysis(0.0)),
             Some(&api)
         ));
+    }
+
+    #[test]
+    fn a_looping_reading_goes_to_the_api_even_when_both_readers_agree() {
+        let reading = |text: &str| OcrResult {
+            content: EntityId::new(),
+            region: EntityId::new(),
+            geometry: Geometry::rectangle(0.0, 0.0, 10.0, 10.0),
+            text: text.to_owned(),
+            confidence: None,
+        };
+        let looped = "かかかかかかかかかかかか";
+        let syllables = "ぬちゅぬちゅぬちゅぬちゅぬちゅぬちゅぬちゅぬちゅ";
+        let short_scream = "ああああっ";
+        let primary = vec![reading(looped), reading(syllables), reading(short_scream)];
+        let checks = [reading(looped), reading(syllables), reading(short_scream)];
+        assert_eq!(
+            cross_check(primary, &checks)
+                .iter()
+                .map(|result| result.confidence)
+                .collect::<Vec<_>>(),
+            [Some(0.0), Some(0.0), Some(1.0)]
+        );
     }
 
     #[test]
