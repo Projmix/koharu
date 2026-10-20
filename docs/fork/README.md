@@ -4,7 +4,7 @@ This file describes how the fork differs from upstream
 [koharu-rs/koharu](https://github.com/koharu-rs/koharu), what state `main` is
 in, and where JEV fits in the pipeline. Read it together with the root
 `AGENTS.md`, whose rules still apply. Update this file when fork behavior or
-the plan changes; it was last checked on 2026-10-18 against the rebuilt `main`.
+the plan changes; it was last checked on 2026-10-20.
 
 ## Product direction
 
@@ -86,13 +86,16 @@ Known gaps after the rebuild:
   hand-set Russian pages (numbers in [results.ru.md](results.ru.md#тайпинг)):
   text inside a balloon that detection marks as dialogue takes the speech
   kind font before scene markup; a word is split only when that buys at
-  least 1.25x the whole-word size; a line never ends on a one-letter
+  least 1.15x the whole-word size; a line never ends on a one-letter
   Cyrillic word, and a chain of them binds through to the next real word;
   balloon auto-fit trades up to 20% of size for fewer lone one- or
   two-letter inner lines and penalises a hyphen break that leaves such a
   tail. Detection reads text paint against a screentone's 5x5 mean shade,
   and rejects outline readings whose band is surrounded by its fill or
-  whose "outline" is a glyph enclosed by its own ground.
+  whose "outline" is a glyph enclosed by its own ground. An automatic
+  outline is capped at 0.1x the font size, and text inside a balloon gets
+  none; a user-set outline is kept. Spaced sound-effect letters stack one
+  per line. The Border row has a swap button for text and outline colours.
 
 
 ## JEV
@@ -114,9 +117,40 @@ deterministic offline fallback. The service's API contract was never
 verified, and the client read keys from environment variables, which
 `AGENTS.md` forbids for the desktop app. When reimplementing, keep the typed
 primitives, take the key only from `koharu_secrets`, and verify the API
-against its documentation. The API facts checked on 2026-10-18 (text-only
-input, the real endpoint, pricing) and the off-by-default toggle are in
-[improvement-plan.md](improvement-plan.md#jev).
+against its documentation.
+
+### API facts
+
+Checked on 2026-10-18 against public sources:
+
+- JEV is TypeSafe AI's "System One" decision model (`jev-1.13.0`, alias
+  `jev-latest`). It returns typed answers, not text: `noul` (probability of
+  yes), `choice` (up to 255 options with per-option probabilities and
+  confidence) and `score` (2 to 10 ordered levels).
+- **Input is text only.** JEV cannot look at the crop. The image-grounded
+  reading must come from the vision LLM; JEV arbitrates from text and numeric
+  features (both candidates, local confidence, agreement, character classes,
+  length against region area, column count, source language).
+- The request is `POST .../v1/systemone` with a `state` and a `questions`
+  map, bearer auth. LLM Gateway also serves it and announced on 2026-10-12 an
+  OpenAI-compatible `/v1/decisions` endpoint and the planned deprecation of
+  `/v1/systemone`. `d1ebfef` called `/v1/system-one/evaluate`, which does not
+  match either.
+- Price on LLM Gateway: $0.042 per million input tokens, output free, 600
+  requests per minute. All questions in one request share one read of the
+  state, so one batch per page is the right unit.
+
+Implementation rules:
+
+- Off by default. A settings toggle enables it; the key is stored only in
+  `koharu_secrets` (OS keychain). No environment variable or project file.
+- Confirm the TypeSafe base URL and the endpoint that will remain
+  (`/v1/systemone` or `/v1/decisions`) from TypeSafe's own documentation
+  before writing the client. A community Rust crate (`typesafe-rs` 0.1.0)
+  exists; prefer a small `reqwest` client like the other providers, since a
+  new dependency needs an issue first.
+- When JEV is unreachable, fall back to "flag every disagreement" and report
+  that the judge was offline.
 
 ### Planned OCR flow: local, then LLM, then JEV decides
 
