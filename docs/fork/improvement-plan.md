@@ -17,14 +17,20 @@ chapter that needs no manual edits. Each lands as its own change.
 2. **Vertical-text boxes cross panel borders.** The fit area of free text
    follows the Japanese vertical box, which can reach into the next panel
    (p7 «ДА БЛЯТЬ»). Clip the free-text fit area to its panel.
-3. Remaining box errors: outlined sound effects missed, false sound
-   effects on artwork, merged or split boxes. Measured 2026-10-20: all 140
-   balloon blocks have a matching fresh detection box, but 22 of the 78
-   blocks outside balloons have none (missed, merged or split): the
-   yellow lines on the black p4, SFX written as spaced letters, several
-   outlined SFX. They also cause 7 of the 9 blocks the owner outlined and
-   automation did not, since nothing is sampled without a box. Classify
-   the 22 and fix the most common kind.
+3. Remaining box errors. Of the 78 owner blocks outside balloons, 25 have
+   no matching fresh detection box (all 140 balloon blocks match). Sorted
+   by hand on 2026-10-20: 12 are found, but the owner moved or split the
+   block away from the lettering; 4 (p4) have no text in the source image;
+   9 are real misses, all scored by the model just below its thresholds
+   (text 0.25, sound effects 0.2): small hand-drawn sound effects on
+   screentone (ハァ, ぐ, ふきふき, グサッ; 0.14 to 0.23), white letters in
+   black shapes on p22 (0.11 to 0.17), an outlined ポ (0.09) and a sign
+   (事務所, 0.23). Lowering both thresholds to 0.2/0.14 finds about 10 of
+   them but adds about 14 boxes on hair, speed lines and screentone.
+   **Done:** a text candidate down to 0.1 is kept when it is light
+   lettering inside a closed dark balloon. On the chapter this added six
+   boxes, all real text (p22 ヌチュッ, ヌチ, a whole チュコ, the cover
+   lines), and none on artwork. Open: the hand-drawn sound effects.
 
 Checked and rejected: choosing an outline from background busyness. The
 ring standard deviation around non-balloon blocks does not separate the

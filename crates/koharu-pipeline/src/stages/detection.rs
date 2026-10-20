@@ -72,6 +72,12 @@ const DARK_BALLOON_LUMINANCE: u8 = 96;
 const DARK_BALLOON_CORE_FRACTION: f32 = 0.5;
 const DARK_BALLOON_TEXT_SPAN: f32 = 0.8;
 const DARK_BALLOON_MIN_LETTERING: f32 = 0.03;
+/// Light lettering on a dark fill is where the layout model is least sure: it
+/// scores such text below its class threshold. Text candidates down to this
+/// score are kept when they are lettering inside a closed dark balloon; the
+/// rest of the page keeps the model's thresholds, because lowering them
+/// everywhere admits screentone, hair and speed lines as text.
+const INVERTED_TEXT_MIN_SCORE: f32 = 0.1;
 const FREE_TEXT_ROLE: &str = "dev.koharu.text.free-text";
 const DIALOGUE_ROLE: &str = "dev.koharu.text.dialogue";
 const ONOMATOPOEIA_ROLE: &str = "dev.koharu.text.onomatopoeia";
@@ -276,10 +282,34 @@ impl Model {
             let network = network
                 .lock()
                 .map_err(|_| anyhow!("layout model lock is poisoned"))?;
-            network.inference_with_thresholds(&image, thresholds)
+            let mut lowered = thresholds;
+            lowered.text = lowered.text.min(INVERTED_TEXT_MIN_SCORE);
+            lowered.onomatopoeia = lowered.onomatopoeia.min(INVERTED_TEXT_MIN_SCORE);
+            let mut output = network.inference_with_thresholds(&image, lowered)?;
+            keep_confident_or_inverted(&mut output.detections, thresholds, &image);
+            Ok(output)
         })
         .await
     }
+}
+
+/// Keeps detections at their class threshold, and text below it only where
+/// it is light lettering inside a closed dark balloon.
+fn keep_confident_or_inverted(
+    detections: &mut Vec<KoharuLayoutDetection>,
+    thresholds: KoharuLayoutThresholds,
+    image: &DynamicImage,
+) {
+    let mut rgb = None;
+    detections.retain(|detection| {
+        let threshold = match detection.label.as_str() {
+            "text" => thresholds.text,
+            "onomatopoeia" => thresholds.onomatopoeia,
+            _ => return true,
+        };
+        detection.score >= threshold
+            || dark_balloon(rgb.get_or_insert_with(|| image.to_rgb8()), detection.bbox).is_some()
+    });
 }
 
 struct DetectedRegion<'a> {
@@ -2957,12 +2987,14 @@ fn area(bounds: [f32; 4]) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use image::{Rgb, RgbImage};
+    use image::{DynamicImage, Rgb, RgbImage};
     use imageproc::{
         distance_transform::Norm,
         morphology::{close, dilate},
     };
-    use koharu_ml::koharu_layout_rfdetr_seg_2xl::{KoharuLayoutDetection, KoharuLayoutMask};
+    use koharu_ml::koharu_layout_rfdetr_seg_2xl::{
+        KoharuLayoutDetection, KoharuLayoutMask, KoharuLayoutThresholds,
+    };
     use koharu_scene::{
         At, BubbleRegion, FitsTo, FlowsIn, Geometry, Inside, Origin, PageDraft, Session,
         TextLayout, TextLayoutKind, TextRegion, TextRole, Typography, WritingMode,
@@ -2974,10 +3006,10 @@ mod tests {
         FREE_TEXT_ROLE, ImageSize, InferredTypography, KoharuLayoutRFDetrSeg2XLConfig, LayoutItem,
         LayoutKind, MaskPixel, ONOMATOPOEIA_ROLE, PageRegions, Processor, RecognizedFrom,
         RegionOutput, StageInput, StageProcessor, best_container, clamp_to_image, closed_mask_for,
-        color_palette, dark_balloons, generation, infer_typography, layout_order,
-        link_dialogue_regions, mask_containment, mask_for, mask_geometry, non_maximum_suppression,
-        normalize_text_color, remove_nested_text_detections, remove_page_numbers,
-        remove_spurious_onomatopoeia, write_region,
+        color_palette, dark_balloons, generation, infer_typography, keep_confident_or_inverted,
+        layout_order, link_dialogue_regions, mask_containment, mask_for, mask_geometry,
+        non_maximum_suppression, normalize_text_color, remove_nested_text_detections,
+        remove_page_numbers, remove_spurious_onomatopoeia, write_region,
     };
 
     #[test]
@@ -4627,6 +4659,51 @@ mod tests {
         assert!((top - 50.0).abs() <= 2.0 && (bottom - 150.0).abs() <= 2.0);
         assert!(balloons[0].mask.contains(100, 100));
         assert!(!balloons[0].mask.contains(83, 63));
+    }
+
+    #[test]
+    fn unsure_text_is_kept_only_as_light_lettering_in_a_dark_balloon() {
+        // The black ellipse with white lettering from the balloon test on the
+        // left, the same lettering in black on plain paper on the right.
+        let mut image = RgbImage::from_pixel(400, 200, Rgb([255, 255, 255]));
+        for y in 0..200_u32 {
+            for x in 0..200_u32 {
+                let dx = (x as f32 - 100.0) / 60.0;
+                let dy = (y as f32 - 100.0) / 40.0;
+                if dx * dx + dy * dy <= 1.0 {
+                    image.put_pixel(x, y, Rgb([20, 20, 20]));
+                }
+            }
+        }
+        for x in (80..120).step_by(8) {
+            for y in 90..110 {
+                for stroke in x..x + 3 {
+                    image.put_pixel(stroke, y, Rgb([250, 250, 250]));
+                    image.put_pixel(stroke + 200, y, Rgb([20, 20, 20]));
+                }
+            }
+        }
+        let thresholds = KoharuLayoutThresholds {
+            text: 0.25,
+            onomatopoeia: 0.2,
+            bubble: 0.5,
+            panel: 0.5,
+        };
+        let mut detections = vec![
+            detection("onomatopoeia", 0.12, [78.0, 88.0, 122.0, 112.0]),
+            detection("text", 0.12, [278.0, 88.0, 322.0, 112.0]),
+            detection("text", 0.3, [278.0, 88.0, 322.0, 112.0]),
+            detection("bubble", 0.6, [40.0, 60.0, 160.0, 140.0]),
+        ];
+        keep_confident_or_inverted(&mut detections, thresholds, &DynamicImage::ImageRgb8(image));
+        let kept = detections
+            .iter()
+            .map(|detection| (detection.label.as_str(), detection.score))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            kept,
+            [("onomatopoeia", 0.12), ("text", 0.3), ("bubble", 0.6)]
+        );
     }
 
     #[test]
