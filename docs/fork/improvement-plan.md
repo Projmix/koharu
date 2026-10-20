@@ -49,15 +49,24 @@ owner's outlined blocks from the rest.
    $0.30). Of 100 real differences from the old text, the new reading is
    right in 73, the old in 3, both are equal in 8, and in 16 the OCR
    region does not cover the whole text. Two of the three regressions are
-   Hayai and Manga OCR agreeing on the same mistake (item 3).
+   disagreements whose API request failed, so Hayai's draft stayed
+   (item 4).
 2. **Hayai repetition loops** («かかかか…»). **Done:** a run of one to three
    characters repeated 8 times is never an agreement and goes to the API.
 3. **Local confidence:** today it is only agreement (1 or 0), so two
    readers agreeing on the same mistake pass silently. The local decoders
    can expose token probabilities without an extra pass; send
-   low-confidence agreements to the API too.
+   low-confidence agreements to the API too. **Measured and rejected:**
+   2 of 164 agreements are wrong on the 240 crops and none on the chapter
+   (regions that cover the text). No threshold improves the result: a
+   Manga OCR minimum below 0.5 sends 4.2 points more regions to the API
+   and raises handwritten CER from 2.37% to 2.56%. The confident mistake
+   (コネが read as これが, every token above 0.97) is out of reach. No
+   code landed.
 4. **Flag disputed text** (API failed, or disagreed with both local
-   readings) in the layer list, like fit warnings.
+   readings) in the layer list, like fit warnings. Two of the chapter's
+   three regressions are this case: the readers disagreed, the API
+   request failed and Hayai's draft stayed silently.
 
 ## Scene markup
 
