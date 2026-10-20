@@ -278,7 +278,6 @@ fn translation_system_prompt(request: &TranslationRequest) -> String {
             - Keep rough, casual, or rude speech just as rough; do not turn it into neutral or polite wording.
             - Localize idioms and sound effects naturally while keeping wording concise enough for speech bubbles.
             - Write a sound effect as the bare sound word lettered on the page, without asterisks, brackets, or other markup.
-            - Many onomatopoeic words depict a motion, texture, or state rather than a sound (for example Japanese gitaigo such as squishing, sliding, or trembling). Render what the word depicts in the page's action, never an unrelated stock sound such as a kiss.
             - Use surrounding segments only for disambiguation and continuity; never merge or split segments.
             - Each segment may include semantic metadata: `role` is the existing scene text role, and `inside_balloon` indicates the existing detected dialogue-balloon relation. Use these hints to distinguish dialogue, captions, and sound effects, but never alter segment boundaries.
             - Write every `translated_text` value only in {target}; do not include notes, explanations, or alternatives.
