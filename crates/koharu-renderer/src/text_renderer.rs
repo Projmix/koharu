@@ -39,7 +39,7 @@ pub(crate) struct TextNodeDescriptor {
     pub(crate) foreground_color: [u8; 4],
     pub(crate) stroke: Option<StrokeOptions>,
     /// The outline width was measured on the source lettering by detection,
-    /// not chosen for this text; see `MEASURED_STROKE_MAX_SIZE_RATIO`.
+    /// not chosen for this text; see `measured_stroke_width`.
     pub(crate) measured_stroke: bool,
     pub(crate) line_height: f32,
     pub(crate) letter_spacing: f32,
@@ -69,7 +69,12 @@ pub(crate) struct RenderedTextMetadata {
 /// translated text it swallows the art and spills out of panels. The owner
 /// outlines at a median 0.1 of the font size (at most 0.21 on the test
 /// chapter), so a measured outline is drawn no wider than that median.
-const MEASURED_STROKE_MAX_SIZE_RATIO: f32 = 0.1;
+/// Editing the style of such text pins the capped width; see
+/// `Project::set_typography`.
+#[must_use]
+pub fn measured_stroke_width(width_px: f32, font_size: f32) -> f32 {
+    width_px.min(font_size * 0.1)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct StrokeOptions {
@@ -268,9 +273,7 @@ impl TextRenderer {
         let mut resources = Vec::new();
         if let Some(mut stroke) = descriptor.stroke {
             if descriptor.measured_stroke {
-                stroke.width_px = stroke
-                    .width_px
-                    .min(layout.font_size * MEASURED_STROKE_MAX_SIZE_RATIO);
+                stroke.width_px = measured_stroke_width(stroke.width_px, layout.font_size);
             }
             options.stroke = Some(stroke);
         }
@@ -559,7 +562,7 @@ mod tests {
         };
 
         for font_size in [12.0, 20.0, 40.0, 90.0] {
-            let cap = font_size * MEASURED_STROKE_MAX_SIZE_RATIO;
+            let cap = font_size * 0.1;
             assert!((padding(font_size, true) - cap.min(12.0)).abs() < 1e-3);
             assert!((padding(font_size, false) - 12.0).abs() < 1e-3);
         }

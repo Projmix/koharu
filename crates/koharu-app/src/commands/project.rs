@@ -1470,15 +1470,33 @@ impl Project {
         self.commit(patch).await
     }
 
+    /// `laid_out_size` is the font size the presented page drew a layer at.
+    /// A user edit pins detected typography as the user's, so an outline the
+    /// edit leaves untouched is stored at the capped width the renderer drew
+    /// rather than the raw measurement.
     pub(crate) async fn set_typography(
         &mut self,
         updates: Vec<TypographyUpdate>,
+        laid_out_size: impl Fn(EntityId) -> Option<f32>,
     ) -> Result<Commit> {
         let snapshot = self.snapshot();
         let updates = updates
             .into_iter()
-            .map(|update| {
+            .map(|mut update| {
                 let content = Self::text_content(&snapshot, update.layer)?;
+                if let Some(previous) = snapshot.component::<SceneTypography>(update.layer)?
+                    && matches!(previous.origin, Origin::Generated(_))
+                    && let Some(width) = previous.stroke_width
+                    && update.typography.stroke_width == Some(width)
+                    && let Some(size) = if update.typography.auto_fit {
+                        laid_out_size(update.layer)
+                    } else {
+                        update.typography.size
+                    }
+                {
+                    update.typography.stroke_width =
+                        Some(koharu_renderer::measured_stroke_width(width, size));
+                }
                 Ok((update, content))
             })
             .collect::<Result<Vec<_>>>()?;
@@ -3702,6 +3720,81 @@ mod tests {
             .unwrap();
         assert_eq!(geometry.points[0].x, 68.0);
         assert_eq!(geometry.points[3].y, 91.0);
+    }
+
+    #[tokio::test]
+    async fn editing_detected_typography_keeps_the_drawn_outline_width() {
+        let mut session = Session::memory().await.unwrap();
+        let mut setup = session.snapshot().edit();
+        let page = setup
+            .add_page(PageDraft::new("page", 100.0, 100.0), At::End)
+            .unwrap();
+        let content = setup.add_text_content(page, At::End).unwrap();
+        let layer = setup
+            .add_text_layer(
+                page,
+                At::End,
+                content,
+                &SceneTextLayout {
+                    origin: Origin::User,
+                    kind: TextLayoutKind::Paragraph,
+                    angle_degrees: None,
+                },
+            )
+            .unwrap();
+        let detected = SceneTypography {
+            origin: Origin::Generated(Generation::new(
+                ProducerId::new("dev.koharu.pipeline.detection").expect("valid producer"),
+            )),
+            preferred_font: None,
+            font_weight: None,
+            font_style: None,
+            size: None,
+            auto_fit: true,
+            color: Some([0, 0, 0, 255]),
+            stroke_color: Some([255, 255, 255, 255]),
+            stroke_width: Some(12.0),
+            alignment: None,
+            writing_mode: None,
+            extensions: Default::default(),
+        };
+        session.commit(setup.finish().unwrap()).await.unwrap();
+        let mut detection = session.snapshot().edit_as(Generation::new(
+            ProducerId::new("dev.koharu.pipeline.detection").expect("valid producer"),
+        ));
+        detection.set(layer, &detected).unwrap();
+        session.commit(detection.finish().unwrap()).await.unwrap();
+        let mut project = Project::new(session, "test".to_owned());
+        let recolored = |stroke_width| TypographyUpdate {
+            layer,
+            typography: Typography {
+                color: Some([200, 0, 0, 255]),
+                stroke_width,
+                ..Project::typography_view(detected.clone())
+            },
+        };
+        let stored_width = |project: &Project| {
+            project
+                .snapshot()
+                .component::<SceneTypography>(layer)
+                .unwrap()
+                .unwrap()
+                .stroke_width
+        };
+
+        let commit = project
+            .set_typography(vec![recolored(Some(12.0))], |_| Some(20.0))
+            .await
+            .unwrap();
+        project.record_commit(&commit);
+        assert_eq!(stored_width(&project), Some(2.0));
+
+        let commit = project
+            .set_typography(vec![recolored(Some(5.0))], |_| Some(20.0))
+            .await
+            .unwrap();
+        project.record_commit(&commit);
+        assert_eq!(stored_width(&project), Some(5.0));
     }
 
     #[tokio::test]

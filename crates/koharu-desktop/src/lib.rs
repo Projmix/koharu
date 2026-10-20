@@ -202,6 +202,16 @@ impl Desktop {
             .with_context(|| format!("canvas page {page} at revision {revision} is not prepared"))
     }
 
+    /// The font size the presented frame laid a text layer out at.
+    #[must_use]
+    pub fn presented_font_size(&self, layer: EntityId) -> Option<f32> {
+        let presentation = self.presentation.read();
+        match presentation.frame.as_ref()?.layer(layer)?.kind() {
+            LayerKind::Text(text) => Some(text.font_size),
+            _ => None,
+        }
+    }
+
     #[must_use]
     pub fn canvas_state(&self) -> CanvasState {
         let presentation = self.presentation.read();

@@ -360,14 +360,18 @@ impl Host for KoharuHost {
                     alignment: arguments.alignment.map(Into::into),
                     writing_mode: arguments.writing_mode.map(Into::into),
                 };
+                let laid_out_size = self.handle.state::<Desktop>().presented_font_size(element);
                 self.mutate(|project| {
                     Box::pin(async move {
                         Ok((
                             project
-                                .set_typography(vec![TypographyUpdate {
-                                    layer: element,
-                                    typography,
-                                }])
+                                .set_typography(
+                                    vec![TypographyUpdate {
+                                        layer: element,
+                                        typography,
+                                    }],
+                                    |_| laid_out_size,
+                                )
                                 .await?,
                             json!({ "element": element }),
                         ))

@@ -290,7 +290,9 @@ pub(crate) async fn set_typography(
     let (commit, page) = {
         let mut project = project.project.lock().await;
         let project = project.as_mut().context("no project is open")?;
-        let commit = project.set_typography(updates).await?;
+        let commit = project
+            .set_typography(updates, |layer| desktop.presented_font_size(layer))
+            .await?;
         project.record_commit(&commit);
         (commit, project.active_page())
     };

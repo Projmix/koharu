@@ -22,6 +22,7 @@ pub use frame::{
 };
 pub use layout::WritingMode;
 pub use renderer::Renderer;
+pub use text_renderer::measured_stroke_width;
 pub use types::{FontFace, FontFamily, FontMetadata, FontRange, FontSource, FontStyle, TextAlign};
 
 pub(crate) use layout::{HyphenationPolicy, LayoutRun, TextLayout};
