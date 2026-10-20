@@ -14,14 +14,10 @@ chapter that needs no manual edits. Each lands as its own change.
    the whole page to a vision model; ask it to also list visible text
    outside the numbered boxes, flag those places for review, and turn a
    flag into a region on request.
-2. **Re-running detection duplicates regions.** Running detection on an
-   already translated page adds new regions over the old ones (24 empty
-   regions on p22). Replace detection's own generated regions and keep
-   regions with user text or edits.
-3. **Vertical-text boxes cross panel borders.** The fit area of free text
+2. **Vertical-text boxes cross panel borders.** The fit area of free text
    follows the Japanese vertical box, which can reach into the next panel
    (p7 «ДА БЛЯТЬ»). Clip the free-text fit area to its panel.
-4. Remaining box errors: outlined sound effects missed, false sound
+3. Remaining box errors: outlined sound effects missed, false sound
    effects on artwork, merged or split boxes.
 
 ## OCR
