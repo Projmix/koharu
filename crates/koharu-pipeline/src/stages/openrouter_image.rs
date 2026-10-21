@@ -1,9 +1,9 @@
-use std::io::Cursor;
+use std::{collections::HashMap, io::Cursor, sync::Arc};
 
 use anyhow::{Context as _, Result, ensure};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use futures::StreamExt as _;
-use image::{DynamicImage, ImageFormat, imageops::FilterType};
+use image::{DynamicImage, ImageFormat, Rgba, RgbaImage, imageops::FilterType};
 use koharu_secrets::ExposeSecret as _;
 use reqwest::{Client, RequestBuilder, Response, Url};
 use serde::Deserialize;
@@ -37,6 +37,10 @@ pub(super) struct OpenRouterImageModelChoice {
 pub(super) struct OpenRouterImage {
     client: Client,
     images_url: Url,
+    models_url: Url,
+    /// Each catalog model's accepted `aspect_ratio` values; a model without the
+    /// parameter maps to an empty list.
+    aspect_ratios: Arc<tokio::sync::OnceCell<HashMap<String, Vec<String>>>>,
 }
 
 impl OpenRouterImage {
@@ -44,6 +48,8 @@ impl OpenRouterImage {
         Ok(Self {
             client: koharu_runtime::http_client()?,
             images_url: Url::parse(IMAGES_URL)?,
+            models_url: Url::parse(IMAGE_MODELS_URL)?,
+            aspect_ratios: Arc::default(),
         })
     }
 
@@ -73,9 +79,10 @@ impl OpenRouterImage {
             return Ok(None);
         }
 
+        let framing = self.framing(model, key, image).await;
+        let sent = framing.pad(image);
         let mut encoded = Cursor::new(Vec::new());
-        image
-            .write_to(&mut encoded, ImageFormat::Png)
+        sent.write_to(&mut encoded, ImageFormat::Png)
             .context("failed to encode the OpenRouter input image")?;
         let data_uri = format!(
             "data:image/png;base64,{}",
@@ -86,7 +93,12 @@ impl OpenRouterImage {
                 self.client
                     .post(self.images_url.clone())
                     .bearer_auth(key)
-                    .json(&request_body(model, prompt, &data_uri)),
+                    .json(&request_body(
+                        model,
+                        prompt,
+                        &data_uri,
+                        framing.aspect_ratio.as_deref(),
+                    )),
                 stop,
             )
             .await?;
@@ -141,11 +153,48 @@ impl OpenRouterImage {
         if stop.stopped() {
             return Ok(None);
         }
-        Ok(Some(decoded.resize_exact(
-            image.width(),
-            image.height(),
-            FilterType::Lanczos3,
-        )))
+        let decoded = decoded.resize_exact(sent.width(), sent.height(), FilterType::Lanczos3);
+        Ok(Some(decoded.crop_imm(0, 0, image.width(), image.height())))
+    }
+
+    /// Picks the `aspect_ratio` to request. A model that lists `auto` keeps the
+    /// page's own shape; one with only fixed ratios gets the nearest one, and
+    /// the page is padded to it so the reply maps back without stretching.
+    async fn framing(&self, model: &str, key: &str, image: &DynamicImage) -> Framing {
+        let catalog = self
+            .aspect_ratios
+            .get_or_try_init(|| async {
+                let response = self
+                    .client
+                    .get(self.models_url.clone())
+                    .bearer_auth(key)
+                    .send()
+                    .await?
+                    .error_for_status()?;
+                let models: ModelsResponse = response.json().await?;
+                anyhow::Ok(
+                    models
+                        .data
+                        .into_iter()
+                        .map(|model| {
+                            let ratios = aspect_ratio_values(&model.supported_parameters);
+                            (model.id, ratios)
+                        })
+                        .collect(),
+                )
+            })
+            .await;
+        match catalog {
+            Ok(catalog) => framing(
+                catalog.get(model).map(Vec::as_slice),
+                image.width(),
+                image.height(),
+            ),
+            Err(error) => {
+                tracing::warn!(%error, "OpenRouter image catalog unavailable; requesting aspect_ratio auto");
+                Framing::auto(image)
+            }
+        }
     }
 
     async fn send(&self, request: RequestBuilder, stop: &StopToken) -> Result<Option<Response>> {
@@ -273,6 +322,10 @@ impl OpenRouterImage {
         Self {
             client,
             images_url: base.join("images").unwrap(),
+            models_url: base.join("images/models").unwrap(),
+            // The mock server answers image requests only; an empty catalog
+            // keeps the `auto` request those tests assert.
+            aspect_ratios: Arc::new(tokio::sync::OnceCell::new_with(Some(HashMap::new()))),
         }
     }
 }
@@ -309,17 +362,126 @@ async fn models_with_key(
     Ok(filter_and_sort_models(response.data))
 }
 
-fn request_body(model: &str, prompt: &str, data_uri: &str) -> Value {
-    json!({
+fn request_body(model: &str, prompt: &str, data_uri: &str, aspect_ratio: Option<&str>) -> Value {
+    let mut body = json!({
         "model": model,
         "prompt": prompt,
         "n": 1,
-        "aspect_ratio": "auto",
         "input_references": [{
             "type": "image_url",
             "image_url": { "url": data_uri },
         }],
-    })
+    });
+    if let Some(aspect_ratio) = aspect_ratio {
+        body["aspect_ratio"] = json!(aspect_ratio);
+    }
+    body
+}
+
+/// The request shape for one page: the ratio to ask for and the canvas the
+/// page is padded to (right and bottom) before it is sent.
+#[derive(Debug, PartialEq)]
+struct Framing {
+    aspect_ratio: Option<String>,
+    width: u32,
+    height: u32,
+}
+
+impl Framing {
+    fn auto(image: &DynamicImage) -> Self {
+        Self {
+            aspect_ratio: Some("auto".to_owned()),
+            width: image.width(),
+            height: image.height(),
+        }
+    }
+
+    fn pad(&self, image: &DynamicImage) -> DynamicImage {
+        if (self.width, self.height) == (image.width(), image.height()) {
+            return image.clone();
+        }
+        let mut canvas = RgbaImage::from_pixel(self.width, self.height, Rgba([255, 255, 255, 255]));
+        image::imageops::overlay(&mut canvas, &image.to_rgba8(), 0, 0);
+        DynamicImage::ImageRgba8(canvas)
+    }
+}
+
+fn framing(ratios: Option<&[String]>, width: u32, height: u32) -> Framing {
+    let unpadded = |aspect_ratio: Option<String>| Framing {
+        aspect_ratio,
+        width,
+        height,
+    };
+    let Some(ratios) = ratios else {
+        // A model missing from the catalog keeps the request that worked before.
+        return unpadded(Some("auto".to_owned()));
+    };
+    if ratios.is_empty() {
+        return unpadded(None);
+    }
+    if ratios.iter().any(|ratio| ratio == "auto") {
+        return unpadded(Some("auto".to_owned()));
+    }
+    let page = f64::from(width) / f64::from(height);
+    let Some((ratio, (across, down))) = ratios
+        .iter()
+        .filter_map(|ratio| Some((ratio, parse_ratio(ratio)?)))
+        .min_by(|(_, left), (_, right)| {
+            let distance = |(across, down): (u32, u32)| {
+                (f64::from(across) / f64::from(down) / page).ln().abs()
+            };
+            distance(*left).total_cmp(&distance(*right))
+        })
+    else {
+        return unpadded(None);
+    };
+    // Grow one side only, so the page sits unscaled in the padded canvas.
+    let (width, height) =
+        if u64::from(width) * u64::from(down) >= u64::from(height) * u64::from(across) {
+            (
+                width,
+                (u64::from(width) * u64::from(down)).div_ceil(u64::from(across)) as u32,
+            )
+        } else {
+            (
+                (u64::from(height) * u64::from(across)).div_ceil(u64::from(down)) as u32,
+                height,
+            )
+        };
+    Framing {
+        aspect_ratio: Some(ratio.clone()),
+        width,
+        height,
+    }
+}
+
+fn parse_ratio(ratio: &str) -> Option<(u32, u32)> {
+    let (across, down) = ratio.split_once(':')?;
+    let across = across.trim().parse().ok().filter(|value| *value > 0)?;
+    let down = down.trim().parse().ok().filter(|value| *value > 0)?;
+    Some((across, down))
+}
+
+fn aspect_ratio_values(parameters: &Value) -> Vec<String> {
+    let Some(descriptor) = parameters
+        .as_object()
+        .and_then(|parameters| parameters.get("aspect_ratio"))
+    else {
+        return Vec::new();
+    };
+    descriptor
+        .get("values")
+        .or_else(|| descriptor.get("enum"))
+        .and_then(Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect()
+        })
+        // A listed parameter without an enum accepts the normalized values.
+        .unwrap_or_else(|| vec!["auto".to_owned()])
 }
 
 fn ensure_raster_mime(media_type: &str) -> Result<()> {
@@ -455,17 +617,79 @@ mod tests {
 
     #[test]
     fn request_uses_openrouter_image_edit_contract() {
-        let body = request_body("provider/edit", "clean text", "data:image/png;base64,x");
+        let body = request_body(
+            "provider/edit",
+            "clean text",
+            "data:image/png;base64,x",
+            Some("auto"),
+        );
         assert_eq!(body["model"], "provider/edit");
         assert_eq!(body["prompt"], "clean text");
         assert_eq!(body["n"], 1);
         assert_eq!(body["aspect_ratio"], "auto");
+        assert!(
+            request_body(
+                "provider/edit",
+                "clean text",
+                "data:image/png;base64,x",
+                None
+            )
+            .get("aspect_ratio")
+            .is_none()
+        );
         assert!(body.get("stream").is_none());
         assert_eq!(body["input_references"][0]["type"], "image_url");
         assert_eq!(
             body["input_references"][0]["image_url"]["url"],
             "data:image/png;base64,x"
         );
+    }
+
+    #[test]
+    fn fixed_ratio_models_get_the_nearest_ratio_on_a_padded_page() {
+        let fixed: Vec<String> = ["1:1", "2:3", "3:4", "4:3", "16:9"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        // Tencent HY Image 3.5 rejects `auto`; a square page needs no padding.
+        assert_eq!(
+            framing(Some(&fixed), 1280, 1280),
+            Framing {
+                aspect_ratio: Some("1:1".to_owned()),
+                width: 1280,
+                height: 1280,
+            }
+        );
+        // A tall page takes the nearest ratio and grows sideways instead of
+        // being stretched.
+        assert_eq!(
+            framing(Some(&fixed), 1280, 1810),
+            Framing {
+                aspect_ratio: Some("3:4".to_owned()),
+                width: 1358,
+                height: 1810,
+            }
+        );
+        assert_eq!(
+            framing(Some(&fixed), 1280, 568),
+            Framing {
+                aspect_ratio: Some("16:9".to_owned()),
+                width: 1280,
+                height: 720,
+            }
+        );
+        let auto = vec!["auto".to_owned(), "1:1".to_owned()];
+        assert_eq!(
+            framing(Some(&auto), 10, 7).aspect_ratio.as_deref(),
+            Some("auto")
+        );
+        assert_eq!(framing(Some(&[]), 10, 7).aspect_ratio, None);
+        assert_eq!(framing(None, 10, 7).aspect_ratio.as_deref(), Some("auto"));
+        assert_eq!(
+            aspect_ratio_values(&json!({ "aspect_ratio": { "type": "enum", "values": ["1:1"] } })),
+            vec!["1:1".to_owned()]
+        );
+        assert!(aspect_ratio_values(&json!({ "input_references": {} })).is_empty());
     }
 
     #[test]

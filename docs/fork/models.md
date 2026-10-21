@@ -3,7 +3,7 @@
 Every detector, OCR and cleaning model the fork uses, ships unused, has
 measured, or has decided against. The point is to never evaluate the same
 model twice: before trying a model, look it up here; after trying it, record
-the result. Last updated 2026-10-18.
+the result. Last updated 2026-10-19.
 
 ## Rules
 
@@ -122,6 +122,8 @@ Local.
 | AOT inpainting | in use | `mayocream/aot-inpainting` @ `cffe234` | |
 | FLUX.2 Klein 4B (GGUF) | in use | `unsloth/FLUX.2-klein-4B-GGUF` @ `0084d1d` | Prompted diffusion; slow without a strong GPU. |
 | RORem mixed (SDXL inpainting) | in use | `mayocream/RORem-mixed-GGUF` @ `62c75b3` | Object-removal diffusion. |
+| FLUX 3 Image Klein | candidate (medium) | [`black-forest-labs/flux-3-image-klein`](https://huggingface.co/unsloth/flux-3-image-klein) (2026-10-13), [GGUF](https://huggingface.co/unsloth/flux-3-image-klein-GGUF) 2.6–11 GB | 5.6B distilled (16 steps) plus a Qwen3-VL-4B text encoder; needs a prompt upsampler. Removal by bounding box, not a hard mask. 25–31 GB peak GPU memory at 1024²; impractical on the owner's CPU-only PC for full pages, crops untested. FLUX Kommunity License (non-commercial; commercial output under $5M revenue). The diffusers path has no NSFW classifier. See [cleaning-models.ru.md](cleaning-models.ru.md). |
+| Qwen-Image 2.1 / 2.1 Turbo | candidate (medium) | [`Qwen/Qwen-Image-2.1`](https://huggingface.co/Qwen/Qwen-Image-2.1) (2026-09-14), Turbo 2026-10-09 (8 steps), [GGUF](https://huggingface.co/unsloth/Qwen-Image-2.1-GGUF) 2.5–14 GB | 7B. The only recent model whose card lists local edits by a separate mask, matching the pipeline. Qwen Research License (non-commercial, download only). No official API. Same CPU caveat as FLUX 3 Klein. |
 | manga-cleaner | rejected 2026-10-18 | [`kzome/manga-cleaner`](https://huggingface.co/kzome/manga-cleaner) | comic-text-detector plus big-LaMa with median-colour fill: the same pieces the fork already has. AGPL-3.0. No quality metrics. |
 
 API (Fal, Replicate, OpenRouter image models).
@@ -132,8 +134,22 @@ API (Fal, Replicate, OpenRouter image models).
 | FLUX Kontext dev / pro / max, FLUX.2 dev / pro / flex / max / Klein 4B / 9B (Fal, Replicate) | in use | Prompted edits. |
 | Qwen Image Edit 2511, Seedream 4.5 Edit (Fal) | in use | |
 | Any OpenRouter image model | in use | Free-form model id. |
+| FLUX 3 Image (BFL, Replicate, Fal, OpenRouter) | candidate (high) | Released 2026-10-01. Owner's manual check 2026-10-20: gentlest on the art, but leaves small handwritten text, and BFL blocked page 23 as sexual content. ~$0.048 per 1K image (third-party figure). `safety_tolerance` 0–4 on Replicate and BFL; whether 4 passes explicit input pages is untested. Needs a Replicate catalog entry; reachable now through OpenRouter without moderation control. |
+| FLUX 3 Image Klein API (BFL, Runware) | candidate (medium) | ~$0.009 per 1K image at BFL (third-party figure). Not wired. |
+| Qwen Image Edit 2511 on Replicate | candidate (high) | $0.03 per image; `disable_safety_checker` disables the output check. Not in the Replicate catalog yet. First pick for adult pages. |
+| MAI Image 2.6 / 2.6 Flash (OpenRouter) | candidate (high) | P1 check 2026-10-20 through OpenRouter `/api/v1/images` (chat completions returns 404 for image output): on par with Krea 3, clean on 3 of 5 pages including small handwriting; left a large SFX on page 6, turned a dark balloon white on page 23. Adult page 19 timed out upstream twice (524); page 24 was refused by Azure moderation once and passed on retry. About $0.03 per page, 1024 px output. Flash untested. Run 2 (2026-10-20, prompt P1b): with balloons pre-cleaned locally it cleaned all 6 pages, kept the dark balloon dark and the speed lines intact; best candidate for pre-cleaned pages. Page 19 without pre-cleaning failed twice upstream (504, 524). |
+| GPT-Image-2.5, Nano Banana 2.1 (OpenRouter) | candidate (quality ceiling only) | Top of Image Edit Arena; provider policies forbid sexual content, so expected to fail adult pages. Test on ordinary pages only. |
+| Krea 3 | candidate (high) | Best overall in the owner's manual P1 check on 6 pages (2026-10-20): clean on 4 pages; on page 23 it erased a dark balloon and left text in another; it leaves white outline shapes where outlined SFX were. Run 2 (2026-10-20, OpenRouter `krea/k3-edit`, 2K, about $0.08 per page, prompt P1b): with balloons pre-cleaned it redraws the art under outlined SFX on page 19 and stays closest to the source screentone, but on page 7 it redrew a character over a vertical SFX. |
+| Ideogram 4.5 | candidate (medium) | Same check: best at removing outlined SFX and rebuilding the art, but missed a large SFX (page 6) and a large caption (page 18), and erased a balloon on page 7. |
+| Grok Imagine Image 2.0 | candidate (medium) | Owner's manual P1 check 2026-10-20: the only model that removed every letter on the dense adult page 19, leaving empty white SFX outline shapes. It redraws the rest of the page (balloons and panel backgrounds vanish on page 6, lines shift on page 18), so it is usable only with mask compositing. Run 2 (2026-10-20, 2K, about $0.08 per page, prompt P1b): with balloons pre-cleaned it redraws the art under page 19 SFX; without pre-cleaning it still leaves white shapes and drops screentone and speed lines; on page 7 it redrew a character over a vertical SFX. |
+| Qwen Image 2.1 Pro / Qwen Image 3 Pro (OpenRouter) | rejected | Run 3 (2026-10-20) tested 3 Pro instead of 2.1 Pro on pre-cleaned pages: left all text on page 19, invented new text on page 6, painted a white band over an SFX on page 7; about $0.08 and 3.5 min per image. |
+| Seedream 5.0 Flash / Pro (OpenRouter) | rejected | Run 3 (2026-10-20): moderation blocked 4-5 of 6 non-explicit pages without a reason while passing the adult page 19; Pro silently replaced the page 19 scene with a different character. |
+| Muse Image (Meta) | candidate (medium) | Run 3 (2026-10-20, OpenRouter `meta/muse-image`, 1600 px, about $0.015): cleaned all 6 pre-cleaned pages including adult page 19, but erased balloons and drew hair and faces in their place on page 18, so mask compositing only. |
+| HY-Image 3.5 preview (Tencent, OpenRouter `tencent/hy-image-v3.5-preview`) | candidate (high) | Run 3 (2026-10-20): best of all runs on pre-cleaned pages: 6 of 6 including adult page 19, removed every remaining SFX and redrew art under outlines, kept the dark balloon and speed lines, did not redraw characters; 2K, about $0.016 per image. Preview model, may change. |
+| Recraft V4.1 Flash / V4 Styles | rejected | Generation only: Flash takes no image input, Styles is a style model, so neither can edit a page. |
+| Seedream 5.0 Pro Edit | candidate (low) | Official API refuses even mild content and checks edits harder than generation (third-party tests); only resellers claim otherwise. |
 
-No cloud cleaning model has been measured on the owner's pages. When the
+Candidates, prompts and the test plan (including cleaning with balloons already emptied versus not) are in [cleaning-models.ru.md](cleaning-models.ru.md), checked 2026-10-19. No cloud cleaning model has been measured on the owner's pages. When the
 evaluation set exists, score residual ink inside the mask, damage outside it,
 policy rejections, cost and time per page, and move losers to `rejected`.
 

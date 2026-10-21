@@ -54,6 +54,25 @@
     "title": "Agent",
     "working": "Working..."
   },
+  "batch": {
+    "title": "Batch processing",
+    "description": "Run the selected stages on several projects, one after another.",
+    "refresh": "Refresh",
+    "stages": "Stages",
+    "run": "Run ({{count}})",
+    "stop": "Stop",
+    "selectAll": "Select all projects",
+    "state": "Status",
+    "missing": "Needs {{stages}} first",
+    "hint": "Each stage shows pages done out of all pages. Cleaning skips pages that already have a cleanup layer. Stopping the current job stops the whole batch; a failed project does not stop the others.",
+    "runState": {
+      "queued": "Queued",
+      "running": "Running",
+      "finished": "Done",
+      "failed": "Failed",
+      "stopped": "Stopped"
+    }
+  },
   "canvas": {
     "empty": "Select a page to begin.",
     "fit": "Fit Window",
@@ -307,6 +326,7 @@
   },
   "menu": {
     "about": "About",
+    "batch": "Batch processing",
     "clearProject": "Clear Project",
     "closeProject": "Close Project",
     "delete": "Delete Selected",

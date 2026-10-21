@@ -54,6 +54,25 @@
     "title": "智能体",
     "working": "正在工作…"
   },
+  "batch": {
+    "title": "批量处理",
+    "description": "在多个项目上依次运行所选阶段。",
+    "refresh": "刷新",
+    "stages": "阶段",
+    "run": "运行（{{count}}）",
+    "stop": "停止",
+    "selectAll": "选择所有项目",
+    "state": "状态",
+    "missing": "需要先运行{{stages}}",
+    "hint": "每个阶段显示已完成页数与总页数。清理会跳过已有清理图层的页面。停止当前任务会停止整个批次；失败的项目不会停止其他项目。",
+    "runState": {
+      "queued": "排队中",
+      "running": "运行中",
+      "finished": "完成",
+      "failed": "失败",
+      "stopped": "已停止"
+    }
+  },
   "canvas": {
     "empty": "请选择页面以开始。",
     "fit": "适应窗口",
@@ -307,6 +326,7 @@
   },
   "menu": {
     "about": "关于",
+    "batch": "批量处理",
     "clearProject": "清空项目",
     "closeProject": "关闭项目",
     "delete": "删除所选项",

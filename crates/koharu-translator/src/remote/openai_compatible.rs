@@ -116,6 +116,16 @@ pub(super) async fn translate(
         None => http,
     };
     let response: ChatResponse = send_json(backend.provider, http).await?;
+    // A translation cut at the output limit holds a JSON prefix; report the
+    // limit instead of the parse error it would otherwise surface as. Markup
+    // keeps parsing such a prefix: its invalid answer retries in halves.
+    if response.cut_off() {
+        return Err(anyhow::anyhow!(
+            "{} cut the translation off at the output token limit",
+            backend.provider
+        )
+        .into());
+    }
     let text = match response.reply()? {
         ChatReply::Content(text) => text,
         ChatReply::Withheld(reason) => {
@@ -519,6 +529,12 @@ enum ChatReply {
 }
 
 impl ChatResponse {
+    fn cut_off(&self) -> bool {
+        self.choices
+            .first()
+            .is_some_and(|choice| choice.finish_reason.as_deref() == Some("length"))
+    }
+
     fn reply(self) -> Result<ChatReply> {
         let choice = self
             .choices
@@ -697,6 +713,19 @@ mod tests {
         assert_eq!(
             reply(serde_json::json!({ "finish_reason": "stop", "message": { "content": null } })),
             ChatReply::Withheld(MarkupWithheld::Empty)
+        );
+        let cut = serde_json::from_value::<ChatResponse>(serde_json::json!({
+            "choices": [{
+                "finish_reason": "length",
+                "message": { "content": "{\"regions\":[" }
+            }]
+        }))
+        .unwrap();
+        assert!(cut.cut_off());
+        // Markup still receives the prefix, so its invalid answer can retry.
+        assert_eq!(
+            cut.reply().unwrap(),
+            ChatReply::Content("{\"regions\":[".to_owned())
         );
         assert_eq!(
             reply(serde_json::json!({ "message": { "content": "  " } })),

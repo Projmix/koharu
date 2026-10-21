@@ -1,4 +1,5 @@
 pub(crate) mod agent;
+pub(crate) mod batch;
 pub(crate) mod canvas;
 pub(crate) mod editing;
 pub(crate) mod fonts;
@@ -105,6 +106,8 @@ pub fn bindings() -> tauri_specta::Builder<tauri_runtime_cef::CefRuntime> {
             editing::redo,
             processing::process,
             processing::stop_job,
+            batch::get_batch_projects,
+            batch::run_batch,
             image_edit_preview::resolve_image_edit_preview,
             translation::export_chapter_translation,
             translation::import_chapter_translation,

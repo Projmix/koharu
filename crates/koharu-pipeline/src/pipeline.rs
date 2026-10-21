@@ -6,8 +6,8 @@ use koharu_config::Config;
 use koharu_scene::Snapshot;
 
 use crate::{
-    Committer, PipelineConfig, PipelineError, Report, Request, ResourceSnapshot,
-    execution::Execution, resources::ResourceMonitor, stage_runner::StageRunner,
+    Committer, PipelineConfig, PipelineError, Report, Request, ResourceSnapshot, Stage,
+    StageProgress, execution::Execution, resources::ResourceMonitor, stage_runner::StageRunner,
 };
 
 #[derive(Clone)]
@@ -79,6 +79,18 @@ impl Pipeline {
     pub fn subscribe_resources(&self) -> tokio::sync::watch::Receiver<ResourceSnapshot> {
         self.resources.start();
         self.resources.subscribe()
+    }
+
+    /// What each stage has left to do on a project with the current settings.
+    #[must_use]
+    pub fn progress(&self, snapshot: &Snapshot) -> Vec<StageProgress> {
+        self.current.load().progress(snapshot)
+    }
+
+    /// The pages, in project order, that a stage still has work on.
+    #[must_use]
+    pub fn unfinished(&self, snapshot: &Snapshot, stage: Stage) -> Vec<koharu_scene::EntityId> {
+        self.current.load().unfinished(snapshot, stage)
     }
 
     #[tracing::instrument(skip_all)]

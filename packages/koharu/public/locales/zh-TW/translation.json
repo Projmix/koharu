@@ -54,6 +54,25 @@
     "title": "代理",
     "working": "正在工作…"
   },
+  "batch": {
+    "title": "批次處理",
+    "description": "在多個專案上依序執行所選階段。",
+    "refresh": "重新整理",
+    "stages": "階段",
+    "run": "執行（{{count}}）",
+    "stop": "停止",
+    "selectAll": "選取所有專案",
+    "state": "狀態",
+    "missing": "需要先執行{{stages}}",
+    "hint": "每個階段顯示已完成頁數與總頁數。清理會略過已有清理圖層的頁面。停止目前的工作會停止整個批次；失敗的專案不會停止其他專案。",
+    "runState": {
+      "queued": "排隊中",
+      "running": "執行中",
+      "finished": "完成",
+      "failed": "失敗",
+      "stopped": "已停止"
+    }
+  },
   "canvas": {
     "empty": "請選擇頁面以開始。",
     "fit": "適應視窗",
@@ -307,6 +326,7 @@
   },
   "menu": {
     "about": "關於",
+    "batch": "批次處理",
     "clearProject": "清空專案",
     "closeProject": "關閉專案",
     "delete": "刪除所選項目",

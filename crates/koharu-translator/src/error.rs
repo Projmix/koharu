@@ -22,8 +22,11 @@ pub enum Error {
         expected: usize,
         actual: usize,
     },
-    #[error("{provider} quota or rate limit was exceeded")]
-    QuotaExceeded { provider: &'static str },
+    #[error("{provider} quota or rate limit was exceeded: {message}")]
+    QuotaExceeded {
+        provider: &'static str,
+        message: String,
+    },
     #[error("{provider} API request failed with HTTP {status}: {message}")]
     Api {
         provider: &'static str,

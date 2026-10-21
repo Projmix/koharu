@@ -384,7 +384,8 @@ mod tests {
     #[test]
     fn starts_pages_in_order_and_models_independently() {
         let pages = pages(2);
-        let mut scheduler = Scheduler::new(&pages, &Stage::ALL, false, false);
+        let stages = crate::Operation::Full.stages().unwrap();
+        let mut scheduler = Scheduler::new(&pages, &stages, false, false);
         let mut busy = BTreeSet::new();
 
         let first = scheduler.start_next(&busy).unwrap();
@@ -445,7 +446,8 @@ mod tests {
     #[test]
     fn chapter_translation_waits_for_markup_on_every_page() {
         let pages = pages(2);
-        let mut scheduler = Scheduler::new(&pages, &Stage::ALL, true, false);
+        let stages = crate::Operation::Full.stages().unwrap();
+        let mut scheduler = Scheduler::new(&pages, &stages, true, false);
         let busy = BTreeSet::new();
         assert_eq!(scheduler.total(), 9);
         for stage in [Stage::Detection, Stage::Ocr, Stage::Markup] {

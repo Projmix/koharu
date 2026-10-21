@@ -330,14 +330,28 @@ impl ProjectLibrary {
         Project::open(name, path).await
     }
 
-    /// The character list of another project, read from its newest valid
-    /// state. Opening takes the project's lock and never writes its state.
-    pub(crate) async fn characters(&self, name: &str) -> Result<Vec<Character>> {
+    /// Another project's newest valid state. Opening takes the project's
+    /// lock and never writes its state.
+    pub(crate) async fn snapshot(&self, name: &str) -> Result<Snapshot> {
         let (_, path) = self.resolve(name)?;
         let session = Session::open(&path)
             .await
             .with_context(|| format!("failed to open {}", path.display()))?;
-        Project::characters(&session.snapshot())
+        Ok(session.snapshot())
+    }
+
+    /// When a project's state was last written.
+    pub(crate) fn modified(&self, name: &str) -> Result<std::time::SystemTime> {
+        let (_, path) = self.resolve(name)?;
+        ["state-a.khr", "state-b.khr"]
+            .into_iter()
+            .filter_map(|file| std::fs::metadata(path.join(file)).ok()?.modified().ok())
+            .max()
+            .with_context(|| format!("project {name:?} has no saved state"))
+    }
+
+    pub(crate) async fn characters(&self, name: &str) -> Result<Vec<Character>> {
+        Project::characters(&self.snapshot(name).await?)
     }
 
     pub(crate) fn delete(&self, name: &str) -> Result<()> {

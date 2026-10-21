@@ -235,6 +235,31 @@ pub(crate) async fn process_with_mask(
     job_channel: State<'_, JobChannel>,
     inpainting_mask: Option<koharu_pipeline::InpaintingMask>,
 ) -> std::result::Result<JobId, Error> {
+    let (id, _finished) = start_job(
+        handle,
+        scope,
+        operation,
+        project,
+        processing,
+        job_channel,
+        inpainting_mask,
+    )
+    .await?;
+    Ok(id)
+}
+
+/// Start a processing job; the returned task ends with the job's final state
+/// and error.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn start_job(
+    handle: AppHandle<CefRuntime>,
+    scope: koharu_pipeline::Scope,
+    operation: koharu_pipeline::Operation,
+    project: State<'_, CurrentProject>,
+    processing: State<'_, Processing>,
+    job_channel: State<'_, JobChannel>,
+    inpainting_mask: Option<koharu_pipeline::InpaintingMask>,
+) -> std::result::Result<(JobId, tokio::task::JoinHandle<(JobState, Option<String>)>), Error> {
     let snapshot = project
         .project
         .lock()
@@ -283,7 +308,7 @@ pub(crate) async fn process_with_mask(
     let project_id = snapshot.project_id();
     let pipeline = handle.state::<koharu_pipeline::Pipeline>().inner().clone();
     let task_handle = handle.clone();
-    drop(tokio::spawn(async move {
+    let finished = tokio::spawn(async move {
         let progress = Arc::new(Mutex::new((0_usize, 0_usize)));
         let progress_handle = task_handle.clone();
         let mut request = koharu_pipeline::Request {
@@ -489,27 +514,29 @@ pub(crate) async fn process_with_mask(
             .state::<Processing>()
             .finish(retry, stopped || error.is_some());
         task_handle.state::<Processing>().stops.lock().remove(&id);
+        let state = if stopped {
+            JobState::Stopped
+        } else if error.is_some() {
+            JobState::Failed
+        } else {
+            JobState::Finished
+        };
         let job = task_handle
             .state::<Processing>()
             .jobs
             .lock()
             .remove(&id)
             .map(|mut job| {
-                job.state = if stopped {
-                    JobState::Stopped
-                } else if error.is_some() {
-                    JobState::Failed
-                } else {
-                    JobState::Finished
-                };
-                job.error = error;
+                job.state = state;
+                job.error.clone_from(&error);
                 job
             });
         if let Some(job) = job {
             task_handle.state::<JobChannel>().channel.publish(job);
         }
-    }));
-    Ok(id)
+        (state, error)
+    });
+    Ok((id, finished))
 }
 
 #[cfg(test)]
