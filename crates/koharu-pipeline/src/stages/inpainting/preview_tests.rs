@@ -267,16 +267,19 @@ async fn image_edit_preview_model_receives_final_pixels_and_prompt_before_cancel
                     client: Fal::new().unwrap(),
                     model: FalModel::MaiImage2_5Edit,
                     config,
+                    bubbles: BubbleCleaner::new(koharu_ml::Device::cpu()),
                 },
                 InpaintingProvider::OpenRouter => Model::OpenRouter {
                     client: OpenRouterImage::new().unwrap(),
                     model: "provider/edit".to_owned(),
                     config,
+                    bubbles: BubbleCleaner::new(koharu_ml::Device::cpu()),
                 },
                 InpaintingProvider::Replicate => Model::Replicate {
                     client: Replicate::new().unwrap(),
                     model: replicate::ReplicateModel::Flux2Dev,
                     config,
+                    bubbles: BubbleCleaner::new(koharu_ml::Device::cpu()),
                 },
             };
             let stop = input.stop.clone();
@@ -410,6 +413,7 @@ async fn image_edit_preview_stopped_run_skips_review_and_disabled_review_preserv
         client: OpenRouterImage::new().unwrap(),
         model: "provider/edit".to_owned(),
         config: ImageEditConfig::default(),
+        bubbles: BubbleCleaner::new(koharu_ml::Device::cpu()),
     }
     .run(input)
     .await

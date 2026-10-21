@@ -187,17 +187,68 @@ enum Model {
         client: Fal,
         model: FalModel,
         config: ImageEditConfig,
+        bubbles: BubbleCleaner,
     },
     OpenRouter {
         client: OpenRouterImage,
         model: String,
         config: ImageEditConfig,
+        bubbles: BubbleCleaner,
     },
     Replicate {
         client: Replicate,
         model: replicate::ReplicateModel,
         config: ImageEditConfig,
+        bubbles: BubbleCleaner,
     },
+}
+
+/// Local LaMa for balloon lettering that the uniform fill could not clean
+/// (gradient, screentone or a noisy scanned interior), run before a cloud
+/// edit so the cloud only sees lettering on the artwork. Sending that text to
+/// the cloud left faint letters in the balloon on a scanned page, and the
+/// cloud erased a dark balloon whose text it was asked to remove
+/// (docs/fork/cleaning-models.ru.md). Loaded on the first page that needs it.
+#[derive(Clone)]
+struct BubbleCleaner {
+    device: koharu_ml::Device,
+    model: Arc<tokio::sync::OnceCell<Arc<Mutex<LaMa>>>>,
+}
+
+impl BubbleCleaner {
+    fn new(device: koharu_ml::Device) -> Self {
+        Self {
+            device,
+            model: Arc::default(),
+        }
+    }
+
+    async fn clean(&self, image: Arc<DynamicImage>, mask: &GrayImage) -> Result<Arc<DynamicImage>> {
+        if mask.as_raw().iter().all(|value| *value == 0) {
+            return Ok(image);
+        }
+        let model = self
+            .model
+            .get_or_try_init(|| async {
+                Ok::<_, anyhow::Error>(Arc::new(Mutex::new(LaMa::load(self.device.clone()).await?)))
+            })
+            .await?
+            .clone();
+        let mask = mask.clone();
+        tokio_rayon::spawn(move || -> Result<Arc<DynamicImage>> {
+            let model = model
+                .lock()
+                .map_err(|_| anyhow!("LaMa model lock is poisoned"))?;
+            Ok(Arc::new(inpaint_tiled(&image, &mask, |image, mask| {
+                Ok(DynamicImage::ImageRgb8(model.inference(
+                    image,
+                    mask,
+                    &InpaintRequest::default(),
+                )?))
+            })?))
+        })
+        .await
+    }
 }
 
 impl Model {
@@ -221,16 +272,19 @@ impl Model {
                 client: Fal::new()?,
                 model: *model,
                 config: config.clone(),
+                bubbles: BubbleCleaner::new(device),
             }),
             InpaintingModel::OpenRouterImageEdit { model, config } => Ok(Self::OpenRouter {
                 client: OpenRouterImage::new()?,
                 model: model.clone(),
                 config: config.clone(),
+                bubbles: BubbleCleaner::new(device),
             }),
             InpaintingModel::ReplicateImageEdit { model, config } => Ok(Self::Replicate {
                 client: Replicate::new()?,
                 model: *model,
                 config: config.clone(),
+                bubbles: BubbleCleaner::new(device),
             }),
         }
     }
@@ -261,6 +315,15 @@ impl Model {
             restore_bounds: prepared.restore_bounds,
             flat_fill: std::mem::take(&mut prepared.flat_fill),
         };
+        if intent.is_none()
+            && let Self::Fal { bubbles, .. }
+            | Self::OpenRouter { bubbles, .. }
+            | Self::Replicate { bubbles, .. } = self
+        {
+            prepared.image = bubbles
+                .clean(prepared.image.clone(), &prepared.bubble_text)
+                .await?;
+        }
         let (model_name, image) = match self {
             Self::LaMa(model) => {
                 let model = model.clone();
@@ -344,6 +407,7 @@ impl Model {
                 client,
                 model,
                 config,
+                ..
             } => {
                 let mut config = if intent.is_none() {
                     protected_cleanup_config(config)
@@ -374,6 +438,7 @@ impl Model {
                 client,
                 model,
                 config,
+                ..
             } => {
                 let Some(prompt) = reviewed_prompt(
                     &input,
@@ -398,6 +463,7 @@ impl Model {
                 client,
                 model,
                 config,
+                ..
             } => {
                 let Some(prompt) = reviewed_prompt(
                     &input,
@@ -712,6 +778,8 @@ struct InpaintInput {
     unfilled_mask: GrayImage,
     /// Page-space balloon pixels a model result must not change.
     flat_fill: Vec<(u32, u32, Rgb<u8>)>,
+    /// Text-mask pixels inside balloons that the uniform fill left pending.
+    bubble_text: GrayImage,
     restore_bounds: Option<[u32; 4]>,
 }
 
@@ -835,6 +903,19 @@ async fn prepare(
     if !flat_fill.is_empty() {
         source = Arc::new(DynamicImage::ImageRgb8(filled));
     }
+    let bubble_text = GrayImage::from_fn(source.width(), source.height(), |x, y| {
+        let pending =
+            unfilled_mask.get_pixel(x, y)[0] >= 127 && text_mask.get_pixel(x, y)[0] >= 127;
+        let point = (x as f32 + 0.5, y as f32 + 0.5);
+        let in_balloon = pending
+            && flat_fill_regions.iter().any(|region| {
+                let [left, top, right, bottom] = region.bounds;
+                (left..right).contains(&x)
+                    && (top..bottom).contains(&y)
+                    && point_in_polygon(point, &region.polygon)
+            });
+        Luma([if in_balloon { 255 } else { 0 }])
+    });
     let restore_bounds = if input.inpainting_intent() == Some(InpaintingIntent::Restore) {
         mask_bounds(&mask)
     } else {
@@ -850,6 +931,7 @@ async fn prepare(
         mask,
         unfilled_mask,
         flat_fill,
+        bubble_text,
         restore_bounds,
     })
 }
@@ -1819,6 +1901,94 @@ mod tests {
                 .image
                 .dimensions(),
             (8, 8)
+        );
+    }
+
+    #[tokio::test]
+    async fn only_balloon_text_the_uniform_fill_leaves_goes_to_the_local_model() {
+        let encode = |image: DynamicImage| {
+            let mut bytes = Cursor::new(Vec::new());
+            image.write_to(&mut bytes, ImageFormat::Png).unwrap();
+            Arc::<[u8]>::from(bytes.into_inner())
+        };
+        // A uniform white balloon on the left, a gradient balloon on the right.
+        let source = RgbImage::from_fn(40, 20, |x, _| {
+            if x >= 20 {
+                let value = (150 + (x - 20) * 5) as u8;
+                Rgb([value, value, value])
+            } else {
+                Rgb([255, 255, 255])
+            }
+        });
+        let mut text = GrayImage::new(40, 20);
+        for left in [6, 26] {
+            for y in 8..12 {
+                for x in left..left + 4 {
+                    text.put_pixel(x, y, Luma([255]));
+                }
+            }
+        }
+        text.put_pixel(19, 10, Luma([255]));
+        let mut session = koharu_scene::Session::memory().await.unwrap();
+        let mut page = None;
+        let patch = session
+            .snapshot()
+            .patch(|edit| {
+                let id =
+                    edit.add_page(koharu_scene::PageDraft::new("page", 40.0, 20.0), At::End)?;
+                for (role, image) in [
+                    ("source", DynamicImage::ImageRgb8(source.clone())),
+                    ("text-mask", DynamicImage::ImageLuma8(text.clone())),
+                ] {
+                    edit.set_asset(
+                        id,
+                        &AssetRole::new(role)?,
+                        AssetInput::new(
+                            encode(image),
+                            "image/png",
+                            AssetMetadata {
+                                width: Some(40),
+                                height: Some(20),
+                                attributes: BTreeMap::new(),
+                            },
+                        ),
+                    )?;
+                }
+                for left in [1.0, 21.0] {
+                    edit.add_analysis_region::<BubbleRegion>(
+                        id,
+                        At::End,
+                        &Geometry::rectangle(left, 1.0, 17.0, 18.0),
+                        None,
+                    )?;
+                }
+                page = Some(id);
+                Ok(())
+            })
+            .unwrap();
+        let snapshot = session.commit(patch).await.unwrap().snapshot;
+        let input = StageInput::new(
+            snapshot,
+            page.unwrap(),
+            None,
+            None,
+            Arc::new(crate::ImageCache::default()),
+            None,
+        );
+
+        let prepared = prepare(&input, false, false).await.unwrap();
+        let marked = |x, y| prepared.bubble_text.get_pixel(x, y)[0] > 0;
+        assert!(
+            !marked(7, 9),
+            "the uniform balloon is filled with its own colour"
+        );
+        assert!(
+            marked(27, 9),
+            "the gradient balloon's text goes to the local model"
+        );
+        assert!(
+            !marked(19, 10),
+            "text outside balloons is left for the cloud"
         );
     }
 
