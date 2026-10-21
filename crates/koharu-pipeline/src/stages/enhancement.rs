@@ -279,3 +279,102 @@ impl StageProcessor for Processor {
         finish(edit)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::io::Cursor;
+
+    use image::{GrayImage, ImageFormat, Luma};
+    use koharu_scene::{AssetInput, AssetMetadata, At, PageDraft, Session};
+
+    use super::*;
+    use crate::ImageCache;
+
+    fn png(image: &GrayImage) -> Arc<[u8]> {
+        let mut bytes = Cursor::new(Vec::new());
+        image.write_to(&mut bytes, ImageFormat::Png).unwrap();
+        Arc::from(bytes.into_inner())
+    }
+
+    /// Ink and paper at the given levels, with a mid-grey band.
+    fn page(ink: u8, paper: u8) -> GrayImage {
+        GrayImage::from_fn(256, 256, |x, y| {
+            Luma([if (96..104).contains(&x) || (40..48).contains(&y) {
+                ink
+            } else if (160..200).contains(&y) {
+                128
+            } else {
+                paper
+            }])
+        })
+    }
+
+    async fn run(image: &GrayImage) -> (Session, EntityId, koharu_scene::Patch) {
+        let mut session = Session::memory().await.unwrap();
+        let mut setup = session.snapshot().edit();
+        let page = setup
+            .add_page(PageDraft::new("page", 256.0, 256.0), At::End)
+            .unwrap();
+        setup
+            .set_asset(
+                page,
+                &AssetRole::new("source").unwrap(),
+                AssetInput::new(
+                    png(image),
+                    "image/png",
+                    AssetMetadata {
+                        width: Some(256),
+                        height: Some(256),
+                        attributes: BTreeMap::new(),
+                    },
+                ),
+            )
+            .unwrap();
+        session.commit(setup.finish().unwrap()).await.unwrap();
+        let input = StageInput::new(
+            session.snapshot(),
+            page,
+            None,
+            None,
+            Arc::new(ImageCache::default()),
+            None,
+        );
+        let processor = Processor::new(
+            EnhancementConfig {
+                mangajpeg: false,
+                tone: true,
+            },
+            koharu_ml::Device::cpu(),
+        );
+        let patch = processor.process(input).await.unwrap();
+        (session, page, patch)
+    }
+
+    #[tokio::test]
+    async fn grey_paper_gets_a_layer_that_later_stages_read() {
+        let (mut session, page, patch) = run(&page(40, 220)).await;
+        session.commit(patch).await.unwrap();
+        let scene = session.snapshot();
+        let layer = visible_enhancement_layer(&scene, page).unwrap().unwrap();
+        let images = ImageCache::default();
+        let read = images.page_image(&scene, page).await.unwrap().unwrap();
+        let layer_image = images.get(&scene, layer, "source").await.unwrap().unwrap();
+        assert_eq!(read.to_luma8(), layer_image.to_luma8());
+        let read = read.to_luma8();
+        assert_eq!(read.get_pixel(10, 10)[0], 255, "paper becomes white");
+        assert_eq!(read.get_pixel(100, 10)[0], 0, "ink becomes black");
+        assert_eq!(read.get_pixel(10, 180)[0], 128, "mid-tones stay");
+        let source = images.get(&scene, page, "source").await.unwrap().unwrap();
+        assert_eq!(
+            source.to_luma8().get_pixel(10, 10)[0],
+            220,
+            "the source is kept"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_clean_page_is_left_alone() {
+        let (_, _, patch) = run(&page(0, 255)).await;
+        assert!(patch.is_empty());
+    }
+}

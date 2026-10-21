@@ -116,6 +116,9 @@ pub(crate) struct Analysis {
     pub(crate) lossless: bool,
     /// Step ratio across 8-pixel block borders (1.0 = no blocks).
     pub(crate) blockiness: f32,
+    /// Mean deviation from the 3x3 mean on bright, locally flat pixels: the
+    /// paper's own noise. Clean digital art measures about 0.03.
+    pub(crate) paper_grain: f32,
 }
 
 impl Analysis {
@@ -172,6 +175,7 @@ impl Analysis {
                 || encoded.starts_with(b"II*\0")
                 || encoded.starts_with(b"MM\0*"),
             blockiness: blockiness(luma),
+            paper_grain: paper_grain(luma),
         }
     }
 
@@ -180,18 +184,23 @@ impl Analysis {
     ///
     /// Only monochrome pages qualify: on a colour cover the filter erased the
     /// kraft-paper texture the artist drew, and MangaJPEG is trained on
-    /// greyscale manga. At JPEG quality 90 and above even the gentlest filter
-    /// removed more detail than noise. A lossless file counts by its 8x8 block
-    /// structure (a re-saved JPEG; clean pages measure 0.98-1.05). WebP is
-    /// skipped: VP8 blocks are not on JPEG's grid, and on the owner's WebP
-    /// pages that measure only picked up paper texture.
+    /// greyscale manga. JPEG at quality 80 and above is left alone: on the
+    /// owner's q85 releases (up to 4100x6000) no artifact shows at 1:1, and the
+    /// model would take hours per page on a CPU.
+    ///
+    /// A lossless file counts as a re-saved JPEG only with both 8x8 block
+    /// structure and noise on the paper: a clean digital page with a 4-pixel
+    /// checker screentone measured blockiness 1.064, the same as its own JPEG
+    /// q50 copy, but paper grain 0.03 against 0.41-0.47 for its q30-q60
+    /// copies. WebP is skipped: VP8 blocks are not on JPEG's grid, and on the
+    /// owner's WebP pages that measure only picked up paper texture.
     pub(crate) fn damage(self) -> Option<u8> {
         if !self.monochrome {
             return None;
         }
         match self.jpeg_quality {
-            Some(quality) => (quality < 90).then_some(quality),
-            None if !self.lossless => None,
+            Some(quality) => (quality < 80).then_some(quality),
+            None if !self.lossless || self.paper_grain < 0.2 => None,
             None if self.blockiness >= 1.12 => Some(30),
             None if self.blockiness >= 1.06 => Some(50),
             None => None,
@@ -318,6 +327,34 @@ pub(crate) fn blockiness(plane: &Plane) -> f32 {
     } else {
         (border / inner) as f32
     }
+}
+
+/// Mean |pixel - 3x3 mean| over bright (>= 200), locally flat (3x3 range
+/// <= 40) pixels, sampled on every other row and column.
+pub(crate) fn paper_grain(plane: &Plane) -> f32 {
+    let (mut grain, mut count) = (0.0f64, 0u64);
+    for y in (1..plane.height.saturating_sub(1)).step_by(2) {
+        for x in (1..plane.width.saturating_sub(1)).step_by(2) {
+            let center = plane.at(x, y);
+            if center < 200.0 {
+                continue;
+            }
+            let (mut sum, mut low, mut high) = (0.0, f32::MAX, f32::MIN);
+            for dy in 0..3 {
+                for dx in 0..3 {
+                    let value = plane.at(x + dx - 1, y + dy - 1);
+                    sum += value;
+                    low = low.min(value);
+                    high = high.max(value);
+                }
+            }
+            if high - low <= 40.0 {
+                grain += f64::from((center - sum / 9.0).abs());
+                count += 1;
+            }
+        }
+    }
+    (grain / count.max(1) as f64) as f32
 }
 
 /// Photoshop's Surface Blur at radius 1, as open reimplementations define it:

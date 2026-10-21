@@ -31,9 +31,10 @@ original and the run says why.
    colour beyond the paper's tint), JPEG quality from the DQT table
    (least-squares match to libjpeg's scaled Annex K table; exact on 15-95),
    8x8 blockiness.
-2. **Damage**: only monochrome pages. JPEG below quality 90; a lossless file
-   (PNG, BMP, TIFF) whose blockiness says it holds a re-saved JPEG (>= 1.06
-   as quality 50, >= 1.12 as quality 30). WebP is skipped.
+2. **Damage**: only monochrome pages. JPEG below quality 80; a lossless file
+   (PNG, BMP, TIFF) that holds a re-saved JPEG, which needs both 8x8
+   blockiness (>= 1.06 as quality 50, >= 1.12 as quality 30) and paper grain
+   >= 0.2. WebP is skipped.
 3. **De-artifact**: MangaJPEG for the quality, then Surface Blur as the
    fallback. A candidate is used only if it passes the checks and measurably
    lowers paper noise or blockiness.
@@ -81,6 +82,33 @@ curve, and 9 monochrome PNG pages get only the tone curve (ink edge 0-32,
 paper 244-250). An earlier rule that ran Surface Blur on WebP by blockiness
 erased the kraft-paper texture of a colour cover; that is why de-artifacting
 is monochrome-only and skips WebP.
+
+## The owner's library (2026-10-21)
+
+20 chapters, 1052 pages in `C:\Code\MangaProject`, seven tagged
+`[Digital]`. A tag in the file name is not evidence; the analysis is. Per
+page: format, size, JPEG quality, monochrome, 8x8 blockiness, paper grain
+(mean deviation from the 3x3 mean on bright flat pixels), and the tone
+curve the stage would apply.
+
+- Clean digital releases measure paper grain 0.02-0.13 (JPEG q100 or flat
+  PNG). Physical scans measure 1.1-1.8 and show grey paper (paper edge 226-
+  230) or grey ink (ink edge 19-32).
+- Two rules were changed after looking at 1:1 crops:
+  - A `[Digital]` PNG chapter with a 4-pixel checker screentone measured
+    blockiness 1.06, the same as its own JPEG q50 copy, and the old rule ran
+    Surface Blur on 23 clean pages. Its paper grain is 0.02; its q30-q60
+    copies measure 0.41-0.47. A lossless page now also needs grain >= 0.2.
+  - Six chapters are JPEG q85 at up to 4100x6000. No artifact shows at 1:1,
+    and MangaJPEG on 25 megapixels would take hours on the owner's CPU
+    (i7-1355U). JPEG now needs quality below 80.
+- After the change: 8 pages get de-artifacting (7 JPEG q75 pages in one
+  chapter, 1 page in a physical scan); the tone curve runs on the physical
+  scans (37 pages with grey paper in one chapter, 16 in another) and on
+  single pages elsewhere with grey ink. On a scan with ink at 29 it turns
+  the ink black and keeps screentone and mid-tones.
+- One chapter is 800x1228: its problem is resolution, which this stage
+  does not address (upscaling is a separate decision).
 
 ## Open
 
