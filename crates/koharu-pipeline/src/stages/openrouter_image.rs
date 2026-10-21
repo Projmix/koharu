@@ -48,10 +48,21 @@ pub(super) struct OpenRouterImage {
     client: Client,
     images_url: Url,
     models_url: Url,
-    /// Each catalog model's accepted `aspect_ratio` values; a model without the
-    /// parameter maps to an empty list.
-    aspect_ratios: Arc<tokio::sync::OnceCell<HashMap<String, Vec<String>>>>,
+    /// What each catalog model accepts, read once.
+    catalog: Arc<tokio::sync::OnceCell<HashMap<String, CatalogModel>>>,
 }
+
+/// The request parameters a catalog model declares.
+#[derive(Clone, Debug, Default)]
+struct CatalogModel {
+    /// Accepted `aspect_ratio` values; empty when the parameter is absent.
+    aspect_ratios: Vec<String>,
+    seed: bool,
+}
+
+/// Sent to every model that accepts a seed, so the same page gives the same
+/// result run to run: without it HY left different lettering on each run.
+const SEED: u64 = 42;
 
 impl OpenRouterImage {
     pub(super) fn new() -> Result<Self> {
@@ -59,7 +70,7 @@ impl OpenRouterImage {
             client: koharu_runtime::http_client()?,
             images_url: Url::parse(IMAGES_URL)?,
             models_url: Url::parse(IMAGE_MODELS_URL)?,
-            aspect_ratios: Arc::default(),
+            catalog: Arc::default(),
         })
     }
 
@@ -90,6 +101,12 @@ impl OpenRouterImage {
         }
 
         let framing = self.framing(model, key, image).await;
+        let seed = self
+            .catalog
+            .get()
+            .and_then(|catalog| catalog.get(model))
+            .is_some_and(|entry| entry.seed)
+            .then_some(SEED);
         let sent = framing.pad(image);
         let (encoded, media_type) = encode_input(&sent, MAX_INPUT_BYTES)
             .context("failed to encode the OpenRouter input image")?;
@@ -104,6 +121,7 @@ impl OpenRouterImage {
                         prompt,
                         &data_uri,
                         framing.aspect_ratio.as_deref(),
+                        seed,
                     )),
                 stop,
             )
@@ -168,7 +186,7 @@ impl OpenRouterImage {
     /// the page is padded to it so the reply maps back without stretching.
     async fn framing(&self, model: &str, key: &str, image: &DynamicImage) -> Framing {
         let catalog = self
-            .aspect_ratios
+            .catalog
             .get_or_try_init(|| async {
                 let response = self
                     .client
@@ -183,8 +201,11 @@ impl OpenRouterImage {
                         .data
                         .into_iter()
                         .map(|model| {
-                            let ratios = aspect_ratio_values(&model.supported_parameters);
-                            (model.id, ratios)
+                            let entry = CatalogModel {
+                                aspect_ratios: aspect_ratio_values(&model.supported_parameters),
+                                seed: model.supported_parameters.get("seed").is_some(),
+                            };
+                            (model.id, entry)
                         })
                         .collect(),
                 )
@@ -192,7 +213,9 @@ impl OpenRouterImage {
             .await;
         match catalog {
             Ok(catalog) => framing(
-                catalog.get(model).map(Vec::as_slice),
+                catalog
+                    .get(model)
+                    .map(|entry| entry.aspect_ratios.as_slice()),
                 image.width(),
                 image.height(),
             ),
@@ -331,7 +354,7 @@ impl OpenRouterImage {
             models_url: base.join("images/models").unwrap(),
             // The mock server answers image requests only; an empty catalog
             // keeps the `auto` request those tests assert.
-            aspect_ratios: Arc::new(tokio::sync::OnceCell::new_with(Some(HashMap::new()))),
+            catalog: Arc::new(tokio::sync::OnceCell::new_with(Some(HashMap::new()))),
         }
     }
 }
@@ -423,7 +446,13 @@ fn encode_input(image: &DynamicImage, limit: usize) -> Result<(Vec<u8>, &'static
     Ok((jpeg, "image/jpeg"))
 }
 
-fn request_body(model: &str, prompt: &str, data_uri: &str, aspect_ratio: Option<&str>) -> Value {
+fn request_body(
+    model: &str,
+    prompt: &str,
+    data_uri: &str,
+    aspect_ratio: Option<&str>,
+    seed: Option<u64>,
+) -> Value {
     let mut body = json!({
         "model": model,
         "prompt": prompt,
@@ -435,6 +464,9 @@ fn request_body(model: &str, prompt: &str, data_uri: &str, aspect_ratio: Option<
     });
     if let Some(aspect_ratio) = aspect_ratio {
         body["aspect_ratio"] = json!(aspect_ratio);
+    }
+    if let Some(seed) = seed {
+        body["seed"] = json!(seed);
     }
     body
 }
@@ -685,6 +717,7 @@ mod tests {
             "clean text",
             "data:image/png;base64,x",
             Some("auto"),
+            Some(SEED),
         );
         assert_eq!(body["model"], "provider/edit");
         assert_eq!(body["prompt"], "clean text");
@@ -695,11 +728,13 @@ mod tests {
                 "provider/edit",
                 "clean text",
                 "data:image/png;base64,x",
+                None,
                 None
             )
             .get("aspect_ratio")
             .is_none()
         );
+        assert_eq!(body["seed"], SEED);
         assert!(body.get("stream").is_none());
         assert_eq!(body["input_references"][0]["type"], "image_url");
         assert_eq!(
