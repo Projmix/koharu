@@ -23,9 +23,9 @@ const THUMBNAIL_EDGE: u32 = 128;
 
 #[derive(Type)]
 #[specta(transparent)]
-pub(crate) struct ThumbnailBytes(#[specta(type = Vec<u8>)] Vec<u8>);
+pub(crate) struct ImageBytes(#[specta(type = Vec<u8>)] Vec<u8>);
 
-impl IpcResponse for ThumbnailBytes {
+impl IpcResponse for ImageBytes {
     fn body(self) -> tauri::Result<tauri::ipc::InvokeResponseBody> {
         Ok(self.0.into())
     }
@@ -315,7 +315,7 @@ fn keeps_japanese(text: &str, source: Language, target: Language) -> bool {
 pub(crate) async fn get_thumbnail(
     page: EntityId,
     project: State<'_, CurrentProject>,
-) -> std::result::Result<ThumbnailBytes, Error> {
+) -> std::result::Result<ImageBytes, Error> {
     let snapshot = project
         .project
         .lock()
@@ -339,7 +339,30 @@ pub(crate) async fn get_thumbnail(
         Ok(encoder.encode(80.0).to_vec())
     })
     .await?;
-    Ok(ThumbnailBytes(bytes))
+    Ok(ImageBytes(bytes))
+}
+
+/// The page's imported source image as stored, at full size: the original
+/// a cleanup review compares against.
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn get_page_source(
+    page: EntityId,
+    project: State<'_, CurrentProject>,
+) -> std::result::Result<ImageBytes, Error> {
+    let snapshot = project
+        .project
+        .lock()
+        .await
+        .as_ref()
+        .context("no project is open")?
+        .snapshot();
+    snapshot.page(page)?;
+    let blob = snapshot
+        .asset(page, &AssetRole::new("source")?)?
+        .with_context(|| format!("page {page} has no source image"))?
+        .blob;
+    Ok(ImageBytes(snapshot.read_blob(blob).await?.to_vec()))
 }
 
 pub(crate) async fn rendered_preview(

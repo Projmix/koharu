@@ -81,7 +81,13 @@
     "unboxedText": {
       "create": "Crear un bloque de texto aquí",
       "dismiss": "No es texto"
-    }
+    },
+    "compareOriginal": "Comparar con el original",
+    "original": "Original",
+    "previousPage": "Página anterior",
+    "nextPage": "Página siguiente",
+    "regenerateCleanup": "Regenerar limpieza",
+    "regenerateCleanupDescription": "Vuelve a limpiar esta página con el modelo de limpieza configurado y una semilla nueva"
   },
   "colorPicker": {
     "brushColor": "Color del pincel",
@@ -568,7 +574,8 @@
         "removeDescription": "Modelo local para el pincel de eliminación, independiente de la limpieza de páginas y de la restauración rectangular.",
         "restorationDescription": "Modelo API para restaurar una selección rectangular, independiente de la limpieza de páginas y del pincel de eliminación.",
         "previewBeforeSend": "Vista previa antes de enviar a la API",
-        "previewBeforeSendDescription": "Muestra la imagen y permite editar el prompt antes de limpiar páginas por API o restaurar una selección. La eliminación local no cambia."
+        "previewBeforeSendDescription": "Muestra la imagen y permite editar el prompt antes de limpiar páginas por API o restaurar una selección. La eliminación local no cambia.",
+        "balloonFill": "Solo relleno de bocadillos"
       },
       "processing": "Procesando",
       "stages": {

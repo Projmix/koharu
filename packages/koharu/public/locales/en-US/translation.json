@@ -81,7 +81,13 @@
     "unboxedText": {
       "create": "Create a text block here",
       "dismiss": "Not text"
-    }
+    },
+    "compareOriginal": "Compare with original",
+    "original": "Original",
+    "previousPage": "Previous page",
+    "nextPage": "Next page",
+    "regenerateCleanup": "Regenerate cleanup",
+    "regenerateCleanupDescription": "Clean this page again with the configured cleanup model and a new seed"
   },
   "colorPicker": {
     "brushColor": "Brush color",
@@ -568,7 +574,8 @@
         "removeDescription": "Local model for the Remove brush. Independent of page cleanup and rectangular restoration.",
         "restorationDescription": "API model for the Restore tool with a rectangular selection. Independent of page cleanup and the Remove brush.",
         "previewBeforeSend": "Preview before sending to API",
-        "previewBeforeSendDescription": "Show the outgoing image and edit the prompt before API page cleanup or Restore selection. Local Remove is unaffected."
+        "previewBeforeSendDescription": "Show the outgoing image and edit the prompt before API page cleanup or Restore selection. Local Remove is unaffected.",
+        "balloonFill": "Balloon fill only"
       },
       "processing": "Processing",
       "stages": {

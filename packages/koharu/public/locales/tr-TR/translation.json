@@ -81,7 +81,13 @@
     "unboxedText": {
       "create": "Buraya metin bloğu oluştur",
       "dismiss": "Metin değil"
-    }
+    },
+    "compareOriginal": "Orijinalle karşılaştır",
+    "original": "Orijinal",
+    "previousPage": "Önceki sayfa",
+    "nextPage": "Sonraki sayfa",
+    "regenerateCleanup": "Temizliği yeniden oluştur",
+    "regenerateCleanupDescription": "Bu sayfayı ayarlı temizleme modeliyle ve yeni bir tohumla yeniden temizler"
   },
   "colorPicker": {
     "brushColor": "Fırça rengi",
@@ -568,7 +574,8 @@
         "removeDescription": "Kaldırma fırçası için yerel model. Sayfa temizliğinden ve dikdörtgen alan onarımından bağımsızdır.",
         "restorationDescription": "Dikdörtgen seçimli onarma aracı için API modeli. Sayfa temizliğinden ve kaldırma fırçasından bağımsızdır.",
         "previewBeforeSend": "API’ye göndermeden önce önizle",
-        "previewBeforeSendDescription": "API ile sayfa temizleme veya seçili alanı onarma öncesinde gönderilecek görüntüyü gösterir ve istemi düzenlemenizi sağlar. Yerel kaldırma etkilenmez."
+        "previewBeforeSendDescription": "API ile sayfa temizleme veya seçili alanı onarma öncesinde gönderilecek görüntüyü gösterir ve istemi düzenlemenizi sağlar. Yerel kaldırma etkilenmez.",
+        "balloonFill": "Yalnızca balon dolgusu"
       },
       "processing": "İşleniyor",
       "stages": {

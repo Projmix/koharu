@@ -62,6 +62,8 @@ struct CatalogModel {
 
 /// Sent to every model that accepts a seed, so the same page gives the same
 /// result run to run: without it HY left different lettering on each run.
+/// Each further attempt on a page adds one, so cleaning again gives a new
+/// result instead of the same one.
 const SEED: u64 = 42;
 
 impl OpenRouterImage {
@@ -79,13 +81,15 @@ impl OpenRouterImage {
         model: &str,
         prompt: &str,
         image: &DynamicImage,
+        attempt: u64,
         stop: &StopToken,
     ) -> Result<Option<DynamicImage>> {
         let secret = koharu_secrets::get("openrouter")?
             .context("OpenRouter credential is not configured")?;
         let key = secret.expose_secret().trim();
         ensure!(!key.is_empty(), "OpenRouter credential is empty");
-        self.edit_with_key(model, prompt, image, stop, key).await
+        self.edit_with_key(model, prompt, image, attempt, stop, key)
+            .await
     }
 
     async fn edit_with_key(
@@ -93,6 +97,7 @@ impl OpenRouterImage {
         model: &str,
         prompt: &str,
         image: &DynamicImage,
+        attempt: u64,
         stop: &StopToken,
         key: &str,
     ) -> Result<Option<DynamicImage>> {
@@ -106,7 +111,7 @@ impl OpenRouterImage {
             .get()
             .and_then(|catalog| catalog.get(model))
             .is_some_and(|entry| entry.seed)
-            .then_some(SEED);
+            .then_some(SEED + attempt);
         let sent = framing.pad(image);
         let (encoded, media_type) = encode_input(&sent, MAX_INPUT_BYTES)
             .context("failed to encode the OpenRouter input image")?;
@@ -889,6 +894,7 @@ mod tests {
                 "provider/edit",
                 "clean",
                 &DynamicImage::new_rgb8(3, 2),
+                0,
                 &StopToken::default(),
                 "test-key",
             )
@@ -915,6 +921,7 @@ mod tests {
                     "provider/edit",
                     "clean",
                     &DynamicImage::new_rgb8(1, 1),
+                    0,
                     &StopToken::default(),
                     "test-key",
                 )
@@ -941,6 +948,7 @@ mod tests {
                     "provider/edit",
                     "clean",
                     &DynamicImage::new_rgb8(1, 1),
+                    0,
                     &StopToken::default(),
                     "test-key",
                 )
@@ -959,6 +967,7 @@ mod tests {
                 "microsoft/mai-image-2.5",
                 "clean",
                 &DynamicImage::new_rgb8(1, 1),
+                0,
                 &StopToken::default(),
                 "test-key",
             )
@@ -991,6 +1000,7 @@ mod tests {
                             "provider/edit",
                             "clean",
                             &DynamicImage::new_rgb8(1, 1),
+                            0,
                             &stop,
                             "test-key",
                         )
@@ -1026,7 +1036,7 @@ mod tests {
         let server = MockServer::start(MockResponse::Success).await;
         server
             .client()
-            .edit_with_key(model, prompt, image, stop, "test-key")
+            .edit_with_key(model, prompt, image, 0, stop, "test-key")
             .await
             .unwrap()
             .unwrap();

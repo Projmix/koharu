@@ -779,6 +779,10 @@ pub enum LocalInpaintingModel {
     Flux2Klein(Flux2KleinConfig),
     #[serde(rename = "rorem-mixed")]
     RoremMixed(RoremMixedConfig),
+    /// Only the classic balloon fill, without a model: a local first pass
+    /// that can be reviewed before a cloud edit cleans the rest.
+    #[serde(rename = "balloon-fill")]
+    BalloonFill {},
 }
 
 fn local_inpainting_model_id(model: &LocalInpaintingModel) -> &'static str {
@@ -787,6 +791,7 @@ fn local_inpainting_model_id(model: &LocalInpaintingModel) -> &'static str {
         LocalInpaintingModel::AotInpainting {} => "aot-inpainting",
         LocalInpaintingModel::Flux2Klein(_) => "flux2-klein",
         LocalInpaintingModel::RoremMixed(_) => "rorem-mixed",
+        LocalInpaintingModel::BalloonFill {} => "balloon-fill",
     }
 }
 
@@ -801,7 +806,9 @@ fn remember_local_inpainting_profile(
         LocalInpaintingModel::RoremMixed(config) => {
             processor.rorem_mixed = Some(config.clone());
         }
-        LocalInpaintingModel::LaMa {} | LocalInpaintingModel::AotInpainting {} => {}
+        LocalInpaintingModel::LaMa {}
+        | LocalInpaintingModel::AotInpainting {}
+        | LocalInpaintingModel::BalloonFill {} => {}
     }
 }
 
@@ -812,6 +819,7 @@ fn restore_local_inpainting_model(
     match model {
         "lama" => Ok(LocalInpaintingModel::LaMa {}),
         "aot-inpainting" => Ok(LocalInpaintingModel::AotInpainting {}),
+        "balloon-fill" => Ok(LocalInpaintingModel::BalloonFill {}),
         "flux2-klein" => Ok(LocalInpaintingModel::Flux2Klein(
             processor.flux2_klein.clone().unwrap_or_default(),
         )),
@@ -828,6 +836,7 @@ fn configured_local_inpainting_model(model: &LocalInpaintingModel) -> Inpainting
         LocalInpaintingModel::AotInpainting {} => InpaintingModel::AotInpainting {},
         LocalInpaintingModel::Flux2Klein(config) => InpaintingModel::Flux2Klein(config.clone()),
         LocalInpaintingModel::RoremMixed(config) => InpaintingModel::RoremMixed(config.clone()),
+        LocalInpaintingModel::BalloonFill {} => InpaintingModel::BalloonFill {},
     }
 }
 
@@ -837,6 +846,7 @@ pub(crate) enum InpaintingModel {
     AotInpainting {},
     Flux2Klein(Flux2KleinConfig),
     RoremMixed(RoremMixedConfig),
+    BalloonFill {},
     FalImageEdit {
         model: FalModel,
         config: ImageEditConfig,

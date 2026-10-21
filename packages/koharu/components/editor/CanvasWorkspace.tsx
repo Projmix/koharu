@@ -6,6 +6,7 @@ import { useTranslation } from 'react-i18next'
 import { useColorSampling } from '@/components/controls/ColorSampling'
 import { CanvasCommandBar } from '@/components/editor/CanvasCommandBar'
 import { CanvasOverlay } from '@/components/editor/CanvasOverlay'
+import { OriginalView } from '@/components/editor/OriginalView'
 import { StatusBar } from '@/components/editor/StatusBar'
 import { ToolBar } from '@/components/editor/ToolBar'
 import { useCanvas } from '@/components/editor/useCanvas'
@@ -196,6 +197,7 @@ export function CanvasWorkspace() {
   const colorSampling = useColorSampling()
 
   const page = usePage().data
+  const compareOriginal = useKoharuStore((state) => state.compareOriginal)
   const pages = usePages().data
   const canvasPage = useKoharuStore((state) => state.canvasPage)
   const canvasRevision = useKoharuStore((state) => state.canvasRevision)
@@ -1011,6 +1013,7 @@ export function CanvasWorkspace() {
       <CanvasCommandBar />
       <div className='relative flex min-h-0 min-w-0 flex-1'>
         <ToolBar />
+        {compareOriginal && page && <OriginalView page={page} />}
         <div
           ref={surface}
           tabIndex={0}

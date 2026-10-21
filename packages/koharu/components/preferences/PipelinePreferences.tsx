@@ -11,7 +11,8 @@ import {
   defaultModel,
   localOcrModels,
   localOcrNames,
-  modelNames,
+  manualInpaintingOptions,
+  pipelineModelLabel,
   modelOptions,
   replaceApiInpainting,
   replaceManualInpainting,
@@ -96,7 +97,7 @@ export function PipelinePreferences({
                   <Select
                     value={model.model}
                     items={Object.fromEntries(
-                      modelOptions[stage].map((name) => [name, modelNames[name]]),
+                      modelOptions[stage].map((name) => [name, pipelineModelLabel(name, t)]),
                     )}
                     onValueChange={(name) => {
                       if (name) {
@@ -117,7 +118,7 @@ export function PipelinePreferences({
                     <SelectContent>
                       {modelOptions[stage].map((name) => (
                         <SelectItem key={name} value={name}>
-                          {modelNames[name]}
+                          {pipelineModelLabel(name, t)}
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -277,7 +278,7 @@ function InpaintingPreferences({
                 <Select
                   value={local.model}
                   items={Object.fromEntries(
-                    modelOptions.inpainting.map((name) => [name, modelNames[name]]),
+                    modelOptions.inpainting.map((name) => [name, pipelineModelLabel(name, t)]),
                   )}
                   onValueChange={(name) => {
                     if (!name) return
@@ -297,7 +298,7 @@ function InpaintingPreferences({
                   <SelectContent>
                     {modelOptions.inpainting.map((name) => (
                       <SelectItem key={name} value={name}>
-                        {modelNames[name]}
+                        {pipelineModelLabel(name, t)}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -369,7 +370,7 @@ function InpaintingPreferences({
             <Select
               value={manual.model}
               items={Object.fromEntries(
-                modelOptions.inpainting.map((name) => [name, modelNames[name]]),
+                manualInpaintingOptions.map((name) => [name, pipelineModelLabel(name, t)]),
               )}
               onValueChange={(name) => {
                 if (!name) return
@@ -387,9 +388,9 @@ function InpaintingPreferences({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {modelOptions.inpainting.map((name) => (
+                {manualInpaintingOptions.map((name) => (
                   <SelectItem key={name} value={name}>
-                    {modelNames[name]}
+                    {pipelineModelLabel(name, t)}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -918,6 +919,7 @@ function ModelOptions({
       )
     case 'lama':
     case 'aot-inpainting':
+    case 'balloon-fill':
       return null
   }
 }

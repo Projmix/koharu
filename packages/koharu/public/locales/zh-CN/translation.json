@@ -81,7 +81,13 @@
     "unboxedText": {
       "create": "在此处创建文本块",
       "dismiss": "不是文字"
-    }
+    },
+    "compareOriginal": "与原图对比",
+    "original": "原图",
+    "previousPage": "上一页",
+    "nextPage": "下一页",
+    "regenerateCleanup": "重新生成清理",
+    "regenerateCleanupDescription": "使用已配置的清理模型和新的随机种子重新清理此页"
   },
   "colorPicker": {
     "brushColor": "笔刷颜色",
@@ -568,7 +574,8 @@
         "removeDescription": "移除画笔使用的本地模型，独立于页面清理和矩形区域修复。",
         "restorationDescription": "矩形选区修复工具使用的 API 模型，独立于页面清理和移除画笔。",
         "previewBeforeSend": "发送到 API 前预览",
-        "previewBeforeSendDescription": "通过 API 清理页面或修复选区前，查看待发送的图像并编辑提示词。不影响本地移除功能。"
+        "previewBeforeSendDescription": "通过 API 清理页面或修复选区前，查看待发送的图像并编辑提示词。不影响本地移除功能。",
+        "balloonFill": "仅填充气泡"
       },
       "processing": "正在处理",
       "stages": {

@@ -1,12 +1,13 @@
 'use client'
 
-import { Redo2, Undo2 } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Columns2, Redo2, RefreshCw, Undo2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 import { InferenceControl } from '@/components/editor/InferenceControl'
 import { call } from '@/lib/backend'
 import { enqueueHistory } from '@/lib/history'
-import { usePage, useProject } from '@/lib/queries'
+import { switchPage } from '@/lib/navigation'
+import { usePage, usePages, useProject } from '@/lib/queries'
 import { useKoharuStore, type PipelineScope } from '@/lib/store'
 import { commands, type Scope, type Stage } from '@koharu/bridge/protocol'
 import { Button } from '@koharu/ui/components/button'
@@ -18,6 +19,14 @@ export function CanvasCommandBar() {
   const selectedPages = useKoharuStore((state) => state.selectedPages)
   const jobs = useKoharuStore((state) => state.jobs)
   const running = Object.values(jobs).find((job) => job.state === 'running')
+  const compareOriginal = useKoharuStore((state) => state.compareOriginal)
+  const setCompareOriginal = useKoharuStore((state) => state.setCompareOriginal)
+  const pages = usePages().data ?? []
+  const index = page ? pages.findIndex((summary) => summary.id === page.id) : -1
+  const go = (offset: number) => {
+    const target = pages[index + offset]
+    if (target) switchPage(target.id, [target.id])
+  }
 
   const run = (selection: PipelineScope, stages: Stage[]) => {
     if (!page) return
@@ -32,6 +41,61 @@ export function CanvasCommandBar() {
 
   return (
     <header className='flex h-10 shrink-0 items-center gap-2 border-b border-border/80 bg-[var(--surface-toolbar)] px-2.5'>
+      <div className='flex shrink-0 items-center gap-0.5'>
+        <Button
+          type='button'
+          variant={compareOriginal ? 'secondary' : 'ghost'}
+          size='icon-sm'
+          aria-label={t('canvas.compareOriginal')}
+          aria-pressed={compareOriginal}
+          title={t('canvas.compareOriginal')}
+          disabled={!page}
+          onClick={() => setCompareOriginal(!compareOriginal)}
+        >
+          <Columns2 className='size-3.5' />
+        </Button>
+        {compareOriginal && (
+          <>
+            <Button
+              type='button'
+              variant='ghost'
+              size='icon-sm'
+              aria-label={t('canvas.previousPage')}
+              title={t('canvas.previousPage')}
+              disabled={index <= 0}
+              onClick={() => go(-1)}
+            >
+              <ChevronLeft className='size-3.5' />
+            </Button>
+            <span className='text-[11px] text-muted-foreground tabular-nums'>
+              {index + 1} / {pages.length}
+            </span>
+            <Button
+              type='button'
+              variant='ghost'
+              size='icon-sm'
+              aria-label={t('canvas.nextPage')}
+              title={t('canvas.nextPage')}
+              disabled={index < 0 || index >= pages.length - 1}
+              onClick={() => go(1)}
+            >
+              <ChevronRight className='size-3.5' />
+            </Button>
+            <Button
+              type='button'
+              variant='ghost'
+              size='sm'
+              className='h-7 gap-1.5 px-2 text-[11px]'
+              title={t('canvas.regenerateCleanupDescription')}
+              disabled={!page || Boolean(running)}
+              onClick={() => run('page', ['inpainting'])}
+            >
+              <RefreshCw className='size-3.5' />
+              {t('canvas.regenerateCleanup')}
+            </Button>
+          </>
+        )}
+      </div>
       <div className='min-w-0 flex-1' />
       <div className='flex shrink-0 items-center gap-0.5' aria-label={t('menu.edit')}>
         <Button

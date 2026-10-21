@@ -81,7 +81,13 @@
     "unboxedText": {
       "create": "ここにテキストブロックを作成",
       "dismiss": "文字ではない"
-    }
+    },
+    "compareOriginal": "原画と比較",
+    "original": "原画",
+    "previousPage": "前のページ",
+    "nextPage": "次のページ",
+    "regenerateCleanup": "クリーンアップを再生成",
+    "regenerateCleanupDescription": "設定したクリーンアップモデルと新しいシードでこのページを再度クリーンアップします"
   },
   "colorPicker": {
     "brushColor": "ブラシカラー",
@@ -568,7 +574,8 @@
         "removeDescription": "削除ブラシ用のローカルモデルです。ページのクリーニングや矩形領域の復元とは独立しています。",
         "restorationDescription": "矩形選択の復元ツール用APIモデルです。ページのクリーニングや削除ブラシとは独立しています。",
         "previewBeforeSend": "API送信前にプレビュー",
-        "previewBeforeSendDescription": "APIによるページのクリーニングや選択範囲の復元の前に、送信画像を確認してプロンプトを編集できます。ローカルの除去には影響しません。"
+        "previewBeforeSendDescription": "APIによるページのクリーニングや選択範囲の復元の前に、送信画像を確認してプロンプトを編集できます。ローカルの除去には影響しません。",
+        "balloonFill": "吹き出しの塗りつぶしのみ"
       },
       "processing": "処理中",
       "stages": {

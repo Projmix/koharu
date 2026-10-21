@@ -1,3 +1,5 @@
+import type { TFunction } from 'i18next'
+
 import type {
   ApiInpaintingConfig,
   DetectionModel,
@@ -22,15 +24,25 @@ export const localOcrNames: Record<OcrModel['model'], string> = {
 
 export const modelOptions = {
   detection: ['koharu-layout-rfdetr-seg-2xl'],
-  inpainting: ['lama', 'aot-inpainting', 'flux2-klein', 'rorem-mixed'],
+  inpainting: ['lama', 'aot-inpainting', 'flux2-klein', 'rorem-mixed', 'balloon-fill'],
 } satisfies Record<ModelStage, ModelName[]>
 
-export const modelNames: Record<ModelName, string> = {
+/** The Remove tool cleans a drawn mask, which a balloon fill never touches. */
+export const manualInpaintingOptions = modelOptions.inpainting.filter(
+  (name) => name !== 'balloon-fill',
+)
+
+const modelNames: Record<Exclude<ModelName, 'balloon-fill'>, string> = {
   'koharu-layout-rfdetr-seg-2xl': 'Koharu Layout RF-DETR Seg 2XL',
   lama: 'LaMa',
   'aot-inpainting': 'AOT Inpainting',
   'flux2-klein': 'FLUX.2 Klein',
   'rorem-mixed': 'RORem Mixed',
+}
+
+/** Product names stay as they are; a description goes through the locale files. */
+export function pipelineModelLabel(name: ModelName, t: TFunction): string {
+  return name === 'balloon-fill' ? t('settings.pipeline.inpainting.balloonFill') : modelNames[name]
 }
 
 export function defaultModel(model: ModelName): PipelineModel {
@@ -39,6 +51,7 @@ export function defaultModel(model: ModelName): PipelineModel {
       return { model, text_threshold: null, bubble_threshold: null, panel_threshold: null }
     case 'lama':
     case 'aot-inpainting':
+    case 'balloon-fill':
       return { model }
     case 'flux2-klein':
       return { model, prompt: 'Remove the text and reconstruct the background.' }

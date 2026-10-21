@@ -34,8 +34,8 @@ import {
   defaultModel,
   localOcrModels,
   localOcrNames,
-  modelNames,
   modelOptions,
+  pipelineModelLabel,
   replaceStage,
   selectApiInpainting,
   stageModel,
@@ -686,7 +686,7 @@ function ExpandedRuntimeSelector({
     : t('inference.notSet')
   const inpaintingLabel = inpaintingConfig
     ? inpaintingConfig.method === 'local'
-      ? modelNames[inpaintingConfig.local_model.model]
+      ? pipelineModelLabel(inpaintingConfig.local_model.model, t)
       : (inpaintingModels.find(
           (model) =>
             model.provider === inpaintingConfig.api.provider &&
@@ -757,7 +757,7 @@ function ExpandedRuntimeSelector({
             stage='detection'
             label={t('phase.detection')}
             shortLabel={t('phaseShort.detection')}
-            value={detection ? modelNames[detection.model] : t('inference.notSet')}
+            value={detection ? pipelineModelLabel(detection.model, t) : t('inference.notSet')}
             active={stages.includes('detection')}
             disabled={running}
             onToggle={() => toggleStage('detection')}
@@ -1036,7 +1036,9 @@ function PipelineStagePicker({
       <span className='px-1 text-[11px] font-medium'>{t(`phase.${stage}`)}</span>
       <Select
         value={model.model}
-        items={Object.fromEntries(modelOptions[stage].map((name) => [name, modelNames[name]]))}
+        items={Object.fromEntries(
+          modelOptions[stage].map((name) => [name, pipelineModelLabel(name, t)]),
+        )}
         onValueChange={(name) => name && onSelect(name as ModelName)}
       >
         <SelectTrigger
@@ -1049,7 +1051,7 @@ function PipelineStagePicker({
         <SelectContent>
           {modelOptions[stage].map((name) => (
             <SelectItem key={name} value={name}>
-              {modelNames[name]}
+              {pipelineModelLabel(name, t)}
             </SelectItem>
           ))}
         </SelectContent>
@@ -1347,7 +1349,7 @@ function InpaintingStagePicker({
           <SelectContent>
             {modelOptions.inpainting.map((model) => (
               <SelectItem key={model} value={model}>
-                {modelNames[model]}
+                {pipelineModelLabel(model, t)}
               </SelectItem>
             ))}
           </SelectContent>

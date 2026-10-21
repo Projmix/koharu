@@ -93,6 +93,12 @@ Known gaps after the rebuild:
   endpoint and credential.
 - Image-edit inpainting through Fal, OpenRouter and Replicate, with a
   preview and approval dialog before the result is committed.
+- Cloud cleaning fills only classic balloons first (smooth outline, plain
+  white or black, lettering clear of the outline) and sends the rest to the
+  model whole. The local model "Balloon fill only" commits that fill alone
+  for review, and "Compare with original" shows the page source beside the
+  editable canvas, with page navigation and a cleanup rerun that sends a new
+  seed ([cleaning-models.ru.md](cleaning-models.ru.md)).
 - Manual translation, chapter translation presets and unit policy, paste of
   text blocks, page duplication.
 - Fork updater against `Projmix/koharu` releases (`docs/fork-releases.md`).

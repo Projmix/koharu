@@ -88,6 +88,8 @@ interface KoharuStore {
   processingStages: Stage[]
   settingsOpen: boolean
   batchOpen: boolean
+  /** The page source beside the canvas, for reviewing a cleanup. */
+  compareOriginal: boolean
   shortcuts: Shortcuts
   selectPages: (pages: EntityId[]) => void
   showInspector: (section: InspectorSection) => void
@@ -95,6 +97,7 @@ interface KoharuStore {
   setProcessingStages: (stages: Stage[]) => void
   setSettingsOpen: (open: boolean) => void
   setBatchOpen: (open: boolean) => void
+  setCompareOriginal: (compare: boolean) => void
   selectLayers: (layers: EntityId[]) => void
   editTextLayer: (layer: EntityId) => void
   setTool: (tool: CanvasTool) => void
@@ -147,6 +150,7 @@ export const useKoharuStore = create<KoharuStore>()((set) => ({
   processingStages: pipelineStages.filter((stage) => stage !== 'enhancement'),
   settingsOpen: false,
   batchOpen: false,
+  compareOriginal: false,
   shortcuts: defaultShortcuts,
   selectPages: (selectedPages) => set({ selectedPages: [...new Set(selectedPages)] }),
   showInspector: (inspector) => set({ inspector }),
@@ -154,6 +158,7 @@ export const useKoharuStore = create<KoharuStore>()((set) => ({
   setProcessingStages: (processingStages) => set({ processingStages }),
   setSettingsOpen: (settingsOpen) => set({ settingsOpen }),
   setBatchOpen: (batchOpen) => set({ batchOpen }),
+  setCompareOriginal: (compareOriginal) => set({ compareOriginal }),
   selectLayers: (selectedLayers) =>
     set({ selectedLayers: [...new Set(selectedLayers)], pendingTextFocus: null }),
   editTextLayer: (layer) =>

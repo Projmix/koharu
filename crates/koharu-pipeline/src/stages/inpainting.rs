@@ -81,7 +81,9 @@ pub(super) struct Processor {
 impl Processor {
     pub(super) fn new(config: InpaintingModel, device: koharu_ml::Device) -> Result<Self> {
         match &config {
-            InpaintingModel::LaMa {} | InpaintingModel::AotInpainting {} => {}
+            InpaintingModel::LaMa {}
+            | InpaintingModel::AotInpainting {}
+            | InpaintingModel::BalloonFill {} => {}
             InpaintingModel::Flux2Klein(settings) => {
                 ensure!(
                     !settings.prompt.contains('\0'),
@@ -132,6 +134,7 @@ impl StageProcessor for Processor {
             InpaintingModel::AotInpainting {} => "aot-inpainting",
             InpaintingModel::Flux2Klein(_) => "flux2-klein",
             InpaintingModel::RoremMixed(_) => "rorem-mixed",
+            InpaintingModel::BalloonFill {} => BALLOON_FILL,
             InpaintingModel::FalImageEdit { model, .. } => model.id(),
             InpaintingModel::OpenRouterImageEdit { model, .. } => model,
             InpaintingModel::ReplicateImageEdit { model, .. } => model.id(),
@@ -173,6 +176,7 @@ impl StageProcessor for Processor {
 
 #[derive(Clone)]
 enum Model {
+    BalloonFill,
     LaMa(Arc<Mutex<LaMa>>),
     Aot(Arc<Mutex<AotInpainting>>),
     Flux {
@@ -203,6 +207,7 @@ enum Model {
 impl Model {
     async fn load(device: koharu_ml::Device, config: &InpaintingModel) -> Result<Self> {
         match config {
+            InpaintingModel::BalloonFill {} => Ok(Self::BalloonFill),
             InpaintingModel::LaMa {} => {
                 Ok(Self::LaMa(Arc::new(Mutex::new(LaMa::load(device).await?))))
             }
@@ -261,8 +266,27 @@ impl Model {
             restore_bounds: prepared.restore_bounds,
             flat_fill: std::mem::take(&mut prepared.flat_fill),
         };
+        if let Self::BalloonFill = self {
+            ensure!(!restore, "balloon fill does not restore artwork");
+            // The fill alone, as its own reviewable layer. A later cloud edit
+            // recomputes the same fill from the source.
+            if target.flat_fill.is_empty() {
+                return finish(input.scene.edit());
+            }
+            let (width, height) = target.dimensions;
+            let mut filled = GrayImage::new(width, height);
+            for &(x, y, _) in &target.flat_fill {
+                filled.put_pixel(x, y, Luma([u8::MAX]));
+            }
+            let target = CleanupTarget {
+                mask: filled,
+                ..target
+            };
+            return target.patch(&input, BALLOON_FILL, &prepared.image.to_rgba8(), false, &[]);
+        }
         let sent = prepared.image.clone();
         let (model_name, image) = match self {
+            Self::BalloonFill => unreachable!("balloon fill returns above"),
             Self::LaMa(model) => {
                 let model = model.clone();
                 (
@@ -390,7 +414,13 @@ impl Model {
                     return finish(input.scene.edit());
                 };
                 let Some(image) = client
-                    .edit(model, &prompt, &prepared.image, &input.stop)
+                    .edit(
+                        model,
+                        &prompt,
+                        &prepared.image,
+                        cleanup_layers(&input)?,
+                        &input.stop,
+                    )
                     .await?
                 else {
                     return finish(input.scene.edit());
@@ -937,6 +967,22 @@ fn residual_boxes(sent: &GrayImage, result: &GrayImage, boxes: &[[u32; 4]]) -> V
         .collect()
 }
 
+/// Cleanup layers already on the page. Cleaning again sends a new seed, so a
+/// rerun gives another result instead of the same one.
+fn cleanup_layers(input: &StageInput) -> Result<u64> {
+    let mut count = 0;
+    for entity in input.scene.descendants(input.page()?)? {
+        if input
+            .scene
+            .component::<RasterLayer>(entity.id())?
+            .is_some_and(|layer| layer.kind == RasterLayerKind::Cleanup)
+        {
+            count += 1;
+        }
+    }
+    Ok(count)
+}
+
 /// The text regions of the page whose lettering the cloud answer left
 /// untouched (see `residual_boxes`). They are recorded on the cleanup layer
 /// for review instead of sending a second request: on HY a second request
@@ -1032,6 +1078,7 @@ const TILE_SIZE: u32 = 512;
 const TILE_CONTEXT: u32 = 128;
 const UNIFORM_BACKGROUND_MIN_PIXELS: usize = 16;
 const FLAT_FILL_EDGE_MARGIN: f32 = 3.0;
+const BALLOON_FILL: &str = "balloon-fill";
 const OUTLINE_BAND_MIN: f32 = 4.0;
 /// The outline band grows with the page: 4 px at 1280, 8 px on a 2560 scan.
 const OUTLINE_BAND_DIVISOR: f32 = 320.0;
@@ -2268,6 +2315,108 @@ mod tests {
 
         assert_eq!(calls, 0);
         assert_eq!(output.get_pixel(48, 48), &Rgb([240, 241, 242]));
+    }
+
+    #[tokio::test]
+    async fn balloon_fill_commits_only_the_filled_balloons() {
+        let encode = |image: DynamicImage| {
+            let mut bytes = Cursor::new(Vec::new());
+            image.write_to(&mut bytes, ImageFormat::Png).unwrap();
+            Arc::<[u8]>::from(bytes.into_inner())
+        };
+        // A white balloon on the left, a gradient balloon on the right, both
+        // with dark lettering, and a mark between them outside any balloon.
+        let mut text = GrayImage::new(40, 20);
+        for left in [6, 26] {
+            for y in 8..12 {
+                for x in left..left + 4 {
+                    text.put_pixel(x, y, Luma([255]));
+                }
+            }
+        }
+        text.put_pixel(19, 10, Luma([255]));
+        let source = RgbImage::from_fn(40, 20, |x, y| {
+            if text.get_pixel(x, y)[0] > 0 {
+                Rgb([10, 10, 10])
+            } else if x >= 20 {
+                let value = (150 + (x - 20) * 5) as u8;
+                Rgb([value, value, value])
+            } else {
+                Rgb([255, 255, 255])
+            }
+        });
+        let mut session = koharu_scene::Session::memory().await.unwrap();
+        let mut page = None;
+        let patch = session
+            .snapshot()
+            .patch(|edit| {
+                let id =
+                    edit.add_page(koharu_scene::PageDraft::new("page", 40.0, 20.0), At::End)?;
+                for (role, image) in [
+                    ("source", DynamicImage::ImageRgb8(source.clone())),
+                    ("text-mask", DynamicImage::ImageLuma8(text.clone())),
+                ] {
+                    edit.set_asset(
+                        id,
+                        &AssetRole::new(role)?,
+                        AssetInput::new(
+                            encode(image),
+                            "image/png",
+                            AssetMetadata {
+                                width: Some(40),
+                                height: Some(20),
+                                attributes: BTreeMap::new(),
+                            },
+                        ),
+                    )?;
+                }
+                for left in [1.0, 21.0] {
+                    edit.add_analysis_region::<BubbleRegion>(
+                        id,
+                        At::End,
+                        &Geometry::rectangle(left, 1.0, 17.0, 18.0),
+                        None,
+                    )?;
+                }
+                page = Some(id);
+                Ok(())
+            })
+            .unwrap();
+        let snapshot = session.commit(patch).await.unwrap().snapshot;
+        let page = page.unwrap();
+        let input = StageInput::new(
+            snapshot,
+            page,
+            None,
+            None,
+            Arc::new(crate::ImageCache::default()),
+            None,
+        );
+
+        let patch = Model::BalloonFill.run(input).await.unwrap();
+        let snapshot = session.commit(patch).await.unwrap().snapshot;
+        let layer = snapshot
+            .descendants(page)
+            .unwrap()
+            .map(|entity| entity.id())
+            .find(|id| {
+                snapshot
+                    .component::<RasterLayer>(*id)
+                    .unwrap()
+                    .is_some_and(|layer| layer.kind == RasterLayerKind::Cleanup)
+            })
+            .expect("a cleanup layer");
+        let asset = snapshot
+            .asset(layer, &AssetRole::new("source").unwrap())
+            .unwrap()
+            .unwrap();
+        let cleanup =
+            image::load_from_memory(&snapshot.read_blob(asset.blob).await.unwrap()).unwrap();
+        let cleanup = cleanup.to_rgba8();
+        assert_eq!(cleanup.get_pixel(7, 9), &Rgba([255, 255, 255, 255]));
+        // The gradient balloon and the text outside balloons stay for the model.
+        assert_eq!(cleanup.get_pixel(27, 9)[3], 0);
+        assert_eq!(cleanup.get_pixel(19, 10)[3], 0);
     }
 
     #[test]

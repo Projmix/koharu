@@ -81,7 +81,13 @@
     "unboxedText": {
       "create": "여기에 텍스트 블록 만들기",
       "dismiss": "텍스트 아님"
-    }
+    },
+    "compareOriginal": "원본과 비교",
+    "original": "원본",
+    "previousPage": "이전 페이지",
+    "nextPage": "다음 페이지",
+    "regenerateCleanup": "정리 다시 생성",
+    "regenerateCleanupDescription": "설정된 정리 모델과 새 시드로 이 페이지를 다시 정리합니다"
   },
   "colorPicker": {
     "brushColor": "브러시 색상",
@@ -568,7 +574,8 @@
         "removeDescription": "제거 브러시용 로컬 모델입니다. 페이지 클리닝 및 사각형 영역 복원과 별개입니다.",
         "restorationDescription": "사각형 선택 영역을 복원하는 도구의 API 모델입니다. 페이지 클리닝 및 제거 브러시와 별개입니다.",
         "previewBeforeSend": "API 전송 전 미리보기",
-        "previewBeforeSendDescription": "API 페이지 정리 또는 선택 영역 복원 전에 전송할 이미지를 확인하고 프롬프트를 수정합니다. 로컬 제거에는 영향을 주지 않습니다."
+        "previewBeforeSendDescription": "API 페이지 정리 또는 선택 영역 복원 전에 전송할 이미지를 확인하고 프롬프트를 수정합니다. 로컬 제거에는 영향을 주지 않습니다.",
+        "balloonFill": "말풍선 채우기만"
       },
       "processing": "처리 중",
       "stages": {
