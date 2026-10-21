@@ -187,68 +187,17 @@ enum Model {
         client: Fal,
         model: FalModel,
         config: ImageEditConfig,
-        bubbles: BubbleCleaner,
     },
     OpenRouter {
         client: OpenRouterImage,
         model: String,
         config: ImageEditConfig,
-        bubbles: BubbleCleaner,
     },
     Replicate {
         client: Replicate,
         model: replicate::ReplicateModel,
         config: ImageEditConfig,
-        bubbles: BubbleCleaner,
     },
-}
-
-/// Local LaMa for balloon lettering that the uniform fill could not clean
-/// (gradient, screentone or a noisy scanned interior), run before a cloud
-/// edit so the cloud only sees lettering on the artwork. Sending that text to
-/// the cloud left faint letters in the balloon on a scanned page, and the
-/// cloud erased a dark balloon whose text it was asked to remove
-/// (docs/fork/cleaning-models.ru.md). Loaded on the first page that needs it.
-#[derive(Clone)]
-struct BubbleCleaner {
-    device: koharu_ml::Device,
-    model: Arc<tokio::sync::OnceCell<Arc<Mutex<LaMa>>>>,
-}
-
-impl BubbleCleaner {
-    fn new(device: koharu_ml::Device) -> Self {
-        Self {
-            device,
-            model: Arc::default(),
-        }
-    }
-
-    async fn clean(&self, image: Arc<DynamicImage>, mask: &GrayImage) -> Result<Arc<DynamicImage>> {
-        if mask.as_raw().iter().all(|value| *value == 0) {
-            return Ok(image);
-        }
-        let model = self
-            .model
-            .get_or_try_init(|| async {
-                Ok::<_, anyhow::Error>(Arc::new(Mutex::new(LaMa::load(self.device.clone()).await?)))
-            })
-            .await?
-            .clone();
-        let mask = mask.clone();
-        tokio_rayon::spawn(move || -> Result<Arc<DynamicImage>> {
-            let model = model
-                .lock()
-                .map_err(|_| anyhow!("LaMa model lock is poisoned"))?;
-            Ok(Arc::new(inpaint_tiled(&image, &mask, |image, mask| {
-                Ok(DynamicImage::ImageRgb8(model.inference(
-                    image,
-                    mask,
-                    &InpaintRequest::default(),
-                )?))
-            })?))
-        })
-        .await
-    }
 }
 
 impl Model {
@@ -272,19 +221,16 @@ impl Model {
                 client: Fal::new()?,
                 model: *model,
                 config: config.clone(),
-                bubbles: BubbleCleaner::new(device),
             }),
             InpaintingModel::OpenRouterImageEdit { model, config } => Ok(Self::OpenRouter {
                 client: OpenRouterImage::new()?,
                 model: model.clone(),
                 config: config.clone(),
-                bubbles: BubbleCleaner::new(device),
             }),
             InpaintingModel::ReplicateImageEdit { model, config } => Ok(Self::Replicate {
                 client: Replicate::new()?,
                 model: *model,
                 config: config.clone(),
-                bubbles: BubbleCleaner::new(device),
             }),
         }
     }
@@ -315,15 +261,6 @@ impl Model {
             restore_bounds: prepared.restore_bounds,
             flat_fill: std::mem::take(&mut prepared.flat_fill),
         };
-        if intent.is_none()
-            && let Self::Fal { bubbles, .. }
-            | Self::OpenRouter { bubbles, .. }
-            | Self::Replicate { bubbles, .. } = self
-        {
-            prepared.image = bubbles
-                .clean(prepared.image.clone(), &prepared.bubble_text)
-                .await?;
-        }
         let sent = prepared.image.clone();
         let (model_name, image) = match self {
             Self::LaMa(model) => {
@@ -800,8 +737,6 @@ struct InpaintInput {
     unfilled_mask: GrayImage,
     /// Page-space balloon pixels a model result must not change.
     flat_fill: Vec<(u32, u32, Rgb<u8>)>,
-    /// Text-mask pixels inside balloons that the uniform fill left pending.
-    bubble_text: GrayImage,
     restore_bounds: Option<[u32; 4]>,
 }
 
@@ -913,7 +848,10 @@ async fn prepare(
             }
         }
     }
-    let flat_fill_regions = flat_fill_regions(input, source.width(), source.height())?;
+    let mut flat_fill_regions = flat_fill_regions(input, source.width(), source.height())?;
+    // Only classic balloons are filled; the rest goes to the model whole.
+    flat_fill_regions
+        .retain(|region| classic_balloon(region) && !lettering_reaches_outline(region, &text_mask));
     let mut filled = source.to_rgb8();
     let mut unfilled_mask = mask.clone();
     let flat_fill = fill_uniform_regions(
@@ -925,19 +863,6 @@ async fn prepare(
     if !flat_fill.is_empty() {
         source = Arc::new(DynamicImage::ImageRgb8(filled));
     }
-    let bubble_text = GrayImage::from_fn(source.width(), source.height(), |x, y| {
-        let pending =
-            unfilled_mask.get_pixel(x, y)[0] >= 127 && text_mask.get_pixel(x, y)[0] >= 127;
-        let point = (x as f32 + 0.5, y as f32 + 0.5);
-        let in_balloon = pending
-            && flat_fill_regions.iter().any(|region| {
-                let [left, top, right, bottom] = region.bounds;
-                (left..right).contains(&x)
-                    && (top..bottom).contains(&y)
-                    && point_in_polygon(point, &region.polygon)
-            });
-        Luma([if in_balloon { 255 } else { 0 }])
-    });
     let restore_bounds = if input.inpainting_intent() == Some(InpaintingIntent::Restore) {
         mask_bounds(&mask)
     } else {
@@ -953,7 +878,6 @@ async fn prepare(
         mask,
         unfilled_mask,
         flat_fill,
-        bubble_text,
         restore_bounds,
     })
 }
@@ -1108,6 +1032,18 @@ const TILE_SIZE: u32 = 512;
 const TILE_CONTEXT: u32 = 128;
 const UNIFORM_BACKGROUND_MIN_PIXELS: usize = 16;
 const FLAT_FILL_EDGE_MARGIN: f32 = 3.0;
+const OUTLINE_BAND_MIN: f32 = 4.0;
+/// The outline band grows with the page: 4 px at 1280, 8 px on a 2560 scan.
+const OUTLINE_BAND_DIVISOR: f32 = 320.0;
+/// Lettering pixels within that band that mark a balloon as crossed. On six
+/// test pages clean balloons had 0-24 (a two-lobed balloon whose waist runs
+/// near its text) and crossed ones 57-2658.
+const OUTLINE_TOUCH_MIN_PIXELS: usize = 40;
+const CLASSIC_MAX_PERIMETER_RATIO: f32 = 1.08;
+const CLASSIC_MIN_SOLIDITY: f32 = 0.9;
+const CLASSIC_WHITE_MIN: u8 = 215;
+const CLASSIC_MAX_TINT: u8 = 16;
+const CLASSIC_BLACK_MAX: u8 = 40;
 const MASKED_FILL_TOLERANCE: u8 = 32;
 const MASKED_FILL_MIN_SHARE: f64 = 0.6;
 
@@ -1170,6 +1106,105 @@ fn inpaint_tiled(
     Ok(DynamicImage::ImageRgb8(output))
 }
 
+// Flat fill is kept to classic balloons: a smooth closed outline, plain
+// white or black inside, all lettering clear of the outline. A fill is locked
+// against the cloud result, so on anything else it did harm the model does
+// not: it erased the spikes of ragged balloons, cut outlines that hearts or
+// sound effects cross, and turned translucent balloons into opaque patches.
+// Those balloons go to the model whole (docs/fork/cleaning-models.ru.md).
+
+/// Whether a balloon outline is smooth: its perimeter stays close to that of
+/// its convex hull and it fills most of the hull. On six test pages classic
+/// balloons, two-lobed and cloud-shaped ones included, measured at most 1.074
+/// and at least 0.914; ragged and spiked ones from 1.075 and 0.867.
+fn classic_balloon(region: &FlatFillRegion) -> bool {
+    let hull = convex_hull(&region.polygon);
+    let hull_area = polygon_area(&hull);
+    hull_area > 0.0
+        && polygon_perimeter(&region.polygon)
+            <= polygon_perimeter(&hull) * CLASSIC_MAX_PERIMETER_RATIO
+        && polygon_area(&region.polygon) >= hull_area * CLASSIC_MIN_SOLIDITY
+}
+
+/// Paper white or black, without a tint. Scanned paper reads as light grey
+/// (226-238 on a Douyara scan), so white starts lower than pure white; tinted
+/// and mid-grey balloons are left to the model.
+fn classic_balloon_color(color: Rgb<u8>) -> bool {
+    let [red, green, blue] = color.0;
+    let (low, high) = (red.min(green).min(blue), red.max(green).max(blue));
+    high - low <= CLASSIC_MAX_TINT && (low >= CLASSIC_WHITE_MIN || high <= CLASSIC_BLACK_MAX)
+}
+
+/// Whether lettering reaches a balloon's outline: hearts or sound effects
+/// drawn across it, or a balloon whose traced contour hugs the letters.
+fn lettering_reaches_outline(region: &FlatFillRegion, text_mask: &GrayImage) -> bool {
+    let (width, height) = text_mask.dimensions();
+    let band = (width.max(height) as f32 / OUTLINE_BAND_DIVISOR).max(OUTLINE_BAND_MIN);
+    let reach = band.ceil() as u32;
+    let [left, top, right, bottom] = region.bounds;
+    let mut touching = 0;
+    for y in top.saturating_sub(reach)..(bottom + reach).min(height) {
+        for x in left.saturating_sub(reach)..(right + reach).min(width) {
+            if text_mask.get_pixel(x, y)[0] >= 127
+                && polygon_edge_distance_squared((x as f32 + 0.5, y as f32 + 0.5), &region.polygon)
+                    < band * band
+            {
+                touching += 1;
+                if touching >= OUTLINE_TOUCH_MIN_PIXELS {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Andrew's monotone chain.
+fn convex_hull(points: &[(f32, f32)]) -> Vec<(f32, f32)> {
+    let mut sorted = points.to_vec();
+    sorted.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)));
+    let cross = |o: (f32, f32), a: (f32, f32), b: (f32, f32)| {
+        (a.0 - o.0) * (b.1 - o.1) - (a.1 - o.1) * (b.0 - o.0)
+    };
+    let mut hull: Vec<(f32, f32)> = Vec::with_capacity(sorted.len() + 1);
+    for chain in [sorted.clone(), sorted.into_iter().rev().collect()] {
+        let start = hull.len();
+        for point in chain {
+            while hull.len() >= start + 2
+                && cross(hull[hull.len() - 2], hull[hull.len() - 1], point) <= 0.0
+            {
+                hull.pop();
+            }
+            hull.push(point);
+        }
+        hull.pop();
+    }
+    hull
+}
+
+fn polygon_perimeter(polygon: &[(f32, f32)]) -> f32 {
+    let mut previous = polygon[polygon.len() - 1];
+    let mut perimeter = 0.0;
+    for &point in polygon {
+        perimeter += (point.0 - previous.0).hypot(point.1 - previous.1);
+        previous = point;
+    }
+    perimeter
+}
+
+fn polygon_area(polygon: &[(f32, f32)]) -> f32 {
+    if polygon.len() < 3 {
+        return 0.0;
+    }
+    let mut previous = polygon[polygon.len() - 1];
+    let mut twice = 0.0;
+    for &point in polygon {
+        twice += previous.0 * point.1 - point.0 * previous.1;
+        previous = point;
+    }
+    (twice / 2.0).abs()
+}
+
 /// Fills the text inside uniform balloons and returns every pixel of those
 /// balloons that is no longer pending, with its final colour.
 fn fill_uniform_regions(
@@ -1195,7 +1230,9 @@ fn fill_uniform_regions(
         if targets.is_empty() {
             continue;
         }
-        let Some(color) = uniform_region_color(output, pending_mask, region) else {
+        let Some(color) = uniform_region_color(output, pending_mask, region)
+            .filter(|color| classic_balloon_color(*color))
+        else {
             continue;
         };
         for (x, y) in targets {
@@ -2176,94 +2213,6 @@ mod tests {
         assert!(cleaning_unverified(&snapshot, region).unwrap());
     }
 
-    #[tokio::test]
-    async fn only_balloon_text_the_uniform_fill_leaves_goes_to_the_local_model() {
-        let encode = |image: DynamicImage| {
-            let mut bytes = Cursor::new(Vec::new());
-            image.write_to(&mut bytes, ImageFormat::Png).unwrap();
-            Arc::<[u8]>::from(bytes.into_inner())
-        };
-        // A uniform white balloon on the left, a gradient balloon on the right.
-        let source = RgbImage::from_fn(40, 20, |x, _| {
-            if x >= 20 {
-                let value = (150 + (x - 20) * 5) as u8;
-                Rgb([value, value, value])
-            } else {
-                Rgb([255, 255, 255])
-            }
-        });
-        let mut text = GrayImage::new(40, 20);
-        for left in [6, 26] {
-            for y in 8..12 {
-                for x in left..left + 4 {
-                    text.put_pixel(x, y, Luma([255]));
-                }
-            }
-        }
-        text.put_pixel(19, 10, Luma([255]));
-        let mut session = koharu_scene::Session::memory().await.unwrap();
-        let mut page = None;
-        let patch = session
-            .snapshot()
-            .patch(|edit| {
-                let id =
-                    edit.add_page(koharu_scene::PageDraft::new("page", 40.0, 20.0), At::End)?;
-                for (role, image) in [
-                    ("source", DynamicImage::ImageRgb8(source.clone())),
-                    ("text-mask", DynamicImage::ImageLuma8(text.clone())),
-                ] {
-                    edit.set_asset(
-                        id,
-                        &AssetRole::new(role)?,
-                        AssetInput::new(
-                            encode(image),
-                            "image/png",
-                            AssetMetadata {
-                                width: Some(40),
-                                height: Some(20),
-                                attributes: BTreeMap::new(),
-                            },
-                        ),
-                    )?;
-                }
-                for left in [1.0, 21.0] {
-                    edit.add_analysis_region::<BubbleRegion>(
-                        id,
-                        At::End,
-                        &Geometry::rectangle(left, 1.0, 17.0, 18.0),
-                        None,
-                    )?;
-                }
-                page = Some(id);
-                Ok(())
-            })
-            .unwrap();
-        let snapshot = session.commit(patch).await.unwrap().snapshot;
-        let input = StageInput::new(
-            snapshot,
-            page.unwrap(),
-            None,
-            None,
-            Arc::new(crate::ImageCache::default()),
-            None,
-        );
-
-        let prepared = prepare(&input, false, false).await.unwrap();
-        let marked = |x, y| prepared.bubble_text.get_pixel(x, y)[0] > 0;
-        assert!(
-            !marked(7, 9),
-            "the uniform balloon is filled with its own colour"
-        );
-        assert!(
-            marked(27, 9),
-            "the gradient balloon's text goes to the local model"
-        );
-        assert!(
-            !marked(19, 10),
-            "text outside balloons is left for the cloud"
-        );
-    }
-
     #[test]
     fn fal_cleanup_respects_full_page_automatic_and_manual_masks() {
         let generated = RgbaImage::from_pixel(2, 1, Rgba([1, 2, 3, 40]));
@@ -2322,6 +2271,52 @@ mod tests {
     }
 
     #[test]
+    fn only_classic_balloons_are_filled() {
+        let square = rectangle_region([20, 20, 76, 76]);
+        assert!(classic_balloon(&square));
+        // A spiked outline: every other point pulled in towards the centre.
+        let spiked = FlatFillRegion {
+            bounds: [20, 20, 76, 76],
+            polygon: (0..24)
+                .map(|step| {
+                    let angle = step as f32 * std::f32::consts::TAU / 24.0;
+                    let radius = if step % 2 == 0 { 28.0 } else { 18.0 };
+                    (48.0 + radius * angle.cos(), 48.0 + radius * angle.sin())
+                })
+                .collect(),
+        };
+        assert!(!classic_balloon(&spiked));
+
+        assert!(classic_balloon_color(Rgb([250, 250, 248])));
+        assert!(classic_balloon_color(Rgb([12, 12, 12])));
+        assert!(classic_balloon_color(Rgb([232, 230, 228])));
+        assert!(!classic_balloon_color(Rgb([250, 240, 220])));
+        assert!(!classic_balloon_color(Rgb([150, 150, 150])));
+
+        // Lettering inside, and a sound effect drawn across the left outline.
+        let mut inside = GrayImage::new(96, 96);
+        for y in 40..56 {
+            for x in 44..60 {
+                inside.put_pixel(x, y, Luma([u8::MAX]));
+            }
+        }
+        let mut across = inside.clone();
+        for y in 40..56 {
+            for x in 12..30 {
+                across.put_pixel(x, y, Luma([u8::MAX]));
+            }
+        }
+        assert!(!lettering_reaches_outline(&square, &inside));
+        assert!(lettering_reaches_outline(&square, &across));
+
+        // A uniform mid-grey balloon is left pending.
+        let mut image = RgbImage::from_pixel(96, 96, Rgb([150, 150, 150]));
+        let mut pending = inside.clone();
+        assert!(fill_uniform_regions(&mut image, &mut pending, &inside, &[square]).is_empty());
+        assert_eq!(pending, inside);
+    }
+
+    #[test]
     fn uniform_bubbles_are_filled_independently_inside_one_textured_tile() {
         let mut image = RgbImage::new(200, 100);
         for (x, y, pixel) in image.enumerate_pixels_mut() {
@@ -2336,7 +2331,7 @@ mod tests {
                 image.put_pixel(x, y, Rgb([245, 245, 245]));
             }
             for x in 110..190 {
-                image.put_pixel(x, y, Rgb([250, 240, 220]));
+                image.put_pixel(x, y, Rgb([240, 244, 250]));
             }
         }
         let mut mask = GrayImage::new(200, 100);
@@ -2371,7 +2366,7 @@ mod tests {
 
         assert_eq!(calls, 0);
         assert_eq!(output.get_pixel(45, 50), &Rgb([245, 245, 245]));
-        assert_eq!(output.get_pixel(150, 50), &Rgb([250, 240, 220]));
+        assert_eq!(output.get_pixel(150, 50), &Rgb([240, 244, 250]));
     }
 
     #[test]
