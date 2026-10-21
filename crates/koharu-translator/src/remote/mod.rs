@@ -261,7 +261,12 @@ pub(super) async fn send_json<T: DeserializeOwned>(
             || lower.contains("rate limit exceeded")
             || lower.contains("credit balance is too low")
         {
-            return Err(Error::QuotaExceeded { provider });
+            // Keep the provider's text: a shared limit, an upstream model's
+            // rate limit, and an empty balance need different fixes.
+            return Err(Error::QuotaExceeded {
+                provider,
+                message: text.chars().take(4096).collect(),
+            });
         }
         return Err(Error::Api {
             provider,
