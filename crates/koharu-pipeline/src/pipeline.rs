@@ -6,8 +6,8 @@ use koharu_config::Config;
 use koharu_scene::Snapshot;
 
 use crate::{
-    Committer, PipelineConfig, PipelineError, Report, Request, ResourceSnapshot, Stage, StageProgress,
-    execution::Execution, resources::ResourceMonitor, stage_runner::StageRunner,
+    Committer, PipelineConfig, PipelineError, Report, Request, ResourceSnapshot, Stage,
+    StageProgress, execution::Execution, resources::ResourceMonitor, stage_runner::StageRunner,
 };
 
 #[derive(Clone)]

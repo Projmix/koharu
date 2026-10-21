@@ -620,7 +620,10 @@ fn mask_bounds(mask: &GrayImage) -> Option<[u32; 4]> {
 }
 
 /// Whether a page already has a cleanup layer, from a run or a manual edit.
-pub(crate) fn cleaned(scene: &koharu_scene::Snapshot, page: koharu_scene::EntityId) -> Result<bool> {
+pub(crate) fn cleaned(
+    scene: &koharu_scene::Snapshot,
+    page: koharu_scene::EntityId,
+) -> Result<bool> {
     for child in scene.children(page)? {
         if scene
             .component::<RasterLayer>(child)?
