@@ -210,6 +210,8 @@ export type ChapterIssue = {
 	fit: TextFitWarningKind | null,
 	/**  The source text is a local OCR draft no API read has confirmed yet. */
 	ocr_unverified: boolean,
+	/**  Cloud cleaning left this text's lettering on the page. */
+	cleaning_unverified: boolean,
 };
 
 export type Character = {
@@ -792,6 +794,8 @@ export type TextContent = {
 	translation_review: TranslationReview | null,
 	/**  The source text is a local OCR draft no API read has confirmed yet. */
 	ocr_unverified: boolean,
+	/**  Cloud cleaning left this text's lettering on the page. */
+	cleaning_unverified: boolean,
 	markup: TextMarkup | null,
 	role: string | null,
 	source_region: EntityId | null,

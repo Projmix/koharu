@@ -129,6 +129,7 @@ function textLayer(
       translation: null,
       translation_review: null,
       ocr_unverified: false,
+      cleaning_unverified: false,
       markup: null,
       role: 'dialogue',
       source_region: sourceRegion,

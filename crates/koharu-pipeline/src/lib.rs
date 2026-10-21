@@ -35,8 +35,8 @@ pub use scope::{Bounds, Scope};
 pub use stage::{Stage, StageProgress, StageTarget};
 pub use stages::{
     ChapterTranslation, Flux2KleinConfig, ImageEditConfig, InpaintingApplyMode,
-    KoharuLayoutRFDetrSeg2XLConfig, RoremMixedConfig, ocr_unverified, open_unboxed_text,
-    text_layer_placement,
+    KoharuLayoutRFDetrSeg2XLConfig, RoremMixedConfig, cleaning_unverified, ocr_unverified,
+    open_unboxed_text, text_layer_placement,
 };
 
 use images::ImageCache;

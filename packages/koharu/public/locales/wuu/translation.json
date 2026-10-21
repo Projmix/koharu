@@ -293,6 +293,7 @@
     "textBelowReadableSize": "文字缩到看勿清个大小",
     "textLowContrast": "文字搭下头个图像差勿多分勿清",
     "ocrUnverified": "OCR 还呒没核对过：再跑一遍 OCR",
+    "cleaningUnverified": "清理后仍有文字残留：请检查清理结果",
     "collapse": "折叠 {{name}}",
     "delete": "删除 {{name}}",
     "edit": "编辑 {{name}}",

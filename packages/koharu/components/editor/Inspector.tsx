@@ -988,6 +988,7 @@ function LayerRow({
   const warning = [
     fitWarning && t(textFitWarningLabels[fitWarning]),
     isTextLayer(layer) && layer.content.ocr_unverified && t('layers.ocrUnverified'),
+    isTextLayer(layer) && layer.content.cleaning_unverified && t('layers.cleaningUnverified'),
   ]
     .filter(Boolean)
     .join(' · ')

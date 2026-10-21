@@ -293,6 +293,7 @@
     "textBelowReadableSize": "O texto foi reduzido abaixo do tamanho legível",
     "textLowContrast": "O texto quase não se destaca da imagem por baixo",
     "ocrUnverified": "OCR não verificado: execute o OCR novamente",
+    "cleaningUnverified": "Sobrou texto após a limpeza: verifique a limpeza",
     "collapse": "Recolher {{name}}",
     "delete": "Excluir {{name}}",
     "edit": "Editar {{name}}",

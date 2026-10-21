@@ -18,8 +18,8 @@ use koharu_ml::{
     rorem_mixed::{DEFAULT_NEGATIVE_PROMPT, DEFAULT_PROMPT, RoremMixed, RoremMixedOptions},
 };
 use koharu_scene::{
-    AssetInput, AssetMetadata, AssetRole, At, BubbleRegion, Geometry, Origin, RasterLayer,
-    RasterLayerKind, Region, RegionSpec, Visibility,
+    AssetInput, AssetMetadata, AssetRole, At, BubbleRegion, EntityId, Geometry, Origin,
+    RasterLayer, RasterLayerKind, Region, RegionSpec, TextRegion, Visibility,
 };
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -324,6 +324,7 @@ impl Model {
                 .clean(prepared.image.clone(), &prepared.bubble_text)
                 .await?;
         }
+        let sent = prepared.image.clone();
         let (model_name, image) = match self {
             Self::LaMa(model) => {
                 let model = model.clone();
@@ -485,7 +486,16 @@ impl Model {
                 (model.id(), image)
             }
         };
-        target.patch(&input, model_name, &image.to_rgba8(), full_page)
+        let residual = if intent.is_none()
+            && matches!(
+                self,
+                Self::Fal { .. } | Self::OpenRouter { .. } | Self::Replicate { .. }
+            ) {
+            residual_regions(&input, &sent, &image)?
+        } else {
+            Vec::new()
+        };
+        target.patch(&input, model_name, &image.to_rgba8(), full_page, &residual)
     }
 }
 
@@ -504,6 +514,7 @@ impl CleanupTarget {
         model: &str,
         image: &RgbaImage,
         full_page: bool,
+        residual: &[EntityId],
     ) -> Result<koharu_scene::Patch> {
         let page = input.page()?;
         let intent = input.inpainting_intent();
@@ -565,7 +576,18 @@ impl CleanupTarget {
                 AssetMetadata {
                     width: Some(width),
                     height: Some(height),
-                    attributes: BTreeMap::new(),
+                    attributes: if residual.is_empty() {
+                        BTreeMap::new()
+                    } else {
+                        BTreeMap::from([(
+                            RESIDUAL_TEXT_ATTRIBUTE.to_owned(),
+                            residual
+                                .iter()
+                                .map(ToString::to_string)
+                                .collect::<Vec<_>>()
+                                .join(","),
+                        )])
+                    },
                 },
             ),
         )?;
@@ -935,6 +957,152 @@ async fn prepare(
         restore_bounds,
     })
 }
+
+/// Text boxes whose lettering a cloud result left untouched. In each
+/// detected text box the fine detail (a pixel minus its 5x5 mean) of the
+/// result is compared with the page that was sent: lettering left in place
+/// keeps the same detail (correlation 0.66-0.94 on HY results), redrawn
+/// artwork does not (below 0.3). A box counts when the correlation is at
+/// least 0.5 and the result keeps at least 75% of the detail (untouched
+/// letters kept 83-97%). Letters the cloud only faded are left out: a
+/// second request did not erase them and left a blurred patch instead.
+/// Boxes whose sent detail is faint (a balloon already filled locally) are
+/// skipped.
+fn residual_boxes(sent: &GrayImage, result: &GrayImage, boxes: &[[u32; 4]]) -> Vec<[u32; 4]> {
+    let detail = |image: &GrayImage, x: u32, y: u32| -> f64 {
+        let (width, height) = image.dimensions();
+        let mut sum = 0.0;
+        for dy in -2_i64..=2 {
+            for dx in -2_i64..=2 {
+                let sx = (i64::from(x) + dx).clamp(0, i64::from(width) - 1) as u32;
+                let sy = (i64::from(y) + dy).clamp(0, i64::from(height) - 1) as u32;
+                sum += f64::from(image.get_pixel(sx, sy)[0]);
+            }
+        }
+        f64::from(image.get_pixel(x, y)[0]) - sum / 25.0
+    };
+    boxes
+        .iter()
+        .copied()
+        .filter(|&[left, top, right, bottom]| {
+            let (mut sa, mut sb, mut saa, mut sbb, mut sab, mut count) =
+                (0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+            for y in top..bottom {
+                for x in left..right {
+                    let (a, b) = (detail(sent, x, y), detail(result, x, y));
+                    sa += a;
+                    sb += b;
+                    saa += a * a;
+                    sbb += b * b;
+                    sab += a * b;
+                    count += 1.0;
+                }
+            }
+            if count < 16.0 {
+                return false;
+            }
+            let variance_sent = saa / count - (sa / count).powi(2);
+            let variance_result = sbb / count - (sb / count).powi(2);
+            if variance_sent.sqrt() < RESIDUAL_MIN_DETAIL {
+                return false;
+            }
+            let correlation = (sab / count - sa * sb / (count * count))
+                / (variance_sent * variance_result).sqrt().max(1e-9);
+            correlation >= 0.5 && variance_result >= 0.5625 * variance_sent
+        })
+        .collect()
+}
+
+/// The text regions of the page whose lettering the cloud answer left
+/// untouched (see `residual_boxes`). They are recorded on the cleanup layer
+/// for review instead of sending a second request: on HY a second request
+/// did not erase what the first left, and blurred faded letters.
+fn residual_regions(
+    input: &StageInput,
+    sent: &DynamicImage,
+    result: &DynamicImage,
+) -> Result<Vec<EntityId>> {
+    if result.dimensions() != sent.dimensions() {
+        return Ok(Vec::new());
+    }
+    let page = input.page()?;
+    let (width, height) = sent.dimensions();
+    let mut regions = Vec::new();
+    for entity in input.scene.descendants(page)? {
+        let id = entity.id();
+        if !input
+            .scene
+            .component::<Region>(id)?
+            .is_some_and(|region| region.kind == TextRegion::kind())
+        {
+            continue;
+        }
+        let Some(geometry) = input.scene.component::<Geometry>(id)? else {
+            continue;
+        };
+        let Some((left, top, right, bottom)) = crate::scope::geometry_extents(&geometry) else {
+            continue;
+        };
+        let clamp = |value: f64, limit: u32| value.clamp(0.0, f64::from(limit)) as u32;
+        let bounds = [
+            clamp(left.floor(), width),
+            clamp(top.floor(), height),
+            clamp(right.ceil(), width),
+            clamp(bottom.ceil(), height),
+        ];
+        if bounds[2] > bounds[0] && bounds[3] > bounds[1] {
+            regions.push((id, bounds));
+        }
+    }
+    let boxes: Vec<[u32; 4]> = regions.iter().map(|(_, bounds)| *bounds).collect();
+    let residual = residual_boxes(&sent.to_luma8(), &result.to_luma8(), &boxes);
+    Ok(regions
+        .into_iter()
+        .filter(|(_, bounds)| residual.contains(bounds))
+        .map(|(id, _)| id)
+        .collect())
+}
+
+/// Asset attribute of a cleanup layer listing the text regions whose
+/// lettering the cloud answer left in place, comma separated.
+const RESIDUAL_TEXT_ATTRIBUTE: &str = "dev.koharu.cleanup.residual-text";
+
+/// Whether the cloud cleaning left the lettering of a text region in place.
+/// The topmost visible cleanup layer of the page decides, so cleaning again
+/// or a later manual cleanup clears the flag.
+pub fn cleaning_unverified(scene: &koharu_scene::Snapshot, region: EntityId) -> Result<bool> {
+    let mut page = region;
+    while let Some(parent) = scene.parent(page)? {
+        page = parent;
+    }
+    let mut topmost = None;
+    for entity in scene.descendants(page)? {
+        let id = entity.id();
+        if scene
+            .component::<RasterLayer>(id)?
+            .is_some_and(|layer| layer.kind == RasterLayerKind::Cleanup)
+            && scene
+                .component::<Visibility>(id)?
+                .is_none_or(|visibility| visibility.visible && visibility.opacity > 0.0)
+        {
+            topmost = Some(id);
+        }
+    }
+    let Some(layer) = topmost else {
+        return Ok(false);
+    };
+    let Some(asset) = scene.asset(layer, &AssetRole::new("source")?)? else {
+        return Ok(false);
+    };
+    let region = region.to_string();
+    Ok(asset
+        .metadata
+        .attributes
+        .get(RESIDUAL_TEXT_ATTRIBUTE)
+        .is_some_and(|ids| ids.split(',').any(|id| id == region)))
+}
+
+const RESIDUAL_MIN_DETAIL: f64 = 8.0;
 
 const TILE_SIZE: u32 = 512;
 const TILE_CONTEXT: u32 = 128;
@@ -1902,6 +2070,110 @@ mod tests {
                 .dimensions(),
             (8, 8)
         );
+    }
+
+    #[test]
+    fn lettering_the_cloud_left_untouched_is_found() {
+        // Grey page with dark strokes in a 20x20 box: the "lettering".
+        let lettering =
+            |x: u32, y: u32| (10..30).contains(&x) && (10..30).contains(&y) && x % 4 < 2;
+        let sent = GrayImage::from_fn(60, 40, |x, y| {
+            Luma([if lettering(x, y) { 20 } else { 200 }])
+        });
+        let boxes = [[10, 10, 30, 30], [40, 10, 55, 30]];
+
+        // Left as is, and slightly lighter (85% of the contrast): residual.
+        assert_eq!(residual_boxes(&sent, &sent, &boxes), vec![[10, 10, 30, 30]]);
+        let ghost = GrayImage::from_fn(60, 40, |x, y| {
+            Luma([if lettering(x, y) { 47 } else { 200 }])
+        });
+        assert_eq!(
+            residual_boxes(&sent, &ghost, &boxes),
+            vec![[10, 10, 30, 30]]
+        );
+        // Faded to half the contrast: left for the user, no second request.
+        let faded = GrayImage::from_fn(60, 40, |x, y| {
+            Luma([if lettering(x, y) { 110 } else { 200 }])
+        });
+        assert!(residual_boxes(&sent, &faded, &boxes).is_empty());
+        // Redrawn as flat background: clean. The second box had no lettering.
+        let clean = GrayImage::from_pixel(60, 40, Luma([200]));
+        assert!(residual_boxes(&sent, &clean, &boxes).is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_topmost_visible_cleanup_layer_decides_whether_text_was_left() {
+        let mut session = koharu_scene::Session::memory().await.unwrap();
+        let mut ids = None;
+        let patch = session
+            .snapshot()
+            .patch(|edit| {
+                let page =
+                    edit.add_page(koharu_scene::PageDraft::new("page", 8.0, 8.0), At::End)?;
+                let region = edit.add_analysis_region::<TextRegion>(
+                    page,
+                    At::End,
+                    &Geometry::rectangle(1.0, 1.0, 4.0, 4.0),
+                    None,
+                )?;
+                let mut layers = Vec::new();
+                for residual in [region.to_string(), String::new()] {
+                    let layer = edit.add_entity(page, At::End)?;
+                    edit.set(
+                        layer,
+                        &RasterLayer {
+                            origin: Origin::User,
+                            name: "Cleanup".to_owned(),
+                            kind: RasterLayerKind::Cleanup,
+                        },
+                    )?;
+                    let mut bytes = Cursor::new(Vec::new());
+                    DynamicImage::new_rgba8(8, 8)
+                        .write_to(&mut bytes, ImageFormat::Png)
+                        .unwrap();
+                    let mut attributes = BTreeMap::new();
+                    if !residual.is_empty() {
+                        attributes.insert(RESIDUAL_TEXT_ATTRIBUTE.to_owned(), residual);
+                    }
+                    edit.set_asset(
+                        layer,
+                        &AssetRole::new("source")?,
+                        AssetInput::new(
+                            Arc::<[u8]>::from(bytes.into_inner()),
+                            "image/png",
+                            AssetMetadata {
+                                width: Some(8),
+                                height: Some(8),
+                                attributes,
+                            },
+                        ),
+                    )?;
+                    layers.push(layer);
+                }
+                ids = Some((region, layers));
+                Ok(())
+            })
+            .unwrap();
+        let snapshot = session.commit(patch).await.unwrap().snapshot;
+        let (region, layers) = ids.unwrap();
+        // A later cleanup on top (no residual) clears the flag.
+        assert!(!cleaning_unverified(&snapshot, region).unwrap());
+
+        let hidden = snapshot
+            .patch(|edit| {
+                edit.set(
+                    layers[1],
+                    &Visibility {
+                        origin: Origin::User,
+                        visible: false,
+                        opacity: 1.0,
+                    },
+                )
+            })
+            .unwrap();
+        let snapshot = session.commit(hidden).await.unwrap().snapshot;
+        // With it hidden, the cleanup that left the text is on top again.
+        assert!(cleaning_unverified(&snapshot, region).unwrap());
     }
 
     #[tokio::test]

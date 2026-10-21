@@ -140,6 +140,7 @@ const textLayer: Layer = {
     translation: { text: 'Hello', language: null, generated: true },
     translation_review: null,
     ocr_unverified: false,
+    cleaning_unverified: false,
     markup: null,
     role: null,
     source_region: null,

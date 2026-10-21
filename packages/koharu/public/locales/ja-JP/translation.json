@@ -293,6 +293,7 @@
     "textBelowReadableSize": "テキストが読める大きさより小さく縮小されています",
     "textLowContrast": "テキストが下の画像とほとんど見分けられません",
     "ocrUnverified": "OCR未確認：OCRをもう一度実行してください",
+    "cleaningUnverified": "クリーニング後に文字が残っています：確認してください",
     "collapse": "{{name}}を折りたたむ",
     "delete": "{{name}}を削除",
     "edit": "{{name}}を編集",

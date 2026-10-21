@@ -293,6 +293,7 @@
     "textBelowReadableSize": "Metin okunabilir boyutun altına küçültüldü",
     "textLowContrast": "Metin altındaki görüntüden neredeyse ayırt edilemiyor",
     "ocrUnverified": "OCR doğrulanmadı: OCR'ı yeniden çalıştırın",
+    "cleaningUnverified": "Temizlikten sonra metin kaldı: temizliği kontrol edin",
     "collapse": "{{name}} grubunu daralt",
     "delete": "{{name}} öğesini sil",
     "edit": "{{name}} öğesini düzenle",

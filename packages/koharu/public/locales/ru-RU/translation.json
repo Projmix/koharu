@@ -293,6 +293,7 @@
     "textBelowReadableSize": "Текст ужат меньше читаемого размера",
     "textLowContrast": "Текст почти не виден на изображении под ним",
     "ocrUnverified": "OCR не проверен: повторите OCR",
+    "cleaningUnverified": "После клининга остался текст: проверьте очистку",
     "collapse": "Свернуть {{name}}",
     "delete": "Удалить {{name}}",
     "edit": "Изменить {{name}}",

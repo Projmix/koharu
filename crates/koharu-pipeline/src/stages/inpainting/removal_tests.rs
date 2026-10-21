@@ -132,6 +132,7 @@ async fn removal_results_stack_above_rasters_and_preserve_existing_layers_and_un
                 "lama",
                 &RgbaImage::from_pixel(4, 1, Rgba(color)),
                 false,
+                &[],
             )
             .unwrap();
         input.scene = session.commit(patch).await.unwrap().snapshot;
@@ -279,6 +280,7 @@ async fn repeated_automatic_cleanup_is_visible_and_preserves_layers_before_manua
                 "test-api",
                 &RgbaImage::from_pixel(4, 1, Rgba(color)),
                 false,
+                &[],
             )
             .unwrap();
         input.scene = session.commit(patch).await.unwrap().snapshot;
@@ -331,6 +333,7 @@ async fn repeated_automatic_cleanup_is_visible_and_preserves_layers_before_manua
             "lama",
             &RgbaImage::from_pixel(4, 1, Rgba([3, 2, 1, 255])),
             false,
+            &[],
         )
         .unwrap();
     input.scene = session.commit(patch).await.unwrap().snapshot;

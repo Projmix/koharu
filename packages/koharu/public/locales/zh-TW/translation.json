@@ -293,6 +293,7 @@
     "textBelowReadableSize": "文字縮小到可讀大小以下",
     "textLowContrast": "文字與下方影像幾乎無法區分",
     "ocrUnverified": "OCR 未經核對：請重新執行 OCR",
+    "cleaningUnverified": "清理後仍有文字殘留：請檢查清理結果",
     "collapse": "收合 {{name}}",
     "delete": "刪除 {{name}}",
     "edit": "編輯 {{name}}",

@@ -183,6 +183,8 @@ pub struct ChapterIssue {
     pub fit: Option<TextFitWarningKind>,
     /// The source text is a local OCR draft no API read has confirmed yet.
     pub ocr_unverified: bool,
+    /// Cloud cleaning left this text's lettering on the page.
+    pub cleaning_unverified: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Type)]
@@ -256,7 +258,11 @@ pub(crate) async fn check_chapter(
                 .find(|warning| warning.element == layer.id())
                 .map(|warning| warning.kind);
             let ocr_unverified = koharu_pipeline::ocr_unverified(content)?;
-            if translation.is_some() || fit.is_some() || ocr_unverified {
+            let cleaning_unverified = match content.source_region()? {
+                Some(region) => koharu_pipeline::cleaning_unverified(&snapshot, region.id())?,
+                None => false,
+            };
+            if translation.is_some() || fit.is_some() || ocr_unverified || cleaning_unverified {
                 issues.push(ChapterIssue {
                     page,
                     element: layer.id(),
@@ -264,6 +270,7 @@ pub(crate) async fn check_chapter(
                     translation,
                     fit,
                     ocr_unverified,
+                    cleaning_unverified,
                 });
             }
         }

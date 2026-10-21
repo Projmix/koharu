@@ -144,6 +144,7 @@ export function ChapterCheckDialog({
                           issue.translation && t(translationIssueLabels[issue.translation]),
                           issue.fit && t(fitIssueLabels[issue.fit]),
                           issue.ocr_unverified && t('layers.ocrUnverified'),
+                          issue.cleaning_unverified && t('layers.cleaningUnverified'),
                         ]
                           .filter(Boolean)
                           .join(' · ')}
