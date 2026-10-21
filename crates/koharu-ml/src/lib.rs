@@ -17,6 +17,7 @@ pub mod hayai_ocr;
 pub mod koharu_layout_rfdetr_seg_2xl;
 pub mod lama;
 pub mod llm;
+pub mod manga_jpeg;
 pub mod manga_ocr;
 pub mod manga_text_mask;
 pub mod paddle_ocr_vl;

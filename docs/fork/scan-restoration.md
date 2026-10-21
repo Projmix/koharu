@@ -1,0 +1,93 @@
+# Scan enhancement stage
+
+Status, 2026-10-21: implemented on `main`'s working tree, not yet built end
+to end (the machine lacked LLVM for `koharu-torch-sys`). The owner approved
+the stage, the layer kind and the MangaJPEG integration, and accepted the
+CC BY-NC-SA 4.0 license of its weights for this non-commercial fork.
+
+Goal: low-quality scans and web raws (JPEG noise, grey paper, washed-out
+ink) become clean before detection, cleaning and typesetting, without new
+artifacts. When a result cannot pass the checks below, the page keeps its
+original and the run says why.
+
+## What the Photoshop recipes reduce to
+
+| Recipe step | What it computes | Decision |
+| --- | --- | --- |
+| Grayscale, Gray Gamma vs Dot Gain | Colour management: the same numbers under two profiles. | Decode once; never assign a profile. Work on BT.601 luma and keep each pixel's chroma, so sepia and duotone pages keep their ink colour. |
+| Surface Blur r=4 t=8, or r=1 t=8-12 | Edge-preserving mean: 3x3 (r=1) window, weight `max(0, 1 - abs(d) / (2.5 t))`. | Kept at r=1, t=9. r=4 smears screentone (the article admits it). |
+| Levels on the whole page | Moves every tone; clips light tone and dark gradients. | Rejected. |
+| Color Range (fuzziness 20-25) + Levels | On grey: snap near-ink to 0 and near-paper to 255 with a soft ramp, mid-tones unchanged. | Kept as the tone curve, only on pages with neutral ink. |
+| 1x MangaJPEG by JPEG quality | ESRGAN trained on manga to remove JPEG blocks while keeping screentone. | Kept, one step lighter than the published ranges (below). |
+| Waifu2x, Topaz | Trained on anime/photos; smear screentone. | Rejected. |
+
+## Behaviour
+
+`Stage::Enhancement` runs first, per page, only when the user selects it
+(not part of `Operation::Full` or the default selection). Settings:
+`pipeline.enhancement.mangajpeg` and `pipeline.enhancement.tone`, both on.
+
+1. **Analyse** the imported source: greyscale, monochrome (neutral ink and no
+   colour beyond the paper's tint), JPEG quality from the DQT table
+   (least-squares match to libjpeg's scaled Annex K table; exact on 15-95),
+   8x8 blockiness.
+2. **Damage**: only monochrome pages. JPEG below quality 90; a lossless file
+   (PNG, BMP, TIFF) whose blockiness says it holds a re-saved JPEG (>= 1.06
+   as quality 50, >= 1.12 as quality 30). WebP is skipped.
+3. **De-artifact**: MangaJPEG for the quality, then Surface Blur as the
+   fallback. A candidate is used only if it passes the checks and measurably
+   lowers paper noise or blockiness.
+4. **Tone**: on monochrome pages, the masked Levels curve. Ink edge from the
+   luminance histogram, paper edge per channel (tinted paper becomes white).
+5. **Result**: one opaque raster layer of kind `Enhancement` at the bottom of
+   the page, owned by `dev.koharu.pipeline.enhancement`. The source asset is
+   never replaced. Detection, OCR, markup, translation crops and inpainting
+   read the layer while it is visible. Hiding it is the before/after
+   comparison; PSD exports both. A rerun with the same settings skips the
+   page; a user-owned layer is never replaced.
+6. **Nothing to fix** gives an empty patch (the stage is skipped). **Rejected**
+   candidates with nothing else to apply become the page's warning ("kept the
+   original page: ..."), and the run continues.
+
+Checks on luminance against the source (`scan::Checks`): mid-tone change
+(mean <= 3, p99 <= 10 levels), screentone detail kept (10th percentile of
+textured tiles >= 85%), strong-edge F1 >= 0.97, halos <= 5% of mid-tone
+pixels.
+
+## Measurements
+
+Screentone crop 192x192 from the owner's chapter 3 page 5 (luma of a
+JPEG q100 page), recompressed with the `image` crate's encoder. PSNR in dB
+against the clean crop; reference forward in plain Rust from the same
+weights.
+
+| JPEG q | Compressed | Surface Blur | HQPlus | HQ | MQ | LQ |
+| --- | --- | --- | --- | --- | --- | --- |
+| 85 | 37.14 | 39.11 | 38.49 | 35.57 | 31.70 | 25.10 |
+| 60 | 29.98 | 30.85 | 31.30 | 31.14 | 30.17 | 25.04 |
+| 40 | 26.96 | 27.42 | 27.89 | 28.11 | 28.31 | 24.73 |
+| 20 | 23.64 | 23.81 | 24.14 | 24.42 | 25.22 | 24.18 |
+
+LQ added halos at every quality (11-24% of mid-tone pixels, mid-tones
+shifted by 4 levels) and fails the checks. Hence the mapping in
+`MangaJpegVariant::for_quality`: >= 55 HQPlus, 45-54 HQ, 12-44 MQ, below
+LQ. On whole pages recompressed at 15-90, Surface Blur alone gained 0.1-1.5
+dB and kept 96-99% of screentone detail; at q90 it lost detail, hence the
+cut-off at 90.
+
+On the owner's 106 pages (28 WebP, 26 PNG, 33 JPEG q100, all clean digital
+releases): JPEG and WebP pages are untouched, sepia/colour pages get no tone
+curve, and 9 monochrome PNG pages get only the tone curve (ink edge 0-32,
+paper 244-250). An earlier rule that ran Surface Blur on WebP by blockiness
+erased the kraft-paper texture of a colour cover; that is why de-artifacting
+is monochrome-only and skips WebP.
+
+## Open
+
+- Build and run the stage end to end; compare the libtorch MangaJPEG port
+  with the reference forward on identical crops (`koharu-ml` bin
+  `manga_jpeg`), and time it on the owner's CPU.
+- Calibrate the checks on a real low-quality scan, not only on recompressed
+  clean pages.
+- Upscaling (MangaJaNai) is a separate decision: it changes page size.
+- Colour pages: IllustrationJaNai DeJPEG FDAT is the analogue, not ported.

@@ -320,10 +320,7 @@ impl StageProcessor for Processor {
             request = request.with_instructions(instructions);
         }
         if Translator::supports_vision(&profile.model, &profile.generation)
-            && let Some(image) = input
-                .images
-                .get(&input.scene, input.page()?, "source")
-                .await?
+            && let Some(image) = input.images.page_image(&input.scene, input.page()?).await?
         {
             request = request.with_image(image);
         }

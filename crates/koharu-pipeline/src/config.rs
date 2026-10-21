@@ -10,6 +10,7 @@ use crate::stages::{
 
 #[derive(Clone, Debug, PartialEq, Type)]
 pub struct PipelineConfig {
+    pub enhancement: EnhancementConfig,
     pub detection: DetectionModel,
     pub ocr: OcrConfig,
     pub markup: SceneMarkupConfig,
@@ -23,6 +24,7 @@ pub struct PipelineConfig {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default)]
 struct PipelineFile {
+    enhancement: EnhancementConfig,
     detection: ModelSelection,
     ocr: OcrConfig,
     markup: SceneMarkupConfig,
@@ -35,6 +37,7 @@ struct PipelineFile {
 impl Default for PipelineFile {
     fn default() -> Self {
         Self {
+            enhancement: EnhancementConfig::default(),
             detection: ModelSelection {
                 model: "koharu-layout-rfdetr-seg-2xl".to_owned(),
             },
@@ -119,6 +122,7 @@ impl Serialize for PipelineConfig {
             }
         }
         PipelineFile {
+            enhancement: self.enhancement.clone(),
             detection: ModelSelection {
                 model: detection.to_owned(),
             },
@@ -196,6 +200,7 @@ impl<'de> Deserialize<'de> for PipelineConfig {
             }
         }
         Ok(Self {
+            enhancement: file.enhancement,
             detection,
             ocr: file.ocr,
             markup: file.markup,
@@ -216,6 +221,7 @@ impl<'de> Deserialize<'de> for PipelineConfig {
 impl Default for PipelineConfig {
     fn default() -> Self {
         Self {
+            enhancement: EnhancementConfig::default(),
             detection: DetectionModel::KoharuLayoutRFDetrSeg2XL(
                 KoharuLayoutRFDetrSeg2XLConfig::default(),
             ),
@@ -237,6 +243,27 @@ pub struct TranslationConfig {
     pub target_language: Language,
     pub page: TranslationProfile,
     pub chapter: TranslationProfile,
+}
+
+/// The scan enhancement stage, which cleans a low-quality scan before
+/// detection. It runs only when the user selects it.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, Type)]
+#[serde(default)]
+pub struct EnhancementConfig {
+    /// Remove JPEG artifacts with the MangaJPEG model chosen by the page's
+    /// measured quality; otherwise only with Surface Blur.
+    pub mangajpeg: bool,
+    /// Snap tones near ink and paper of monochrome pages to black and white.
+    pub tone: bool,
+}
+
+impl Default for EnhancementConfig {
+    fn default() -> Self {
+        Self {
+            mangajpeg: true,
+            tone: true,
+        }
+    }
 }
 
 /// The scene markup stage, which labels each text's kind, speaker and
@@ -1382,6 +1409,7 @@ mod tests {
     #[test]
     fn serializes_model_profiles_under_processor() {
         let config = PipelineConfig {
+            enhancement: EnhancementConfig::default(),
             detection: DetectionModel::KoharuLayoutRFDetrSeg2XL(KoharuLayoutRFDetrSeg2XLConfig {
                 text_threshold: Some(0.25),
                 ..Default::default()

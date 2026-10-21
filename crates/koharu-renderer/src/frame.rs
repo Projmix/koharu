@@ -327,6 +327,7 @@ pub enum LayerKind {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum ImageKind {
     Source,
+    Enhancement,
     Cleanup,
     Paint,
     Embedded,

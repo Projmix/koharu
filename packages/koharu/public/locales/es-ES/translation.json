@@ -405,6 +405,7 @@
   },
   "phase": {
     "detection": "Detección",
+    "enhancement": "Mejora del escaneo",
     "inpainting": "Relleno",
     "ocr": "OCR",
     "markup": "Marcado de escena",
@@ -412,6 +413,7 @@
   },
   "phaseShort": {
     "detection": "Detectar",
+    "enhancement": "Mejorar",
     "inpainting": "Limpiar",
     "ocr": "OCR",
     "markup": "Marcado",
@@ -419,6 +421,7 @@
   },
   "phaseDescription": {
     "detection": "Localiza el texto en la página.",
+    "enhancement": "Elimina el ruido JPEG y el papel gris de escaneos de baja calidad. La imagen original se conserva.",
     "inpainting": "Reconstruye el dibujo tras eliminar el texto.",
     "ocr": "Lee el texto dentro de cada región.",
     "markup": "Marca el tipo, el hablante y la continuación de cada texto para la traducción.",
@@ -488,6 +491,13 @@
     "loading": "Cargando preferencias…",
     "pipeline": {
       "description": "Elige los modelos y opciones usados para procesar cada página.",
+      "enhancement": {
+        "classical": "Filtro suave",
+        "mangajpeg": "MangaJPEG",
+        "mangajpegDescription": "Elimina los artefactos JPEG con el modelo adecuado a la compresión de la página. Desactivado: solo un filtro suave que conserva los bordes.",
+        "tone": "Puntos negro y blanco",
+        "toneDescription": "En páginas monocromas, convierte la tinta casi negra en negra y el papel casi blanco en blanco. Los tonos medios y las páginas teñidas no cambian."
+      },
       "modelLabel": "Modelo de {{stage}}",
       "options": {
         "bubbleThreshold": "Umbral de bocadillo",

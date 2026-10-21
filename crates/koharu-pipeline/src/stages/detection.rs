@@ -261,7 +261,7 @@ impl Model {
         let page = input.page()?;
         let image = input
             .images
-            .get(&input.scene, page, "source")
+            .page_image(&input.scene, page)
             .await?
             .ok_or_else(|| anyhow!("page {page} has no source image"))?;
         let output = self.detect(image.clone()).await?;

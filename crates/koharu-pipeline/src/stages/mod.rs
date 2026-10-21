@@ -1,4 +1,5 @@
 mod detection;
+mod enhancement;
 mod fal;
 mod inpainting;
 mod markup;
@@ -14,6 +15,7 @@ use async_trait::async_trait;
 use koharu_scene::{Edit, EntityId, Generation, Patch, ProducerId, Snapshot};
 
 pub use detection::{KoharuLayoutRFDetrSeg2XLConfig, text_layer_placement};
+pub(crate) use enhancement::visible_enhancement_layer;
 pub(crate) use fal::FalModel;
 pub(crate) use fal::normalize_cleanup_prompt;
 pub use fal::{ImageEditConfig, InpaintingApplyMode};
@@ -214,6 +216,7 @@ trait StageProcessor: Send + Sync {
 }
 
 pub(crate) struct Stages {
+    enhancement: enhancement::Processor,
     detection: detection::Processor,
     ocr: ocr::Processor,
     markup: markup::Processor,
@@ -236,6 +239,7 @@ impl Stages {
             .then(|| inpainting::Processor::new(manual_inpainting, device.clone()))
             .transpose()?;
         Ok(Self {
+            enhancement: enhancement::Processor::new(config.enhancement.clone(), device.clone()),
             detection: detection::Processor::new(
                 config.detection()?,
                 config.translation.source_language,
@@ -264,6 +268,7 @@ impl Stages {
 
     fn processor(&self, stage: Stage, input: &StageInput) -> &dyn StageProcessor {
         match stage {
+            Stage::Enhancement => &self.enhancement,
             Stage::Detection => &self.detection,
             Stage::Ocr => &self.ocr,
             Stage::Markup => &self.markup,
@@ -301,6 +306,7 @@ impl Stages {
 
     pub(crate) fn unload(&self, stage: Stage) -> bool {
         match stage {
+            Stage::Enhancement => self.enhancement.unload(),
             Stage::Detection => self.detection.unload(),
             Stage::Ocr => self.ocr.unload(),
             Stage::Markup => self.markup.unload(),
@@ -473,6 +479,7 @@ mod tests {
         assert_eq!(
             Stage::ALL.map(|stage| stages.model(stage, &input)),
             [
+                "mangajpeg+tone#1",
                 "koharu-layout-rfdetr-seg-2xl",
                 "paddleocr-vl-1.6",
                 "openrouter: google/gemini-3.7-flash",
@@ -565,7 +572,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             Stage::ALL.map(|stage| local.recovers_from_memory_pressure(stage, &input)),
-            [true, true, false, true, true]
+            [true, true, true, false, true, true]
         );
 
         let mut remote_config = PipelineConfig::default();
@@ -576,7 +583,7 @@ mod tests {
         let remote = Stages::new(&remote_config, translator, &koharu_ml::Device::cpu()).unwrap();
         assert_eq!(
             Stage::ALL.map(|stage| remote.recovers_from_memory_pressure(stage, &input)),
-            [true, false, false, false, false]
+            [true, true, false, false, false, false]
         );
         let chapter = StageInput::chapter(session.snapshot(), Arc::from([page]));
         assert!(!remote.recovers_from_memory_pressure(Stage::Translation, &chapter));

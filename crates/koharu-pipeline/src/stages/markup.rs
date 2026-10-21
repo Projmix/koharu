@@ -288,7 +288,7 @@ async fn request(
     let size = scene.page(context.page)?.page()?;
     let image = input
         .images
-        .get(scene, context.page, "source")
+        .page_image(scene, context.page)
         .await?
         .context("scene markup needs the page source image")?;
     let boxes = indices

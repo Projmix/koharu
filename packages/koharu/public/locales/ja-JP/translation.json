@@ -405,6 +405,7 @@
   },
   "phase": {
     "detection": "検出",
+    "enhancement": "スキャン補正",
     "inpainting": "インペイント",
     "ocr": "OCR",
     "markup": "シーン解析",
@@ -412,6 +413,7 @@
   },
   "phaseShort": {
     "detection": "検出",
+    "enhancement": "補正",
     "inpainting": "修復",
     "ocr": "OCR",
     "markup": "解析",
@@ -419,6 +421,7 @@
   },
   "phaseDescription": {
     "detection": "ページ上のテキストを見つけます。",
+    "enhancement": "低品質スキャンのJPEGノイズと灰色の紙を取り除きます。元の画像は保持されます。",
     "inpainting": "文字を消した部分の絵を復元します。",
     "ocr": "各領域内の原文を読み取ります。",
     "markup": "翻訳のために各テキストの種類・話者・続きを付けます。",
@@ -488,6 +491,13 @@
     "loading": "設定を読み込み中…",
     "pipeline": {
       "description": "各ページの処理に使用するモデルとオプションを選択します。",
+      "enhancement": {
+        "classical": "軽いフィルター",
+        "mangajpeg": "MangaJPEG",
+        "mangajpegDescription": "ページの圧縮率に合わせたモデルでJPEGノイズを除去します。オフにすると輪郭を保つ軽いフィルターのみを使います。",
+        "tone": "黒点と白点",
+        "toneDescription": "モノクロページで黒に近いインクを黒に、白に近い紙を白にします。中間調と色付きのページは変更しません。"
+      },
       "modelLabel": "{{stage}}モデル",
       "options": {
         "bubbleThreshold": "吹き出ししきい値",

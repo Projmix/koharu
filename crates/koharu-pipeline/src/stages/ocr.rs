@@ -502,7 +502,7 @@ async fn targets(
     let mut targets = Vec::new();
     let source = input
         .images
-        .get(&input.scene, page, "source")
+        .page_image(&input.scene, page)
         .await?
         .ok_or_else(|| anyhow!("page {page} has no source image"))?;
     let mut regions = Vec::new();

@@ -97,6 +97,11 @@ Known gaps after the rebuild:
   text blocks, page duplication.
 - Fork updater against `Projmix/koharu` releases (`docs/fork-releases.md`).
 - Research notes in `docs/research/` and plans in `docs/superpowers/plans/`.
+- Scan enhancement stage before detection, run only when selected:
+  MangaJPEG or Surface Blur against JPEG noise and a masked Levels curve on
+  monochrome pages, as an opaque `Enhancement` layer that later stages read;
+  the imported source is never replaced
+  ([scan-restoration.md](scan-restoration.md)).
 - Automatic typesetting diverges from upstream to match the owner's
   hand-set Russian pages (numbers in [results.ru.md](results.ru.md#тайпинг)):
   text inside a balloon that detection marks as dialogue takes the speech

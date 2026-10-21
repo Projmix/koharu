@@ -132,6 +132,7 @@ export function PipelinePreferences({
           )
         })}
       </PreferenceSection>
+      <EnhancementPreferences value={value} onChange={onChange} />
       <OcrPreferences
         value={value}
         modelChoices={modelChoices}
@@ -146,6 +147,46 @@ export function PipelinePreferences({
       />
       <InpaintingPreferences value={value} models={inpaintingModels} onChange={onChange} />
     </PreferencePage>
+  )
+}
+
+function EnhancementPreferences({
+  value,
+  onChange,
+}: {
+  value: PipelineConfig
+  onChange: (value: PipelineConfig) => void
+}) {
+  const { t } = useTranslation()
+  const enhancement = value.enhancement
+  return (
+    <PreferenceSection
+      title={t('phase.enhancement')}
+      description={t('phaseDescription.enhancement')}
+    >
+      <PreferenceRow
+        title={t('settings.pipeline.enhancement.mangajpeg')}
+        description={t('settings.pipeline.enhancement.mangajpegDescription')}
+      >
+        <Switch
+          aria-label={t('settings.pipeline.enhancement.mangajpeg')}
+          checked={enhancement.mangajpeg}
+          onCheckedChange={(mangajpeg) =>
+            onChange({ ...value, enhancement: { ...enhancement, mangajpeg } })
+          }
+        />
+      </PreferenceRow>
+      <PreferenceRow
+        title={t('settings.pipeline.enhancement.tone')}
+        description={t('settings.pipeline.enhancement.toneDescription')}
+      >
+        <Switch
+          aria-label={t('settings.pipeline.enhancement.tone')}
+          checked={enhancement.tone}
+          onCheckedChange={(tone) => onChange({ ...value, enhancement: { ...enhancement, tone } })}
+        />
+      </PreferenceRow>
+    </PreferenceSection>
   )
 }
 

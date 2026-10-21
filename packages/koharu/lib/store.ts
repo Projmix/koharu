@@ -50,6 +50,7 @@ export type ShortcutAction = CanvasTool | 'fit'
 export type Shortcuts = Record<ShortcutAction, string>
 export type PipelineScope = 'page' | 'selected-pages' | 'project'
 export const pipelineStages: readonly Stage[] = [
+  'enhancement',
   'detection',
   'ocr',
   'markup',
@@ -140,7 +141,8 @@ export const useKoharuStore = create<KoharuStore>()((set) => ({
   brush: { diameter: 48, color: '#FFFFFF' },
   inspector: 'copy',
   processingScope: 'selected-pages',
-  processingStages: [...pipelineStages],
+  // Scan enhancement changes the page's pixels, so it starts unselected.
+  processingStages: pipelineStages.filter((stage) => stage !== 'enhancement'),
   settingsOpen: false,
   shortcuts: defaultShortcuts,
   selectPages: (selectedPages) => set({ selectedPages: [...new Set(selectedPages)] }),

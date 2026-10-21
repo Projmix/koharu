@@ -4963,6 +4963,7 @@ dependencies = [
  "reqwest-middleware",
  "reqwest-retry",
  "serde",
+ "sha2 0.11.0",
  "strum",
  "tar",
  "tempfile",

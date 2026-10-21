@@ -81,8 +81,15 @@ impl Processing {
         self.warnings.lock().get(&(project, page)).cloned()
     }
 
-    fn clear_warning(&self, project: ProjectId, page: EntityId) {
-        self.warnings.lock().remove(&(project, page));
+    /// Clears the page's warning when `stage` raised it.
+    fn clear_warning(&self, project: ProjectId, page: EntityId, stage: koharu_pipeline::Stage) {
+        let mut warnings = self.warnings.lock();
+        if warnings
+            .get(&(project, page))
+            .is_some_and(|warning| warning.stage == stage)
+        {
+            warnings.remove(&(project, page));
+        }
     }
 
     fn record_warning(&self, project: ProjectId, page: EntityId, warning: PageWarning) {
@@ -334,12 +341,14 @@ pub(crate) async fn process_with_mask(
                     model,
                     ..
                 } => {
-                    if stage == koharu_pipeline::Stage::Inpainting
-                        && let Some(page) = target.page()
+                    if matches!(
+                        stage,
+                        koharu_pipeline::Stage::Enhancement | koharu_pipeline::Stage::Inpainting
+                    ) && let Some(page) = target.page()
                     {
                         progress_handle
                             .state::<Processing>()
-                            .clear_warning(project_id, page);
+                            .clear_warning(project_id, page, stage);
                     }
                     let mut progress = progress.lock();
                     progress.0 = progress.0.saturating_add(1).min(progress.1);
@@ -354,12 +363,14 @@ pub(crate) async fn process_with_mask(
                 Progress::Skipped { target, stage } => {
                     let mut progress = progress.lock();
                     progress.0 = progress.0.saturating_add(1).min(progress.1);
-                    if stage == koharu_pipeline::Stage::Inpainting
-                        && let Some(page) = target.page()
+                    if matches!(
+                        stage,
+                        koharu_pipeline::Stage::Enhancement | koharu_pipeline::Stage::Inpainting
+                    ) && let Some(page) = target.page()
                     {
                         progress_handle
                             .state::<Processing>()
-                            .clear_warning(project_id, page);
+                            .clear_warning(project_id, page, stage);
                     }
                     // A skipped stage is not active. Keep the last loading or
                     // finished stage visible while concurrent work continues.
@@ -748,9 +759,11 @@ mod tests {
         };
 
         processing.record_warning(project, page, warning.clone());
-        assert_eq!(processing.warning(project, page), Some(warning));
+        assert_eq!(processing.warning(project, page), Some(warning.clone()));
 
-        processing.clear_warning(project, page);
+        processing.clear_warning(project, page, koharu_pipeline::Stage::Enhancement);
+        assert_eq!(processing.warning(project, page), Some(warning));
+        processing.clear_warning(project, page, koharu_pipeline::Stage::Inpainting);
         assert_eq!(processing.warning(project, page), None);
     }
 

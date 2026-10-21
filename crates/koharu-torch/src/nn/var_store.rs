@@ -195,6 +195,13 @@ impl VarStore {
     ) -> Result<HashMap<String, Tensor>, TchError> {
         let named_tensors = match path.as_ref().extension().and_then(|x| x.to_str()) {
             Some("bin") | Some("pt") => Tensor::loadz_multi_with_device(&path, self.device),
+            Some("pth") if crate::tensor::legacy_pickle::is_legacy(path.as_ref())? => {
+                crate::tensor::legacy_pickle::read(&path)?
+                    .into_iter()
+                    .map(|(name, tensor)| Ok((name, tensor.f_to_device(self.device)?)))
+                    .collect()
+            }
+            Some("pth") => Tensor::loadz_multi_with_device(&path, self.device),
             Some("safetensors") => Tensor::read_safetensors(path),
             Some(_) | None => Tensor::load_multi_with_device(&path, self.device),
         };
@@ -239,6 +246,7 @@ impl VarStore {
     /// The format of the file is deduced from the file extension:
     /// - `.safetensors`: The file is assumed to be in safetensors format.
     /// - `.bin` or `.pt`: The file is assumed to be in pickle format.
+    /// - `.pth`: pickle format, or the legacy pre-1.6 `torch.save` format.
     /// - Otherwise, the file is assumed to be in libtorch C++ module format.
     pub fn load<T: AsRef<std::path::Path>>(&mut self, path: T) -> Result<(), TchError> {
         if self.device != Device::Mps {

@@ -5,6 +5,7 @@ mod convert;
 pub mod display;
 pub mod index;
 mod iter;
+pub(crate) mod legacy_pickle;
 mod npy;
 mod ops;
 mod safetensors;

@@ -21,6 +21,7 @@ import {
   Square,
   Type,
   Upload,
+  Wand2,
 } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -59,6 +60,7 @@ import { pipelineStages, receivePreferences, useKoharuStore, type PipelineScope 
 import { modelKey, providerName, translationProfileSelection } from '@/lib/translation'
 import {
   commands,
+  type EnhancementConfig,
   type FontFamily,
   type InpaintingConfig,
   type InpaintingModelChoice,
@@ -73,6 +75,7 @@ import {
 } from '@koharu/bridge/protocol'
 import { Button } from '@koharu/ui/components/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@koharu/ui/components/popover'
+import { Switch } from '@koharu/ui/components/switch'
 import {
   Select,
   SelectContent,
@@ -249,6 +252,11 @@ function RuntimeSelector({
     savePipeline(replaceStage(pipeline, stage, next), stage)
   }
 
+  const saveEnhancement = (enhancement: EnhancementConfig) => {
+    if (!pipeline) return
+    savePipeline({ ...pipeline, enhancement }, 'enhancement')
+  }
+
   const saveOcr = (ocr: OcrConfig) => {
     if (!pipeline) return
     savePipeline({ ...pipeline, ocr }, 'ocr')
@@ -384,6 +392,7 @@ function RuntimeSelector({
         onToggleMode={() => setMode('compact')}
         onChooseModel={chooseModel}
         onChooseStageModel={chooseStageModel}
+        onSaveEnhancement={saveEnhancement}
         onSaveOcr={saveOcr}
         onSaveMarkup={saveMarkup}
         onSaveInpainting={saveInpainting}
@@ -524,6 +533,13 @@ function RuntimeSelector({
         {view === 'stages' && (
           <SelectorPanel title={t('inference.pipelineStages')} onBack={() => setView('root')}>
             <SelectorOption
+              value='enhancement'
+              label={t('phase.enhancement')}
+              detail={t('phaseDescription.enhancement')}
+              selected={stages.includes('enhancement')}
+              onSelect={toggleStage}
+            />
+            <SelectorOption
               value='detection'
               label={t('phase.detection')}
               detail={t('phaseDescription.detection')}
@@ -602,6 +618,7 @@ function ExpandedRuntimeSelector({
   onToggleMode,
   onChooseModel,
   onChooseStageModel,
+  onSaveEnhancement,
   onSaveOcr,
   onSaveMarkup,
   onSaveInpainting,
@@ -633,6 +650,7 @@ function ExpandedRuntimeSelector({
   onToggleMode: () => void
   onChooseModel: (model: ModelSelection) => void
   onChooseStageModel: (stage: ModelStage, model: ModelName) => void
+  onSaveEnhancement: (enhancement: EnhancementConfig) => void
   onSaveOcr: (ocr: OcrConfig) => void
   onSaveMarkup: (markup: SceneMarkupConfig) => void
   onSaveInpainting: (inpainting: InpaintingConfig) => void
@@ -642,6 +660,15 @@ function ExpandedRuntimeSelector({
 }) {
   const { t } = useTranslation()
   const detection = pipeline ? stageModel(pipeline, 'detection') : null
+  const enhancement = pipeline?.enhancement ?? null
+  const enhancementLabel = enhancement
+    ? [
+        enhancement.mangajpeg
+          ? t('settings.pipeline.enhancement.mangajpeg')
+          : t('settings.pipeline.enhancement.classical'),
+        ...(enhancement.tone ? [t('settings.pipeline.enhancement.tone')] : []),
+      ].join(' · ')
+    : t('inference.notSet')
   const inpaintingConfig = pipeline?.inpainting ?? null
   const ocr = pipeline?.ocr ?? null
   const markup = pipeline?.markup ?? null
@@ -696,7 +723,7 @@ function ExpandedRuntimeSelector({
       </Button>
 
       <div className='max-w-full min-w-0 flex-1 overflow-hidden'>
-        <div className='grid w-full min-w-0 grid-cols-7 items-center gap-1 pr-1'>
+        <div className='grid w-full min-w-0 grid-cols-8 items-center gap-1 pr-1'>
           <ExpandedStageChip
             label={t('inference.scope')}
             shortLabel={t('inference.scope')}
@@ -705,6 +732,25 @@ function ExpandedRuntimeSelector({
             icon={<PanelsTopLeft className='size-3.5 shrink-0 text-primary' />}
           >
             <ScopePicker scope={scope} selectionCount={selectionCount} onSelect={onScopeChange} />
+          </ExpandedStageChip>
+
+          <ExpandedStageChip
+            stage='enhancement'
+            label={t('phase.enhancement')}
+            shortLabel={t('phaseShort.enhancement')}
+            value={enhancementLabel}
+            active={stages.includes('enhancement')}
+            disabled={running}
+            onToggle={() => toggleStage('enhancement')}
+            icon={<Wand2 className='size-3.5 shrink-0 text-primary' />}
+          >
+            {enhancement && (
+              <EnhancementStagePicker
+                value={enhancement}
+                disabled={running || saving}
+                onChange={onSaveEnhancement}
+              />
+            )}
           </ExpandedStageChip>
 
           <ExpandedStageChip
@@ -1013,6 +1059,49 @@ function PipelineStagePicker({
 }
 
 /** The scene markup model: a vision model from a provider that supports markup. */
+function EnhancementStagePicker({
+  value,
+  disabled,
+  onChange,
+}: {
+  value: EnhancementConfig
+  disabled: boolean
+  onChange: (value: EnhancementConfig) => void
+}) {
+  const { t } = useTranslation()
+  const options = [
+    {
+      key: 'mangajpeg',
+      label: t('settings.pipeline.enhancement.mangajpeg'),
+      description: t('settings.pipeline.enhancement.mangajpegDescription'),
+    },
+    {
+      key: 'tone',
+      label: t('settings.pipeline.enhancement.tone'),
+      description: t('settings.pipeline.enhancement.toneDescription'),
+    },
+  ] as const
+  return (
+    <div className='grid w-72 gap-2 p-1'>
+      <span className='px-1 text-[11px] font-medium'>{t('phase.enhancement')}</span>
+      {options.map((option) => (
+        <label key={option.key} className='flex items-start justify-between gap-3 px-1'>
+          <span className='grid gap-0.5'>
+            <span className='text-[11px]'>{option.label}</span>
+            <span className='text-[10px] text-muted-foreground'>{option.description}</span>
+          </span>
+          <Switch
+            aria-label={option.label}
+            checked={value[option.key]}
+            disabled={disabled}
+            onCheckedChange={(checked) => onChange({ ...value, [option.key]: checked })}
+          />
+        </label>
+      ))}
+    </div>
+  )
+}
+
 function MarkupStagePicker({
   value,
   modelChoices,

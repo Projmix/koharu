@@ -254,7 +254,7 @@ export function TitleBar() {
                 {t('menu.processLayers')}
               </MenubarItem>
               <MenubarSeparator />
-              {(['detection', 'ocr', 'markup', 'translation', 'inpainting'] as Stage[]).map(
+              {(['enhancement', 'detection', 'ocr', 'markup', 'translation', 'inpainting'] as Stage[]).map(
                 (stage) => (
                   <MenubarItem
                     key={stage}

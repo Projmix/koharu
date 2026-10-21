@@ -405,6 +405,7 @@
   },
   "phase": {
     "detection": "감지",
+    "enhancement": "스캔 보정",
     "inpainting": "인페인팅",
     "ocr": "OCR",
     "markup": "장면 분석",
@@ -412,6 +413,7 @@
   },
   "phaseShort": {
     "detection": "감지",
+    "enhancement": "보정",
     "inpainting": "복원",
     "ocr": "OCR",
     "markup": "분석",
@@ -419,6 +421,7 @@
   },
   "phaseDescription": {
     "detection": "페이지의 텍스트를 찾습니다.",
+    "enhancement": "저품질 스캔의 JPEG 노이즈와 회색 종이를 제거합니다. 원본 이미지는 유지됩니다.",
     "inpainting": "텍스트를 지운 뒤 그림을 복원합니다.",
     "ocr": "각 영역 안의 텍스트를 읽습니다.",
     "markup": "번역을 위해 각 텍스트의 종류, 화자, 이어지는 대사를 표시합니다.",
@@ -488,6 +491,13 @@
     "loading": "환경 설정 불러오는 중…",
     "pipeline": {
       "description": "각 페이지 처리에 사용할 모델과 옵션을 선택합니다.",
+      "enhancement": {
+        "classical": "가벼운 필터",
+        "mangajpeg": "MangaJPEG",
+        "mangajpegDescription": "페이지 압축률에 맞는 모델로 JPEG 노이즈를 제거합니다. 끄면 윤곽을 보존하는 가벼운 필터만 사용합니다.",
+        "tone": "검은 점과 흰 점",
+        "toneDescription": "흑백 페이지에서 검정에 가까운 잉크는 검정으로, 흰색에 가까운 종이는 흰색으로 만듭니다. 중간 톤과 색이 있는 페이지는 바꾸지 않습니다."
+      },
       "modelLabel": "{{stage}} 모델",
       "options": {
         "bubbleThreshold": "말풍선 임곗값",

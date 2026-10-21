@@ -44,7 +44,15 @@ pub enum Operation {
 impl Operation {
     pub(crate) fn stages(&self) -> Result<Vec<Stage>> {
         let stages = match self {
-            Self::Full => Stage::ALL.to_vec(),
+            // Scan enhancement changes the page's pixels, so it runs only when
+            // the user selects it.
+            Self::Full => Stage::ALL
+                .into_iter()
+                .filter(|stage| *stage != Stage::Enhancement)
+                .collect(),
+            Self::Through {
+                stage: Stage::Enhancement,
+            } => vec![Stage::Enhancement],
             Self::Through {
                 stage: Stage::Detection,
             } => vec![Stage::Detection],

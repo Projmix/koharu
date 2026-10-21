@@ -405,6 +405,7 @@
   },
   "phase": {
     "detection": "Algılama",
+    "enhancement": "Tarama iyileştirme",
     "inpainting": "Doldurma",
     "ocr": "OCR",
     "markup": "Sahne işaretleme",
@@ -412,6 +413,7 @@
   },
   "phaseShort": {
     "detection": "Algı",
+    "enhancement": "İyileştir",
     "inpainting": "Temizle",
     "ocr": "OCR",
     "markup": "İşaretleme",
@@ -419,6 +421,7 @@
   },
   "phaseDescription": {
     "detection": "Sayfadaki metni bulur.",
+    "enhancement": "Düşük kaliteli taramalardaki JPEG gürültüsünü ve gri kâğıdı giderir. Orijinal görüntü korunur.",
     "inpainting": "Metin kaldırıldıktan sonra çizimi yeniden oluşturur.",
     "ocr": "Her bölgenin içindeki metni okur.",
     "markup": "Çeviri için her metnin türünü, konuşanını ve devamını işaretler.",
@@ -488,6 +491,13 @@
     "loading": "Tercihler yükleniyor…",
     "pipeline": {
       "description": "Her sayfayı işlemek için kullanılan modelleri ve seçenekleri seçin.",
+      "enhancement": {
+        "classical": "Hafif filtre",
+        "mangajpeg": "MangaJPEG",
+        "mangajpegDescription": "JPEG bozulmalarını sayfanın sıkıştırmasına uygun modelle giderir. Kapalıyken yalnızca kenarları koruyan hafif bir filtre kullanılır.",
+        "tone": "Siyah ve beyaz noktalar",
+        "toneDescription": "Tek renkli sayfalarda siyaha yakın mürekkebi siyah, beyaza yakın kâğıdı beyaz yapar. Ara tonlar ve renkli sayfalar değişmez."
+      },
       "modelLabel": "{{stage}} modeli",
       "options": {
         "bubbleThreshold": "Konuşma balonu eşiği",

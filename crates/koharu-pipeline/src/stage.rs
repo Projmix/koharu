@@ -29,6 +29,7 @@ pub(crate) enum OcrPass {
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case", ascii_case_insensitive)]
 pub enum Stage {
+    Enhancement,
     Detection,
     Ocr,
     Markup,
@@ -37,7 +38,8 @@ pub enum Stage {
 }
 
 impl Stage {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
+        Self::Enhancement,
         Self::Detection,
         Self::Ocr,
         Self::Markup,

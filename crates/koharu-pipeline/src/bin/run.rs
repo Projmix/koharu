@@ -92,6 +92,7 @@ enum InpaintingChoice {
 impl Arguments {
     fn pipeline_config(&self) -> PipelineConfig {
         PipelineConfig {
+            enhancement: koharu_pipeline::EnhancementConfig::default(),
             detection: match self.detection {
                 DetectionChoice::KoharuLayoutRFDetrSeg2XL => {
                     DetectionModel::KoharuLayoutRFDetrSeg2XL(

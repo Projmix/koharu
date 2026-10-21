@@ -637,6 +637,7 @@ impl Traversal<'_> {
                         f64::from(self.height),
                     );
                     let kind = match raster.kind {
+                        RasterLayerKind::Enhancement => ImageKind::Enhancement,
                         RasterLayerKind::Cleanup => ImageKind::Cleanup,
                         RasterLayerKind::Paint => ImageKind::Paint,
                     };

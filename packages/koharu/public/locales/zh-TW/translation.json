@@ -405,6 +405,7 @@
   },
   "phase": {
     "detection": "偵測",
+    "enhancement": "掃描增強",
     "inpainting": "修補",
     "ocr": "OCR",
     "markup": "場景標註",
@@ -412,6 +413,7 @@
   },
   "phaseShort": {
     "detection": "偵測",
+    "enhancement": "增強",
     "inpainting": "修復",
     "ocr": "OCR",
     "markup": "標註",
@@ -419,6 +421,7 @@
   },
   "phaseDescription": {
     "detection": "找出頁面上的文字。",
+    "enhancement": "去除低品質掃描中的 JPEG 雜訊與灰色紙張。原圖會保留。",
     "inpainting": "重建移除文字後的畫面。",
     "ocr": "讀取每個區域中的文字。",
     "markup": "為翻譯標註每段文字的類型、說話者與接續關係。",
@@ -488,6 +491,13 @@
     "loading": "正在載入偏好設定…",
     "pipeline": {
       "description": "選擇用於處理每個頁面的模型和選項。",
+      "enhancement": {
+        "classical": "輕度濾鏡",
+        "mangajpeg": "MangaJPEG",
+        "mangajpegDescription": "使用與頁面壓縮程度相符的模型去除 JPEG 瑕疵。關閉時僅使用保留邊緣的輕度濾鏡。",
+        "tone": "黑白場",
+        "toneDescription": "在單色頁面上將接近黑色的墨跡變為純黑，接近白色的紙張變為純白。中間調與有色頁面保持不變。"
+      },
       "modelLabel": "{{stage}}模型",
       "options": {
         "bubbleThreshold": "對話框閾值",

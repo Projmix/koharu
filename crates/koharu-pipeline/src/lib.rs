@@ -19,9 +19,9 @@ mod stage_runner;
 mod stages;
 
 pub use config::{
-    ApiInpaintingConfig, ApiOcrConfig, DetectionModel, InpaintingConfig, InpaintingMethod,
-    InpaintingModelChoice, InpaintingProvider, LocalInpaintingModel, OcrConfig, OcrMethod,
-    OcrModel, PipelineConfig, ProcessorConfig, RestorationConfig, SceneMarkupConfig,
+    ApiInpaintingConfig, ApiOcrConfig, DetectionModel, EnhancementConfig, InpaintingConfig,
+    InpaintingMethod, InpaintingModelChoice, InpaintingProvider, LocalInpaintingModel, OcrConfig,
+    OcrMethod, OcrModel, PipelineConfig, ProcessorConfig, RestorationConfig, SceneMarkupConfig,
     TranslationConfig, TranslationProfile, TranslationUnitPolicy,
 };
 pub use error::{ErrorKind, PipelineError};

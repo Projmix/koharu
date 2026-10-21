@@ -12,6 +12,19 @@ pub(crate) struct ImageCache {
 }
 
 impl ImageCache {
+    /// The page as later stages read it: the visible scan enhancement layer
+    /// when the page has one, otherwise the imported source.
+    pub(crate) async fn page_image(
+        &self,
+        scene: &Snapshot,
+        page: EntityId,
+    ) -> Result<Option<Arc<image::DynamicImage>>> {
+        match crate::stages::visible_enhancement_layer(scene, page)? {
+            Some(layer) => self.get(scene, layer, "source").await,
+            None => self.get(scene, page, "source").await,
+        }
+    }
+
     pub(crate) async fn get(
         &self,
         scene: &Snapshot,

@@ -707,7 +707,7 @@ async fn prepare(
     let page = input.page()?;
     let original = input
         .images
-        .get(&input.scene, page, "source")
+        .page_image(&input.scene, page)
         .await?
         .ok_or_else(|| anyhow!("page {page} has no source image"))?;
     let remove = input.inpainting_intent() == Some(InpaintingIntent::Remove);
@@ -720,6 +720,10 @@ async fn prepare(
             let Some(raster) = input.scene.component::<RasterLayer>(entity)? else {
                 continue;
             };
+            // The enhancement layer is already the base image.
+            if raster.kind == RasterLayerKind::Enhancement {
+                continue;
+            }
             let is_paint = raster.kind == RasterLayerKind::Paint;
             if !(remove
                 || is_paint && include_paint

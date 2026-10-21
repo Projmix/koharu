@@ -405,6 +405,7 @@
   },
   "phase": {
     "detection": "检测",
+    "enhancement": "扫描增强",
     "inpainting": "修补",
     "ocr": "OCR",
     "markup": "场景标注",
@@ -412,6 +413,7 @@
   },
   "phaseShort": {
     "detection": "检测",
+    "enhancement": "增强",
     "inpainting": "修复",
     "ocr": "OCR",
     "markup": "标注",
@@ -419,6 +421,7 @@
   },
   "phaseDescription": {
     "detection": "寻出页面浪个文本。",
+    "enhancement": "去除低质量扫描中的 JPEG 噪点和灰色纸张。原图会保留。",
     "inpainting": "拿文字删脱仔，再重建原来文字底下个图稿。",
     "ocr": "读出每个区域里向个文本。",
     "markup": "为翻译标注每段文字的类型、说话人和接续关系。",
@@ -488,6 +491,13 @@
     "loading": "来勒加载偏好设置…",
     "pipeline": {
       "description": "选好每一页处理个辰光要用个模型搭选项。",
+      "enhancement": {
+        "classical": "轻度滤镜",
+        "mangajpeg": "MangaJPEG",
+        "mangajpegDescription": "使用与页面压缩程度匹配的模型去除 JPEG 伪影。关闭时仅使用保留边缘的轻度滤镜。",
+        "tone": "黑白场",
+        "toneDescription": "在单色页面上将接近黑色的墨迹变为纯黑，接近白色的纸张变为纯白。中间调和有色页面保持不变。"
+      },
       "modelLabel": "{{stage}}模型",
       "options": {
         "bubbleThreshold": "气泡阈值",

@@ -200,10 +200,14 @@ impl<'a> Execution<'a> {
             outcome,
         } = completion;
         let outcome = match outcome {
+            // A page whose enhancement was rejected keeps its original and the
+            // run goes on; the reason is the page's warning.
             Err(error)
-                if stage == Stage::Inpainting
-                    && target.page().is_some()
-                    && (self.scheduler.project_scope() || self.scheduler.parallel_inpainting()) =>
+                if target.page().is_some()
+                    && (stage == Stage::Enhancement
+                        || stage == Stage::Inpainting
+                            && (self.scheduler.project_scope()
+                                || self.scheduler.parallel_inpainting())) =>
             {
                 self.mark_complete(target, stage);
                 progress::emit(

@@ -315,10 +315,12 @@ impl Scheduler {
 /// only when the run includes it.
 const fn prerequisites(stage: Stage) -> &'static [Stage] {
     match stage {
-        Stage::Detection => &[],
-        Stage::Ocr | Stage::Inpainting => &[Stage::Detection],
-        Stage::Markup => &[Stage::Ocr],
-        Stage::Translation => &[Stage::Ocr, Stage::Markup],
+        Stage::Enhancement => &[],
+        // Every later stage reads the enhanced page when the run makes one.
+        Stage::Detection => &[Stage::Enhancement],
+        Stage::Ocr | Stage::Inpainting => &[Stage::Enhancement, Stage::Detection],
+        Stage::Markup => &[Stage::Enhancement, Stage::Ocr],
+        Stage::Translation => &[Stage::Enhancement, Stage::Ocr, Stage::Markup],
     }
 }
 

@@ -108,7 +108,10 @@ pub(crate) async fn build(
         matches!(
             layer.kind(),
             LayerKind::Image(metadata)
-                if matches!(metadata.kind, ImageKind::Cleanup | ImageKind::Paint)
+                if matches!(
+                    metadata.kind,
+                    ImageKind::Enhancement | ImageKind::Cleanup | ImageKind::Paint
+                )
         )
     });
     let mut layers = Vec::new();
@@ -151,8 +154,12 @@ pub(crate) async fn build(
             LayerKind::Image(image) => Some(image),
             LayerKind::Text(_) => None,
         };
-        let raster =
-            image.is_some_and(|image| matches!(image.kind, ImageKind::Cleanup | ImageKind::Paint));
+        let raster = image.is_some_and(|image| {
+            matches!(
+                image.kind,
+                ImageKind::Enhancement | ImageKind::Cleanup | ImageKind::Paint
+            )
+        });
         let ordinary_image = image.is_some_and(|image| image.kind == ImageKind::Embedded);
         if (raster && options.include_raster_layers) || ordinary_image {
             let cropped = frame
@@ -162,6 +169,7 @@ pub(crate) async fn build(
             let image = image.expect("image branch was selected above");
             let name = image.name.clone().unwrap_or_else(|| match image.kind {
                 ImageKind::Source | ImageKind::Embedded => "Image".to_owned(),
+                ImageKind::Enhancement => "Scan enhancement".to_owned(),
                 ImageKind::Cleanup => "Cleanup".to_owned(),
                 ImageKind::Paint => "Paint".to_owned(),
             });

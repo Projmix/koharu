@@ -137,6 +137,19 @@ No cloud cleaning model has been measured on the owner's pages. When the
 evaluation set exists, score residual ink inside the mask, damage outside it,
 policy rejections, cost and time per page, and move losers to `rejected`.
 
+## Scan restoration
+
+Design and measurements in [scan-restoration.md](scan-restoration.md);
+sources checked 2026-10-21 on OpenModelDB and GitHub.
+
+| Model | Status | Source | Notes |
+| --- | --- | --- | --- |
+| 1x-MangaJPEG HQPlus / HQ / MQ / LQ | in use (scan enhancement) | [OpenModelDB](https://openmodeldb.info/models/1x-MangaJPEGHQ), pinned by SHA-256 | Old-arch ESRGAN, 32 features, 12 blocks, one grey channel. Loaded natively (`koharu-ml::manga_jpeg`, legacy `.pth` reader in `koharu-torch`). Chosen one step lighter than the published ranges; LQ adds halos (measurements in scan-restoration.md). CC BY-NC-SA 4.0, accepted by the owner for this fork; downloaded, not bundled. |
+| MangaJaNai V1 (2x / 4x, per input height) | candidate (later, upscaling) | [the-database/MangaJaNai](https://github.com/the-database/MangaJaNai) | B&W upscaler that also removes JPEG noise and restores dots. Changes page size; license not stated in the repo. |
+| IllustrationJaNai V2 DeJPEG FDAT (1x) | candidate (low) | OpenModelDB | Colour pages: removes JPEG artifacts and keeps halftone. FDAT is not a quick port. CC BY-NC-SA 4.0. |
+| 1x eula digimanga bw | rejected 2026-10-21 | OpenModelDB | Its 1x companion deliberately smooths halftone (it was made to build a dataset). |
+| Waifu2x, FBCNN, SCUNet | rejected 2026-10-21 | | Trained on anime or photos; flatten screentone. FBCNN's JPEG-quality prediction idea is replaced by reading the DQT table. |
+
 ## Translation models (JA→RU chapter)
 
 Measured 2026-10-18 on 6 pages of the owner's chapter, 99 segments. Four of the pages are adult content. The run used Koharu's chapter path (adaptive_v1, OpenRouter, strict output check) and was blind: the references for those pages were stripped. Scores are chrF against the owner's own translation, overall / adult pages / ordinary pages.

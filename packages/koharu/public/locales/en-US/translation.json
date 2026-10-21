@@ -405,6 +405,7 @@
   },
   "phase": {
     "detection": "Detection",
+    "enhancement": "Scan enhancement",
     "inpainting": "Inpainting",
     "ocr": "OCR",
     "markup": "Scene markup",
@@ -412,6 +413,7 @@
   },
   "phaseShort": {
     "detection": "Detect",
+    "enhancement": "Enhance",
     "inpainting": "Clean",
     "ocr": "OCR",
     "markup": "Markup",
@@ -419,6 +421,7 @@
   },
   "phaseDescription": {
     "detection": "Locate text on the page.",
+    "enhancement": "Remove JPEG noise and grey paper from low-quality scans. The original stays in the page.",
     "inpainting": "Rebuild the artwork behind removed text.",
     "ocr": "Read the text inside each region.",
     "markup": "Label each text's kind, speaker and continuation for translation.",
@@ -488,6 +491,13 @@
     "loading": "Loading preferences…",
     "pipeline": {
       "description": "Choose the models and options used to process each page.",
+      "enhancement": {
+        "classical": "Light filter",
+        "mangajpeg": "MangaJPEG",
+        "mangajpegDescription": "Remove JPEG artifacts with the model matched to the page's compression. Off: only a light edge-preserving filter.",
+        "tone": "Black and white points",
+        "toneDescription": "Make near-black ink black and near-white paper white on monochrome pages. Mid-tones and tinted pages stay as they are."
+      },
       "modelLabel": "{{stage}} model",
       "options": {
         "bubbleThreshold": "Bubble threshold",

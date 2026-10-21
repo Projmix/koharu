@@ -12,15 +12,20 @@ use crate::{
 
 use super::Origin;
 
-#[revisioned(revision = 1)]
+#[revisioned(revision = 2)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "snake_case")]
 pub enum RasterLayerKind {
     Cleanup,
     Paint,
+    /// An opaque replacement of the page source made by scan enhancement;
+    /// later stages read it instead of the source while it is visible.
+    #[revision(start = 2)]
+    Enhancement,
 }
 
-/// A full-page transparent pixel layer composited above the page source.
+/// A full-page pixel layer composited above the page source: transparent for
+/// cleanup and paint, opaque for scan enhancement.
 #[revisioned(revision = 1)]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Type)]
 pub struct RasterLayer {
