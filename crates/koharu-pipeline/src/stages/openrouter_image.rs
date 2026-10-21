@@ -1,9 +1,16 @@
-use std::{collections::HashMap, io::Cursor, sync::Arc};
+use std::{collections::HashMap, sync::Arc};
 
 use anyhow::{Context as _, Result, ensure};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use futures::StreamExt as _;
-use image::{DynamicImage, ImageFormat, Rgba, RgbaImage, imageops::FilterType};
+use image::{
+    DynamicImage, ImageEncoder as _, Rgba, RgbaImage,
+    codecs::{
+        jpeg::JpegEncoder,
+        png::{CompressionType, FilterType as PngFilter, PngEncoder},
+    },
+    imageops::FilterType,
+};
 use koharu_secrets::ExposeSecret as _;
 use reqwest::{Client, RequestBuilder, Response, Url};
 use serde::Deserialize;
@@ -19,6 +26,9 @@ const IMAGE_MODELS_URL: &str = "https://openrouter.ai/api/v1/images/models";
 const MAX_IMAGE_BYTES: usize = 64 * 1024 * 1024;
 const MAX_RESPONSE_BYTES: usize = (MAX_IMAGE_BYTES / 3 + 1) * 4 + 1024 * 1024;
 const MAX_ERROR_BYTES: usize = 16 * 1024;
+/// Tencent's HY Image rejects an input image over 20 MB ("image size is more
+/// than 20M"); a 3343x5015 scan as RGB PNG exceeded it.
+const MAX_INPUT_BYTES: usize = 19 * 1024 * 1024;
 const MAX_ERROR_DETAIL_CHARS: usize = 512;
 const FIRST_PINNED_MODEL: &str = "microsoft/mai-image-2.5";
 const SECOND_PINNED_MODEL: &str = "microsoft/mai-image-2.5-pro";
@@ -81,13 +91,9 @@ impl OpenRouterImage {
 
         let framing = self.framing(model, key, image).await;
         let sent = framing.pad(image);
-        let mut encoded = Cursor::new(Vec::new());
-        sent.write_to(&mut encoded, ImageFormat::Png)
+        let (encoded, media_type) = encode_input(&sent, MAX_INPUT_BYTES)
             .context("failed to encode the OpenRouter input image")?;
-        let data_uri = format!(
-            "data:image/png;base64,{}",
-            STANDARD.encode(encoded.into_inner())
-        );
+        let data_uri = format!("data:{media_type};base64,{}", STANDARD.encode(encoded));
         let response = self
             .send(
                 self.client
@@ -362,6 +368,61 @@ async fn models_with_key(
     Ok(filter_and_sort_models(response.data))
 }
 
+/// The page as the smallest lossless PNG: one grey channel when the page has
+/// no colour (a third of RGB), best compression. Only a page that still
+/// exceeds `limit` goes as JPEG at quality 95.
+fn encode_input(image: &DynamicImage, limit: usize) -> Result<(Vec<u8>, &'static str)> {
+    let rgb = image.to_rgb8();
+    let grey = rgb
+        .pixels()
+        .all(|pixel| pixel[0] == pixel[1] && pixel[1] == pixel[2]);
+    let translucent =
+        image.color().has_alpha() && image.to_rgba8().pixels().any(|pixel| pixel[3] != 255);
+    let mut png = Vec::new();
+    let encoder =
+        PngEncoder::new_with_quality(&mut png, CompressionType::Best, PngFilter::Adaptive);
+    if translucent {
+        let rgba = image.to_rgba8();
+        encoder.write_image(
+            rgba.as_raw(),
+            rgba.width(),
+            rgba.height(),
+            image::ExtendedColorType::Rgba8,
+        )?;
+    } else if grey {
+        let luma = image.to_luma8();
+        encoder.write_image(
+            luma.as_raw(),
+            luma.width(),
+            luma.height(),
+            image::ExtendedColorType::L8,
+        )?;
+    } else {
+        encoder.write_image(
+            rgb.as_raw(),
+            rgb.width(),
+            rgb.height(),
+            image::ExtendedColorType::Rgb8,
+        )?;
+    }
+    if png.len() <= limit {
+        return Ok((png, "image/png"));
+    }
+    let mut jpeg = Vec::new();
+    JpegEncoder::new_with_quality(&mut jpeg, 95).write_image(
+        rgb.as_raw(),
+        rgb.width(),
+        rgb.height(),
+        image::ExtendedColorType::Rgb8,
+    )?;
+    ensure!(
+        jpeg.len() <= limit,
+        "the page is {} bytes even as JPEG; the image model accepts at most {limit}",
+        jpeg.len()
+    );
+    Ok((jpeg, "image/jpeg"))
+}
+
 fn request_body(model: &str, prompt: &str, data_uri: &str, aspect_ratio: Option<&str>) -> Value {
     let mut body = json!({
         "model": model,
@@ -608,6 +669,8 @@ fn pinned_rank(model: &str) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use image::ImageFormat;
+    use std::io::Cursor;
     use std::{
         sync::{Arc, Mutex},
         time::Duration,
@@ -755,6 +818,31 @@ mod tests {
         assert!(ensure_raster_mime("image/jpeg; charset=binary").is_ok());
         assert!(ensure_raster_mime("image/svg+xml").is_err());
         assert!(ensure_raster_mime("application/json").is_err());
+    }
+
+    #[test]
+    fn input_is_lossless_png_and_jpeg_only_over_the_limit() {
+        let grey = DynamicImage::ImageRgb8(image::RgbImage::from_fn(64, 64, |x, y| {
+            let value = ((x * 37 + y * 11) % 256) as u8;
+            image::Rgb([value, value, value])
+        }));
+        let (bytes, media_type) = encode_input(&grey, MAX_INPUT_BYTES).unwrap();
+        assert_eq!(media_type, "image/png");
+        let decoded = image::load_from_memory(&bytes).unwrap();
+        assert_eq!(decoded.color(), image::ColorType::L8);
+        assert_eq!(decoded.to_rgb8(), grey.to_rgb8(), "grey PNG is lossless");
+
+        // Smooth colour with fine noise: PNG cannot shrink the noise, JPEG can.
+        let mut seed = 1u32;
+        let photo = DynamicImage::ImageRgb8(image::RgbImage::from_fn(256, 256, |x, y| {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            let noise = (seed >> 28) as u8;
+            image::Rgb([x as u8 / 2 + noise, y as u8 / 2 + noise, 128 + noise])
+        }));
+        let (png, _) = encode_input(&photo, MAX_INPUT_BYTES).unwrap();
+        let (bytes, media_type) = encode_input(&photo, png.len() - 1).unwrap();
+        assert_eq!(media_type, "image/jpeg");
+        assert!(bytes.starts_with(&[0xff, 0xd8]));
     }
 
     #[tokio::test]
