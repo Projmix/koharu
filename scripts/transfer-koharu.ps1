@@ -215,6 +215,15 @@ New-Item -ItemType Directory -Path $stage | Out-Null
 try {
     if ($Action -eq 'export') {
         if (Test-Path $Path) { throw "$Path already exists. Choose another file name." }
+        # Fail before copying anything when the archive cannot be written there
+        # (the root of C:\ needs administrator rights).
+        try {
+            New-Item -ItemType Directory -Path (Split-Path $Path) -Force | Out-Null
+            [IO.File]::Create($Path).Dispose()
+            Remove-Item $Path
+        } catch {
+            throw "Cannot write $Path. Choose a folder of your own, for example $([Environment]::GetFolderPath('Desktop'))\koharu-transfer.zip."
+        }
 
         $projects = @(Get-ChildItem $ProjectsDir -Directory -Filter '*.khrproj' -ErrorAction SilentlyContinue)
         Write-Host "Projects: $($projects.Count) from $ProjectsDir"
