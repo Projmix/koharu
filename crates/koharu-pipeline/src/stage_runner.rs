@@ -4,11 +4,13 @@ use std::{
 };
 
 use anyhow::Result;
-use koharu_scene::Patch;
+use koharu_scene::{EntityId, Patch, Snapshot};
 
 use crate::{
-    ErrorKind, PipelineConfig, PipelineError, Progress, ProgressSink, Stage, StopToken,
+    ErrorKind, PipelineConfig, PipelineError, Progress, ProgressSink, Stage, StageProgress,
+    StopToken,
     accelerator::AcceleratorGate,
+    images::ImageCache,
     progress,
     resources::ResourceMonitor,
     stages::{StageInput, Stages},
@@ -42,6 +44,45 @@ impl StageRunner {
 
     pub(crate) const fn hybrid_ocr(&self) -> bool {
         self.hybrid_ocr
+    }
+
+    /// What each stage has left to do on a project, judged by the same
+    /// checks a run uses to skip finished work.
+    pub(crate) fn progress(&self, scene: &Snapshot) -> Vec<StageProgress> {
+        let inputs = page_inputs(scene);
+        Stage::ALL
+            .into_iter()
+            .map(|stage| StageProgress {
+                stage,
+                done: inputs
+                    .iter()
+                    .filter(|(_, input)| self.done(stage, input))
+                    .count(),
+                total: inputs.len(),
+                requires: stage.requires().to_vec(),
+            })
+            .collect()
+    }
+
+    /// The pages, in project order, that a stage still has work on.
+    pub(crate) fn unfinished(&self, scene: &Snapshot, stage: Stage) -> Vec<EntityId> {
+        page_inputs(scene)
+            .into_iter()
+            .filter(|(_, input)| !self.done(stage, input))
+            .map(|(page, _)| page)
+            .collect()
+    }
+
+    fn done(&self, stage: Stage, input: &StageInput) -> bool {
+        match self.stages.completed(stage, input) {
+            Ok(done) => done,
+            // Translation refuses a page without OCR text; once OCR has run,
+            // such a page has nothing to translate.
+            Err(_) => {
+                stage == Stage::Translation
+                    && self.stages.completed(Stage::Ocr, input).unwrap_or(false)
+            }
+        }
     }
 
     #[tracing::instrument(skip_all)]
@@ -169,6 +210,24 @@ impl StageRunner {
         };
         PipelineError::new(failure.kind, Some(stage), failure.error.context(message))
     }
+}
+
+fn page_inputs(scene: &Snapshot) -> Vec<(EntityId, StageInput)> {
+    scene
+        .pages()
+        .map(|page| {
+            let page = page.id();
+            let input = StageInput::new(
+                scene.clone(),
+                page,
+                None,
+                None,
+                Arc::new(ImageCache::default()),
+                None,
+            );
+            (page, input)
+        })
+        .collect()
 }
 
 struct AttemptFailure {

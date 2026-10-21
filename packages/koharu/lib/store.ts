@@ -86,12 +86,14 @@ interface KoharuStore {
   processingScope: PipelineScope
   processingStages: Stage[]
   settingsOpen: boolean
+  batchOpen: boolean
   shortcuts: Shortcuts
   selectPages: (pages: EntityId[]) => void
   showInspector: (section: InspectorSection) => void
   setProcessingScope: (scope: PipelineScope) => void
   setProcessingStages: (stages: Stage[]) => void
   setSettingsOpen: (open: boolean) => void
+  setBatchOpen: (open: boolean) => void
   selectLayers: (layers: EntityId[]) => void
   editTextLayer: (layer: EntityId) => void
   setTool: (tool: CanvasTool) => void
@@ -142,12 +144,14 @@ export const useKoharuStore = create<KoharuStore>()((set) => ({
   processingScope: 'selected-pages',
   processingStages: [...pipelineStages],
   settingsOpen: false,
+  batchOpen: false,
   shortcuts: defaultShortcuts,
   selectPages: (selectedPages) => set({ selectedPages: [...new Set(selectedPages)] }),
   showInspector: (inspector) => set({ inspector }),
   setProcessingScope: (processingScope) => set({ processingScope }),
   setProcessingStages: (processingStages) => set({ processingStages }),
   setSettingsOpen: (settingsOpen) => set({ settingsOpen }),
+  setBatchOpen: (batchOpen) => set({ batchOpen }),
   selectLayers: (selectedLayers) =>
     set({ selectedLayers: [...new Set(selectedLayers)], pendingTextFocus: null }),
   editTextLayer: (layer) =>

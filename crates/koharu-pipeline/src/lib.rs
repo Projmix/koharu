@@ -32,7 +32,7 @@ pub use request::{InpaintingIntent, InpaintingMask, Operation, Request, StopToke
 pub use resources::{DeviceResources, ResourceSnapshot};
 pub use review::{ImageEditReview, ImageEditReviewer};
 pub use scope::{Bounds, Scope};
-pub use stage::{Stage, StageTarget};
+pub use stage::{Stage, StageProgress, StageTarget};
 pub use stages::{
     ChapterTranslation, Flux2KleinConfig, ImageEditConfig, InpaintingApplyMode,
     KoharuLayoutRFDetrSeg2XLConfig, RoremMixedConfig, ocr_unverified, open_unboxed_text,

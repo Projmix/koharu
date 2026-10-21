@@ -77,6 +77,8 @@ export const commands = {
 	redo: () => __TAURI_INVOKE<null>("redo"),
 	process: (scope: Scope, operation: Operation) => __TAURI_INVOKE<JobId>("process", { scope, operation }),
 	stopJob: (job: JobId) => __TAURI_INVOKE<null>("stop_job", { job }),
+	getBatchProjects: () => __TAURI_INVOKE<BatchProject[]>("get_batch_projects").then((v) => (v.map(i=>({...i,stages:i.stages.map(i=>i)})) as typeof v)),
+	runBatch: (projects: string[], stages: Stage[]) => __TAURI_INVOKE<null>("run_batch", { projects, stages }),
 	resolveImageEditPreview: (id: string, prompt: string | null) => __TAURI_INVOKE<null>("resolve_image_edit_preview", { id, prompt }),
 	exportChapterTranslation: () => __TAURI_INVOKE<boolean>("export_chapter_translation"),
 	importChapterTranslation: () => __TAURI_INVOKE<boolean>("import_chapter_translation"),
@@ -147,6 +149,19 @@ export type ApiOcrConfig = {
 	generation: GenerationConfig,
 	instructions: string | null,
 };
+
+/**
+ *  One library project with what each stage has left and its place in the
+ *  current batch run.
+ */
+export type BatchProject = {
+	name: string,
+	stages: StageProgress[],
+	run: BatchState | null,
+	error: string | null,
+};
+
+export type BatchState = "queued" | "running" | "finished" | "failed" | "stopped";
 
 export type Bounds = {
 	x: number,
@@ -701,6 +716,14 @@ export type SourceText = {
 export type SpeechKind = "speech" | "thought" | "narration" | "sound-effect" | "sign" | "aside";
 
 export type Stage = "detection" | "ocr" | "markup" | "translation" | "inpainting";
+
+/**  How many pages of a project a stage has nothing left to do on. */
+export type StageProgress = {
+	stage: Stage,
+	done: number,
+	total: number,
+	requires: Stage[],
+};
 
 export type StageTarget = { target: "page"; value: EntityId } | { target: "chapter" };
 

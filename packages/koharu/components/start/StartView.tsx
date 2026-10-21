@@ -1,6 +1,6 @@
 'use client'
 
-import { Folder, FolderPlus, Plus, Settings, Trash2 } from 'lucide-react'
+import { Folder, FolderPlus, Layers, Plus, Settings, Trash2 } from 'lucide-react'
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -27,6 +27,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@koharu/ui/components/t
 export function StartView() {
   const { t } = useTranslation()
   const setSettingsOpen = useKoharuStore((state) => state.setSettingsOpen)
+  const setBatchOpen = useKoharuStore((state) => state.setBatchOpen)
   const [projects, setProjects] = useState<ProjectSummary[]>([])
   const [name, setName] = useState('')
   const [busy, setBusy] = useState<string | null>('list')
@@ -177,6 +178,17 @@ export function StartView() {
                   <span className='ml-2 rounded-full bg-muted px-2 py-0.5 text-[9px] text-muted-foreground tabular-nums'>
                     {projects.length}
                   </span>
+                  <Button
+                    type='button'
+                    size='sm'
+                    variant='ghost'
+                    className='ml-auto h-7 gap-1.5 text-[11px]'
+                    disabled={projects.length === 0}
+                    onClick={() => setBatchOpen(true)}
+                  >
+                    <Layers className='size-3.5' />
+                    {t('menu.batch')}
+                  </Button>
                 </header>
 
                 <ScrollArea

@@ -54,6 +54,25 @@
     "title": "Agente",
     "working": "Trabajando…"
   },
+  "batch": {
+    "title": "Procesamiento por lotes",
+    "description": "Ejecuta las etapas seleccionadas en varios proyectos, uno tras otro.",
+    "refresh": "Actualizar",
+    "stages": "Etapas",
+    "run": "Ejecutar ({{count}})",
+    "stop": "Detener",
+    "selectAll": "Seleccionar todos los proyectos",
+    "state": "Estado",
+    "missing": "Primero necesita {{stages}}",
+    "hint": "Cada etapa muestra las páginas terminadas del total. La limpieza omite las páginas que ya tienen una capa de limpieza. Detener el trabajo actual detiene todo el lote; un proyecto fallido no detiene los demás.",
+    "runState": {
+      "queued": "En cola",
+      "running": "En curso",
+      "finished": "Hecho",
+      "failed": "Error",
+      "stopped": "Detenido"
+    }
+  },
   "canvas": {
     "empty": "Selecciona una página para empezar.",
     "fit": "Ajustar a la ventana",
@@ -307,6 +326,7 @@
   },
   "menu": {
     "about": "Acerca de",
+    "batch": "Procesamiento por lotes",
     "clearProject": "Vaciar proyecto",
     "closeProject": "Cerrar proyecto",
     "delete": "Eliminar selección",

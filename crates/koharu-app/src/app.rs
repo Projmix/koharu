@@ -5,6 +5,7 @@ use tokio::sync::Mutex;
 
 use crate::commands::{
     agent::AgentState,
+    batch::Batch,
     canvas::CanvasChannel,
     image_edit_preview::ImageEditPreviews,
     lifecycle::{
@@ -117,6 +118,7 @@ pub fn run(context: tauri::Context<CefRuntime>) -> Result<()> {
             });
             application.manage(ProjectLibrary::new()?);
             application.manage(Processing::default());
+            application.manage(Batch::default());
             application.manage(CanvasChannel::default());
             application.manage(JobChannel::default());
             application.manage(ImageEditPreviews::default());

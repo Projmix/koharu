@@ -286,6 +286,16 @@ impl Stages {
         self.processor(stage, input).skip(input)
     }
 
+    /// Whether a stage has nothing left to do on a page. Cleaning never skips
+    /// so that a rerun redoes it; a page counts as cleaned once it has a
+    /// cleanup layer.
+    pub(crate) fn completed(&self, stage: Stage, input: &StageInput) -> Result<bool> {
+        match stage {
+            Stage::Inpainting => inpainting::cleaned(&input.scene, input.page()?),
+            _ => self.skip(stage, input),
+        }
+    }
+
     pub(crate) fn recovers_from_memory_pressure(&self, stage: Stage, input: &StageInput) -> bool {
         self.processor(stage, input)
             .recovers_from_memory_pressure(input)

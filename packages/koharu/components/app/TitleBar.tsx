@@ -65,6 +65,7 @@ export function TitleBar() {
   const selectPages = useKoharuStore((state) => state.selectPages)
   const selectLayers = useKoharuStore((state) => state.selectLayers)
   const setSettingsOpen = useKoharuStore((state) => state.setSettingsOpen)
+  const setBatchOpen = useKoharuStore((state) => state.setBatchOpen)
   const requestCanvasFit = useKoharuStore((state) => state.requestCanvasFit)
   const { importPages, importing } = useImportPages()
   const { run: exportProject, busy: exporting } = useCommand(
@@ -267,6 +268,8 @@ export function TitleBar() {
                   </MenubarItem>
                 ),
               )}
+              <MenubarSeparator />
+              <MenubarItem onClick={() => setBatchOpen(true)}>{t('menu.batch')}</MenubarItem>
             </MenubarContent>
           </MenubarMenu>
 

@@ -54,6 +54,25 @@
     "title": "Ajan",
     "working": "Çalışıyor…"
   },
+  "batch": {
+    "title": "Toplu işleme",
+    "description": "Seçilen aşamaları birden çok projede sırayla çalıştırır.",
+    "refresh": "Yenile",
+    "stages": "Aşamalar",
+    "run": "Çalıştır ({{count}})",
+    "stop": "Durdur",
+    "selectAll": "Tüm projeleri seç",
+    "state": "Durum",
+    "missing": "Önce {{stages}} gerekli",
+    "hint": "Her aşama, tamamlanan sayfaları toplam sayfaya göre gösterir. Temizleme, zaten temizleme katmanı olan sayfaları atlar. Geçerli işi durdurmak tüm toplu işlemi durdurur; başarısız bir proje diğerlerini durdurmaz.",
+    "runState": {
+      "queued": "Sırada",
+      "running": "Çalışıyor",
+      "finished": "Bitti",
+      "failed": "Başarısız",
+      "stopped": "Durduruldu"
+    }
+  },
   "canvas": {
     "empty": "Başlamak için bir sayfa seçin.",
     "fit": "Pencereye Sığdır",
@@ -307,6 +326,7 @@
   },
   "menu": {
     "about": "Hakkında",
+    "batch": "Toplu işleme",
     "clearProject": "Projeyi temizle",
     "closeProject": "Projeyi Kapat",
     "delete": "Seçilenleri Sil",
