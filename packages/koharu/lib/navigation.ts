@@ -13,18 +13,24 @@ import {
 } from '@koharu/bridge/protocol'
 
 let request = 0
+/** The page the newest switch asked for, while native code has not confirmed it. */
+let requested: string | null = null
 
-/** Switch to the page `offset` places from the active one, if there is one. */
+/**
+ * Switch to the page `offset` places from the newest requested one, so
+ * repeated presses step on before the previous switch is confirmed.
+ */
 export function stepPage(offset: number): void {
   const pages = queryClient.getQueryData<PageSummary[]>(pagesKey) ?? []
-  const active = queryClient.getQueryData<Page | null>(pageKey)?.id
-  const target = pages[pages.findIndex((page) => page.id === active) + offset]
-  if (active && target) switchPage(target.id, [target.id])
+  const from = requested ?? queryClient.getQueryData<Page | null>(pageKey)?.id
+  const target = pages[pages.findIndex((page) => page.id === from) + offset]
+  if (from && target) switchPage(target.id, [target.id])
 }
 
 /** Abandon a page switch still waiting for native confirmation. */
 export function abandonPageSwitch(): void {
   request += 1
+  requested = null
 }
 
 /**
@@ -39,6 +45,7 @@ export function switchPage(page: string, pages: string[], layers: string[] = [])
   const prepared = queryClient.getQueryData<CanvasPagePreparation>(preparedPageKey(page))
   const activated = showCanvasPage(page, previousProject?.revision ?? null)
   const current = ++request
+  requested = page
   const synchronize = () => {
     if (request !== current) return
     if (activated && previousProject && prepared?.revision === previousProject.revision) {
@@ -51,11 +58,13 @@ export function switchPage(page: string, pages: string[], layers: string[] = [])
     void call(commands.selectPage, page)
       .then((selection) => {
         if (request !== current) return
+        requested = null
         queryClient.setQueryData(projectKey, selection.project)
         queryClient.setQueryData(pageKey, selection.page)
       })
       .catch(() => {
         if (request !== current) return
+        requested = null
         if (queryClient.getQueryData<ProjectInfo | null>(projectKey)?.active_page === page) {
           queryClient.setQueryData(projectKey, previousProject)
           queryClient.setQueryData(pageKey, previousPage)
