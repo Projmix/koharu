@@ -107,6 +107,15 @@ curve the stage would apply.
   scans (37 pages with grey paper in one chapter, 16 in another) and on
   single pages elsewhere with grey ink. On a scan with ink at 29 it turns
   the ink black and keeps screentone and mid-tones.
+- Colour detection is per page and mostly right: covers (one or two
+  pages per chapter) come out as colour. One limit: a black-and-white
+  chapter with an orange watermark over every page counts as colour on 40
+  of 43 pages, so the stage leaves those pages alone. The failure is safe
+  (no change), and that chapter is a clean digital release anyway.
+- The 84 colour pages need no white balance: the measured tints are the
+  artists' design (red, cream or dark backgrounds, pages without any
+  white). Noise there is print grain on scanned covers; two pages of one
+  chapter are JPEG q75 with light artifacts.
 - One chapter is 800x1228: its problem is resolution, which this stage
   does not address (upscaling is a separate decision).
 
