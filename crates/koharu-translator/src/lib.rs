@@ -153,11 +153,13 @@ impl Translator {
                 "chapter translation request is estimated at {estimated_tokens} input tokens, above the conservative limit of {MAX_ESTIMATED_CHAPTER_INPUT_TOKENS}; {}",
                 request.chapter_split_hint()
             );
+            // A chapter answer is one JSON document: a cut one is unusable and
+            // still billed, so a lower configured limit never undercuts the budget.
             let output_budget = chapter_output_budget(&request)?;
             generation.max_tokens = Some(
                 generation
                     .max_tokens
-                    .unwrap_or(output_budget)
+                    .map_or(output_budget, |limit| limit.max(output_budget))
                     .min(MAX_ESTIMATED_CHAPTER_OUTPUT_TOKENS as u32),
             );
         }

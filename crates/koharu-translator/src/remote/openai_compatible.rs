@@ -525,6 +525,14 @@ impl ChatResponse {
             .into_iter()
             .next()
             .context("chat completion returned no choices")?;
+        // A completion cut at the output limit holds a JSON prefix; report the
+        // limit instead of the parse error it would otherwise surface as.
+        if choice.finish_reason.as_deref() == Some("length") {
+            return Err(anyhow::anyhow!(
+                "the reply was cut off at the output token limit before it was complete"
+            )
+            .into());
+        }
         Ok(
             if choice
                 .message
@@ -697,6 +705,17 @@ mod tests {
         assert_eq!(
             reply(serde_json::json!({ "finish_reason": "stop", "message": { "content": null } })),
             ChatReply::Withheld(MarkupWithheld::Empty)
+        );
+        assert!(
+            serde_json::from_value::<ChatResponse>(serde_json::json!({
+                "choices": [{
+                    "finish_reason": "length",
+                    "message": { "content": "{\"translations\":[{\"id\":\"a" }
+                }]
+            }))
+            .unwrap()
+            .reply()
+            .is_err()
         );
         assert_eq!(
             reply(serde_json::json!({ "message": { "content": "  " } })),
