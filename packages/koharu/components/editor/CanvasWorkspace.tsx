@@ -7,6 +7,7 @@ import { useColorSampling } from '@/components/controls/ColorSampling'
 import { CanvasCommandBar } from '@/components/editor/CanvasCommandBar'
 import { CanvasOverlay } from '@/components/editor/CanvasOverlay'
 import { OriginalView } from '@/components/editor/OriginalView'
+import { PagePreview } from '@/components/editor/PagePreview'
 import { StatusBar } from '@/components/editor/StatusBar'
 import { ToolBar } from '@/components/editor/ToolBar'
 import { useCanvas } from '@/components/editor/useCanvas'
@@ -199,6 +200,7 @@ export function CanvasWorkspace() {
 
   const page = usePage().data
   const compareOriginal = useKoharuStore((state) => state.compareOriginal)
+  const pendingPage = useKoharuStore((state) => state.pendingPage)
   const pages = usePages().data
   const canvasPage = useKoharuStore((state) => state.canvasPage)
   const canvasRevision = useKoharuStore((state) => state.canvasRevision)
@@ -543,9 +545,13 @@ export function CanvasWorkspace() {
     const previous = previousPageIndex.current
     previousPageIndex.current = index
     const direction = previous !== null && index < previous ? -1 : 1
-    const adjacent = pages[index + direction]?.id ?? pages[index - direction]?.id
-    if (adjacent) {
-      void prefetchCanvasPages([adjacent])
+    // Two pages ahead in the paging direction and one behind, so stepping
+    // either way shows a prepared page at once.
+    const adjacent = [index + direction, index + 2 * direction, index - direction]
+      .map((offset) => pages[offset]?.id)
+      .filter((id): id is string => Boolean(id))
+    if (adjacent.length) {
+      void prefetchCanvasPages(adjacent)
         .then((prepared) => {
           for (const page of prepared) {
             queryClient.setQueryData(preparedPageKey(page.page.id), page)
@@ -558,6 +564,10 @@ export function CanvasWorkspace() {
   useEffect(() => {
     fitCanvas()
   }, [fitCanvas, fitCanvasRequest])
+
+  useEffect(() => {
+    if (pendingPage && pendingPage === canvasPage) useKoharuStore.setState({ pendingPage: null })
+  }, [canvasPage, pendingPage])
 
   useEffect(
     () => cancelGesture,
@@ -1289,6 +1299,9 @@ export function CanvasWorkspace() {
             useKoharuStore.setState({ camera: { zoom, translation, fitted: false } })
           }}
         >
+          {pendingPage && pendingPage !== canvasPage && (
+            <PagePreview page={pages?.find((summary) => summary.id === pendingPage)} />
+          )}
           <canvas
             ref={setCanvasElement}
             data-testid='webgpu-canvas'

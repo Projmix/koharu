@@ -31,6 +31,7 @@ export function stepPage(offset: number): void {
 export function abandonPageSwitch(): void {
   request += 1
   requested = null
+  useKoharuStore.setState({ pendingPage: null })
 }
 
 /**
@@ -46,6 +47,7 @@ export function switchPage(page: string, pages: string[], layers: string[] = [])
   const activated = showCanvasPage(page, previousProject?.revision ?? null)
   const current = ++request
   requested = page
+  useKoharuStore.setState({ pendingPage: activated ? null : page })
   const synchronize = () => {
     if (request !== current) return
     if (activated && previousProject && prepared?.revision === previousProject.revision) {
@@ -65,6 +67,7 @@ export function switchPage(page: string, pages: string[], layers: string[] = [])
       .catch(() => {
         if (request !== current) return
         requested = null
+        useKoharuStore.setState({ pendingPage: null })
         if (queryClient.getQueryData<ProjectInfo | null>(projectKey)?.active_page === page) {
           queryClient.setQueryData(projectKey, previousProject)
           queryClient.setQueryData(pageKey, previousPage)

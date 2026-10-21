@@ -71,6 +71,8 @@ interface KoharuStore {
   downloads: Record<string, Download>
   camera: { zoom: number; translation: [number, number]; fitted: boolean }
   canvasPage: EntityId | null
+  /** A requested page that was not prepared, shown as its thumbnail until it is. */
+  pendingPage: EntityId | null
   canvasRevision: number | null
   canvasGeneration: number
   canvasSize: [number, number]
@@ -137,6 +139,7 @@ export const useKoharuStore = create<KoharuStore>()((set) => ({
   downloads: {},
   camera: { zoom: 1, translation: [0, 0], fitted: true },
   canvasPage: null,
+  pendingPage: null,
   canvasRevision: null,
   canvasGeneration: 0,
   canvasSize: [0, 0],
