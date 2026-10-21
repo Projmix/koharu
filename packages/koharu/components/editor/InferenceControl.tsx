@@ -916,7 +916,7 @@ function ExpandedStageChip({
   return (
     <div
       className={cn(
-        'flex h-7 min-w-0 flex-1 items-center overflow-hidden rounded-lg border border-border/70 bg-foreground/[0.04] text-[10px] transition-colors',
+        'flex h-7 shrink-0 items-center overflow-hidden rounded-lg border border-border/70 bg-foreground/[0.04] text-[10px] transition-colors',
         active === false && 'opacity-55',
       )}
       data-stage={stage}
@@ -944,14 +944,11 @@ function ExpandedStageChip({
           type='button'
           aria-label={ariaLabel ?? `${label}: ${value}`}
           title={ariaLabel ?? `${label}: ${value}`}
-          className='flex h-7 min-w-0 flex-1 items-center gap-1 px-1.5 text-left transition-colors outline-none hover:bg-primary/10 focus-visible:ring-2 focus-visible:ring-ring/30'
+          className='flex h-7 items-center gap-1 px-1.5 text-left transition-colors outline-none hover:bg-primary/10 focus-visible:ring-2 focus-visible:ring-ring/30'
         >
           {icon}
-          <span
-            data-slot='expanded-stage-label'
-            title={label}
-            className='min-w-0 flex-1 truncate font-medium'
-          >
+          {/* The name shows on hover (title); the bar has no room for it. */}
+          <span data-slot='expanded-stage-label' className='sr-only'>
             {shortLabel}
           </span>
           <span

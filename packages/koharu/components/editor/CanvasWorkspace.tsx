@@ -25,6 +25,7 @@ import {
   translateFrames,
 } from '@/lib/geometry'
 import { enqueueHistory, historyShortcutKey } from '@/lib/history'
+import { stepPage } from '@/lib/navigation'
 import {
   pageKey,
   pagesKey,
@@ -587,6 +588,25 @@ export function CanvasWorkspace() {
         return
       }
       if (editable(event.target)) return
+      // Left and right step through pages, unless a control that uses the
+      // arrows itself has focus.
+      if (
+        (event.key === 'ArrowLeft' || event.key === 'ArrowRight') &&
+        !event.altKey &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !event.shiftKey &&
+        !(
+          event.target instanceof HTMLElement &&
+          event.target.closest(
+            '[role=slider],[role=menu],[role=menubar],[role=listbox],[role=tablist],[role=radiogroup],[role=tree],select',
+          )
+        )
+      ) {
+        event.preventDefault()
+        stepPage(event.key === 'ArrowLeft' ? -1 : 1)
+        return
+      }
       if (event.key === 'Alt') {
         event.preventDefault()
         return

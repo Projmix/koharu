@@ -58,6 +58,8 @@ export const pipelineStages: readonly Stage[] = [
   'inpainting',
 ]
 
+export type EditorPanel = 'pages' | 'inspector'
+
 interface KoharuStore {
   initialized: boolean
   preferences: Preferences | null
@@ -90,6 +92,8 @@ interface KoharuStore {
   batchOpen: boolean
   /** The page source beside the canvas, for reviewing a cleanup. */
   compareOriginal: boolean
+  /** Whether the page rail and the right sidebar are shown. */
+  panels: Record<EditorPanel, boolean>
   shortcuts: Shortcuts
   selectPages: (pages: EntityId[]) => void
   showInspector: (section: InspectorSection) => void
@@ -98,6 +102,7 @@ interface KoharuStore {
   setSettingsOpen: (open: boolean) => void
   setBatchOpen: (open: boolean) => void
   setCompareOriginal: (compare: boolean) => void
+  setPanelOpen: (panel: EditorPanel, open: boolean) => void
   selectLayers: (layers: EntityId[]) => void
   editTextLayer: (layer: EntityId) => void
   setTool: (tool: CanvasTool) => void
@@ -151,6 +156,7 @@ export const useKoharuStore = create<KoharuStore>()((set) => ({
   settingsOpen: false,
   batchOpen: false,
   compareOriginal: false,
+  panels: { pages: true, inspector: true },
   shortcuts: defaultShortcuts,
   selectPages: (selectedPages) => set({ selectedPages: [...new Set(selectedPages)] }),
   showInspector: (inspector) => set({ inspector }),
@@ -159,6 +165,7 @@ export const useKoharuStore = create<KoharuStore>()((set) => ({
   setSettingsOpen: (settingsOpen) => set({ settingsOpen }),
   setBatchOpen: (batchOpen) => set({ batchOpen }),
   setCompareOriginal: (compareOriginal) => set({ compareOriginal }),
+  setPanelOpen: (panel, open) => set((state) => ({ panels: { ...state.panels, [panel]: open } })),
   selectLayers: (selectedLayers) =>
     set({ selectedLayers: [...new Set(selectedLayers)], pendingTextFocus: null }),
   editTextLayer: (layer) =>

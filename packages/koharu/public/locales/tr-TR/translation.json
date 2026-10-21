@@ -355,7 +355,9 @@
     "selectAllLayers": "Tüm Katmanları Seç",
     "settings": "Ayarlar",
     "undo": "Geri Al",
-    "view": "Görünüm"
+    "view": "Görünüm",
+    "pagesPanel": "Sayfalar paneli",
+    "inspectorPanel": "Yan panel"
   },
   "versions": {
     "delete": "Sil",

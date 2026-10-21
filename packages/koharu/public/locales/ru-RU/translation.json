@@ -355,7 +355,9 @@
     "selectAllLayers": "Выбрать все слои",
     "settings": "Настройки",
     "undo": "Отменить",
-    "view": "Вид"
+    "view": "Вид",
+    "pagesPanel": "Панель страниц",
+    "inspectorPanel": "Боковая панель"
   },
   "versions": {
     "delete": "Удалить",

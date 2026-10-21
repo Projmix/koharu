@@ -1,17 +1,26 @@
 'use client'
 
 import { call } from '@/lib/backend'
-import { pageKey, preparedPageKey, projectKey, queryClient } from '@/lib/queries'
+import { pageKey, pagesKey, preparedPageKey, projectKey, queryClient } from '@/lib/queries'
 import { useKoharuStore } from '@/lib/store'
 import { showCanvasPage } from '@koharu/bridge/canvas'
 import {
   commands,
   type CanvasPagePreparation,
   type Page,
+  type PageSummary,
   type ProjectInfo,
 } from '@koharu/bridge/protocol'
 
 let request = 0
+
+/** Switch to the page `offset` places from the active one, if there is one. */
+export function stepPage(offset: number): void {
+  const pages = queryClient.getQueryData<PageSummary[]>(pagesKey) ?? []
+  const active = queryClient.getQueryData<Page | null>(pageKey)?.id
+  const target = pages[pages.findIndex((page) => page.id === active) + offset]
+  if (active && target) switchPage(target.id, [target.id])
+}
 
 /** Abandon a page switch still waiting for native confirmation. */
 export function abandonPageSwitch(): void {

@@ -355,7 +355,9 @@
     "selectAllLayers": "選取所有圖層",
     "settings": "設定",
     "undo": "復原",
-    "view": "檢視"
+    "view": "檢視",
+    "pagesPanel": "頁面面板",
+    "inspectorPanel": "側邊面板"
   },
   "versions": {
     "delete": "刪除",

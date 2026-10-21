@@ -35,6 +35,7 @@ import {
 } from '@koharu/bridge/protocol'
 import {
   Menubar,
+  MenubarCheckboxItem,
   MenubarContent as UiMenubarContent,
   MenubarItem as UiMenubarItem,
   MenubarMenu,
@@ -67,6 +68,8 @@ export function TitleBar() {
   const setSettingsOpen = useKoharuStore((state) => state.setSettingsOpen)
   const setBatchOpen = useKoharuStore((state) => state.setBatchOpen)
   const requestCanvasFit = useKoharuStore((state) => state.requestCanvasFit)
+  const panels = useKoharuStore((state) => state.panels)
+  const setPanelOpen = useKoharuStore((state) => state.setPanelOpen)
   const { importPages, importing } = useImportPages()
   const { run: exportProject, busy: exporting } = useCommand(
     ['export-project'],
@@ -287,6 +290,18 @@ export function TitleBar() {
                 {t('menu.fit')}
                 <MenubarShortcut>Alt+F</MenubarShortcut>
               </MenubarItem>
+              <MenubarCheckboxItem
+                checked={panels.pages}
+                onCheckedChange={(open) => setPanelOpen('pages', open)}
+              >
+                {t('menu.pagesPanel')}
+              </MenubarCheckboxItem>
+              <MenubarCheckboxItem
+                checked={panels.inspector}
+                onCheckedChange={(open) => setPanelOpen('inspector', open)}
+              >
+                {t('menu.inspectorPanel')}
+              </MenubarCheckboxItem>
             </MenubarContent>
           </MenubarMenu>
 

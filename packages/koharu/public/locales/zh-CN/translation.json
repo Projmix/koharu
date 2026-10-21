@@ -355,7 +355,9 @@
     "selectAllLayers": "选择所有图层",
     "settings": "设置",
     "undo": "撤销",
-    "view": "视图"
+    "view": "视图",
+    "pagesPanel": "页面面板",
+    "inspectorPanel": "侧边面板"
   },
   "versions": {
     "delete": "删除",

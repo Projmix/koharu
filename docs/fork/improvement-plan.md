@@ -170,3 +170,15 @@ within 20% for 91%, line count 72%, text colour 95%, outline 91%, all four
 2. **One evaluation command** for the chapter comparison that produced
    these numbers (pages stay out of the repository). It is a new command,
    so it needs an issue first.
+3. **Review agent after the automatic run (future, needs an issue).**
+   Once detection, cleaning, OCR, markup and translation are done, an
+   agent walks the chapter: every chapter-check issue (empty or Japanese
+   translation, fit and contrast warnings, OCR not verified, text left
+   after cleaning, unboxed lettering) and the translation itself, and
+   proposes fixes as ordinary undoable patches the owner approves. Two
+   ways to host it: the in-app Agent tab (upstream's Codex agent, signed
+   in with a ChatGPT account) given these instructions, or an external
+   agent such as Claude Code driving Koharu through its typed commands
+   (for example a local MCP server exposing the chapter check, page text
+   and translation edits). The owner questions whether the in-app Agent
+   tab is worth keeping; decide that with this item.

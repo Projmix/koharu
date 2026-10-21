@@ -355,7 +355,9 @@
     "selectAllLayers": "Selecionar todas as camadas",
     "settings": "Configurações",
     "undo": "Desfazer",
-    "view": "Exibir"
+    "view": "Exibir",
+    "pagesPanel": "Painel de páginas",
+    "inspectorPanel": "Painel lateral"
   },
   "versions": {
     "delete": "Excluir",

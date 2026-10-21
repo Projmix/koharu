@@ -355,7 +355,9 @@
     "selectAllLayers": "Select All Layers",
     "settings": "Settings",
     "undo": "Undo",
-    "view": "View"
+    "view": "View",
+    "pagesPanel": "Pages panel",
+    "inspectorPanel": "Side panel"
   },
   "versions": {
     "delete": "Delete",
