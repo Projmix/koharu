@@ -284,6 +284,20 @@ export type DuplicatePagesResult = {
 	duplicated: EntityId[],
 };
 
+/**
+ *  The scan enhancement stage, which cleans a low-quality scan before
+ *  detection. It runs only when the user selects it.
+ */
+export type EnhancementConfig = {
+	/**
+	 *  Remove JPEG artifacts with the MangaJPEG model chosen by the page's
+	 *  measured quality; otherwise only with Surface Blur.
+	 */
+	mangajpeg?: boolean,
+	/**  Snap tones near ink and paper of monochrome pages to black and white. */
+	tone?: boolean,
+};
+
 export type EntityId = string;
 
 export type Error = string;
@@ -590,6 +604,7 @@ export type PaintBrush = {
 };
 
 export type PipelineConfig = {
+	enhancement: EnhancementConfig,
 	detection: DetectionModel,
 	ocr: OcrConfig,
 	markup: SceneMarkupConfig,
@@ -670,7 +685,12 @@ export type QwenOcrConfig = {
 	base_url?: string | null,
 };
 
-export type RasterLayerKind = "cleanup" | "paint";
+export type RasterLayerKind = "cleanup" | "paint" | 
+/**
+ *  An opaque replacement of the page source made by scan enhancement;
+ *  later stages read it instead of the source while it is visible.
+ */
+"enhancement";
 
 export type Reasoning = "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
 
@@ -715,7 +735,7 @@ export type SourceText = {
  */
 export type SpeechKind = "speech" | "thought" | "narration" | "sound-effect" | "sign" | "aside";
 
-export type Stage = "detection" | "ocr" | "markup" | "translation" | "inpainting";
+export type Stage = "enhancement" | "detection" | "ocr" | "markup" | "translation" | "inpainting";
 
 /**  How many pages of a project a stage has nothing left to do on. */
 export type StageProgress = {

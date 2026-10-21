@@ -198,6 +198,7 @@ const artworkLayer: Layer = {
 
 const preferences: Preferences = {
   pipeline: {
+    enhancement: { mangajpeg: true, tone: true },
     detection: { model: 'koharu-layout-rfdetr-seg-2xl' },
     ocr: {
       method: 'local',

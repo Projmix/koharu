@@ -75,7 +75,6 @@ import {
 } from '@koharu/bridge/protocol'
 import { Button } from '@koharu/ui/components/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@koharu/ui/components/popover'
-import { Switch } from '@koharu/ui/components/switch'
 import {
   Select,
   SelectContent,
@@ -83,6 +82,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@koharu/ui/components/select'
+import { Switch } from '@koharu/ui/components/switch'
 import { toast } from '@koharu/ui/components/toast'
 import { cn } from '@koharu/ui/lib/utils'
 

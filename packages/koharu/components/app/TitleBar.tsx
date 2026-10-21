@@ -255,19 +255,26 @@ export function TitleBar() {
                 {t('menu.processLayers')}
               </MenubarItem>
               <MenubarSeparator />
-              {(['enhancement', 'detection', 'ocr', 'markup', 'translation', 'inpainting'] as Stage[]).map(
-                (stage) => (
-                  <MenubarItem
-                    key={stage}
-                    disabled={!project || pages.length === 0}
-                    onClick={() => run({ scope: 'project' }, { operation: 'through', stage })}
-                  >
-                    {t('menu.runPhase', {
-                      phase: t(`phase.${stage}`),
-                    })}
-                  </MenubarItem>
-                ),
-              )}
+              {(
+                [
+                  'enhancement',
+                  'detection',
+                  'ocr',
+                  'markup',
+                  'translation',
+                  'inpainting',
+                ] as Stage[]
+              ).map((stage) => (
+                <MenubarItem
+                  key={stage}
+                  disabled={!project || pages.length === 0}
+                  onClick={() => run({ scope: 'project' }, { operation: 'through', stage })}
+                >
+                  {t('menu.runPhase', {
+                    phase: t(`phase.${stage}`),
+                  })}
+                </MenubarItem>
+              ))}
               <MenubarSeparator />
               <MenubarItem onClick={() => setBatchOpen(true)}>{t('menu.batch')}</MenubarItem>
             </MenubarContent>
