@@ -1882,11 +1882,16 @@ mod tests {
         let copy = std::env::temp_dir().join(format!("koharu-fill-bench-{}", std::process::id()));
         copy_dir(std::path::Path::new(&source), &copy);
         let mut session = koharu_scene::Session::open(&copy).await.unwrap();
-        let base = session.snapshot();
-        let pages = base.pages().map(|page| page.id()).collect::<Vec<_>>();
+        let pages = session
+            .snapshot()
+            .pages()
+            .map(|page| page.id())
+            .collect::<Vec<_>>();
         let images = Arc::new(crate::ImageCache::default());
         let (mut prepare_total, mut run_total, mut digest) = (0.0, 0.0, DefaultHasher::new());
         for (index, &page) in pages.iter().enumerate() {
+            // Each page's commit moves the head, so every page reads the latest.
+            let base = session.snapshot();
             let input =
                 || StageInput::new(base.clone(), page, None, None, Arc::clone(&images), None);
             // Warms the image cache, so both timings below leave decoding out.
