@@ -1,10 +1,12 @@
 import path from 'node:path'
 
-import react from '@vitejs/plugin-react'
+import babel from '@rolldown/plugin-babel'
+import react, { reactCompilerPreset } from '@vitejs/plugin-react'
 import { defineConfig } from 'vitest/config'
 
 export default defineConfig({
-  plugins: [react()],
+  // The tests run the components as the app ships them: through React Compiler.
+  plugins: [react(), babel({ presets: [reactCompilerPreset()] })],
   resolve: {
     alias: {
       '@': path.resolve(import.meta.dirname, './'),

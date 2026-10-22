@@ -82,21 +82,21 @@ export function TitleBar() {
 
   const closeProject = () => void call(commands.closeProject).catch(() => undefined)
 
+  // A promise chain rather than try/finally, which React Compiler cannot compile.
   const clearProject = async () => {
     if (clearingProject || pages.length === 0) return
     setClearingProject(true)
-    try {
-      await call(
-        commands.deletePages,
-        pages.map((page) => page.id),
-      )
-      selectPages([])
-      selectLayers([])
-      await refresh(projectKey, pagesKey, pageKey)
-      setClearProjectOpen(false)
-    } finally {
-      setClearingProject(false)
-    }
+    await call(
+      commands.deletePages,
+      pages.map((page) => page.id),
+    )
+      .then(() => {
+        selectPages([])
+        selectLayers([])
+        return refresh(projectKey, pagesKey, pageKey)
+      })
+      .then(() => setClearProjectOpen(false))
+      .finally(() => setClearingProject(false))
   }
 
   return (

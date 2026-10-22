@@ -1,6 +1,5 @@
 'use client'
 
-import { useQuery } from '@tanstack/react-query'
 import { observeElementRect, useVirtualizer } from '@tanstack/react-virtual'
 import {
   CheckCheck,
@@ -33,6 +32,7 @@ import {
   useImportPages,
   usePage,
   usePages,
+  useThumbnail,
 } from '@/lib/queries'
 import { useKoharuStore } from '@/lib/store'
 import { prefetchCanvasPages } from '@koharu/bridge/canvas'
@@ -142,7 +142,11 @@ export function PageRail() {
     if (!project || project.active_page === page) return
     let state = intentPrefetch.current
     if (!state || state.project !== project.name || state.revision !== project.revision) {
-      state = { project: project.name, revision: project.revision, pages: new Set() }
+      state = {
+        project: project.name,
+        revision: project.revision,
+        pages: new Set(),
+      }
       intentPrefetch.current = state
     }
     const prepared = queryClient.getQueryData<CanvasPagePreparation>(preparedPageKey(page))
@@ -203,12 +207,10 @@ export function PageRail() {
   const deleteAllPages = async () => {
     if (deletingAll || pages.length === 0) return
     setDeletingAll(true)
-    try {
-      await deletePages(pages.map((page) => page.id))
-      setDeleteAllOpen(false)
-    } finally {
-      setDeletingAll(false)
-    }
+    // A promise chain rather than try/finally, which React Compiler cannot compile.
+    await deletePages(pages.map((page) => page.id))
+      .then(() => setDeleteAllOpen(false))
+      .finally(() => setDeletingAll(false))
   }
 
   useEffect(() => {
@@ -629,7 +631,6 @@ function PageItem({
 
 function PageThumbnail({ page, asset, label }: { page: string; asset: string; label: string }) {
   const { t } = useTranslation()
-  const [source, setSource] = useState<string | null>(null)
   const [settled, setSettled] = useState(false)
 
   useEffect(() => {
@@ -638,22 +639,7 @@ function PageThumbnail({ page, asset, label }: { page: string; asset: string; la
     return () => window.clearTimeout(timeout)
   }, [asset])
 
-  const thumbnail = useQuery({
-    queryKey: ['thumbnail', asset],
-    queryFn: async () => new Uint8Array(await call(commands.getThumbnail, page)),
-    enabled: settled,
-    staleTime: Number.POSITIVE_INFINITY,
-    notifyOnChangeProps: ['data'],
-  }).data
-
-  useEffect(() => {
-    if (!thumbnail) return
-    const url = URL.createObjectURL(new Blob([thumbnail.buffer], { type: 'image/webp' }))
-    setSource(url)
-    return () => {
-      URL.revokeObjectURL(url)
-    }
-  }, [thumbnail])
+  const source = useThumbnail(page, asset, settled)
 
   return (
     <div className='grid size-full place-items-center'>

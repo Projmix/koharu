@@ -70,6 +70,7 @@ struct PresentationState {
     generation: u64,
     frame: Option<RenderedFrame>,
     requested_preparation: u64,
+    requested_prefetch: u64,
 }
 
 const MAX_CACHED_PAGE_FRAMES: usize = 8;
@@ -136,25 +137,32 @@ impl Desktop {
             .map_err(Into::into)
     }
 
+    /// Prepares a page that is not presented, for a later switch to it. A newer
+    /// preparation of either kind supersedes it, but it never supersedes the
+    /// presented page's own preparation: a prefetch started while an edit is
+    /// synchronized waits for it instead of leaving the canvas behind.
     pub async fn prepare_page(&self, snapshot: &Snapshot, page: EntityId) -> Result<bool> {
-        let request = self.request_preparation();
+        let revision = snapshot.revision();
+        if self.page_frames.lock().get(page, revision).is_some() {
+            return Ok(true);
+        }
+        let request = self.request_prefetch();
+        let current = || self.is_current_prefetch(request);
         let _preparation = self.preparation.lock().await;
-        if !self.is_current_preparation(request) {
+        if !current() {
             return Ok(false);
         }
-        let revision = snapshot.revision();
-        let cached = self.page_frames.lock().get(page, revision);
-        if cached.is_some() {
+        if self.page_frames.lock().get(page, revision).is_some() {
             return Ok(true);
         }
         let Some(frame) = self
-            .await_preparation(request, self.renderer.render(snapshot, page))
+            .await_while(current, self.renderer.render(snapshot, page))
             .await
         else {
             return Ok(false);
         };
         let frame = frame?;
-        if !self.is_current_preparation(request) {
+        if !current() {
             return Ok(false);
         }
         self.page_frames.lock().insert(frame);
@@ -365,6 +373,7 @@ impl Desktop {
         page: Option<EntityId>,
         commit: &Commit,
     ) -> Result<bool> {
+        self.carry_cached_frames(snapshot, commit);
         let request = self.request_preparation();
         let _preparation = self.preparation.lock().await;
         if !self.is_current_preparation(request) {
@@ -468,6 +477,51 @@ impl Desktop {
         Ok(true)
     }
 
+    /// Carries the prepared frames the commit does not reach to its revision, so
+    /// an edit on one page keeps the neighbouring pages ready to show instead of
+    /// rendering them again.
+    fn carry_cached_frames(&self, snapshot: &Snapshot, commit: &Commit) {
+        if commit.revision != snapshot.revision() {
+            return;
+        }
+        let candidates = self.page_frames.lock().at_revision(commit.changes.from);
+        let carried = candidates
+            .iter()
+            .filter_map(|frame| {
+                self.renderer
+                    .carry_forward(frame, snapshot, &commit.changes)
+                    .ok()
+                    .flatten()
+            })
+            .collect::<Vec<_>>();
+        if carried.is_empty() {
+            return;
+        }
+        let mut cache = self.page_frames.lock();
+        for frame in carried {
+            cache.insert(frame);
+        }
+    }
+
+    fn request_prefetch(&self) -> (u64, u64) {
+        let request = {
+            let mut presentation = self.presentation.write();
+            presentation.requested_prefetch = presentation.requested_prefetch.wrapping_add(1);
+            (
+                presentation.requested_preparation,
+                presentation.requested_prefetch,
+            )
+        };
+        self.preparation_changed.notify_waiters();
+        request
+    }
+
+    fn is_current_prefetch(&self, (preparation, prefetch): (u64, u64)) -> bool {
+        let presentation = self.presentation.read();
+        presentation.requested_preparation == preparation
+            && presentation.requested_prefetch == prefetch
+    }
+
     fn request_preparation(&self) -> u64 {
         let request = {
             let mut presentation = self.presentation.write();
@@ -486,19 +540,28 @@ impl Desktop {
     where
         F: Future,
     {
+        self.await_while(|| self.is_current_preparation(request), future)
+            .await
+    }
+
+    /// `future`'s output, or `None` once `current` stops holding.
+    async fn await_while<F>(&self, current: impl Fn() -> bool, future: F) -> Option<F::Output>
+    where
+        F: Future,
+    {
         tokio::select! {
             biased;
-            () = self.preparation_superseded(request) => None,
-            output = future => self.is_current_preparation(request).then_some(output),
+            () = self.superseded(&current) => None,
+            output = future => current().then_some(output),
         }
     }
 
-    async fn preparation_superseded(&self, request: u64) {
+    async fn superseded(&self, current: &impl Fn() -> bool) {
         loop {
             let changed = self.preparation_changed.notified();
             tokio::pin!(changed);
             changed.as_mut().enable();
-            if !self.is_current_preparation(request) {
+            if !current() {
                 return;
             }
             changed.await;
@@ -533,8 +596,19 @@ impl PageFrameCache {
         Some(entry.frame.clone())
     }
 
+    fn at_revision(&self, revision: Revision) -> Vec<RenderedFrame> {
+        self.entries
+            .iter()
+            .filter(|entry| entry.revision == revision)
+            .map(|entry| entry.frame.clone())
+            .collect()
+    }
+
+    /// Caches `frame`, dropping the page's older revisions, which no switch can show.
     fn insert(&mut self, frame: RenderedFrame) {
         self.clock = self.clock.wrapping_add(1);
+        self.entries
+            .retain(|entry| entry.page != frame.page() || entry.revision >= frame.revision());
         if let Some(entry) = self
             .entries
             .iter_mut()
@@ -803,5 +877,76 @@ mod tests {
         assert_eq!(desktop.canvas_state().generation, 0);
         assert!(desktop.replace_frame_if_current(latest, None));
         assert_eq!(desktop.canvas_state().generation, 1);
+    }
+    #[tokio::test]
+    async fn an_edit_on_one_page_keeps_another_prepared_page() {
+        use koharu_scene::{At, Origin, PageDraft, Session, Visibility};
+
+        let desktop = Desktop::new().unwrap();
+        let mut session = Session::memory().await.unwrap();
+        let mut pages = None;
+        let create = session
+            .snapshot()
+            .patch(|edit| {
+                let first = edit.add_page(PageDraft::new("first", 10.0, 10.0), At::End)?;
+                let second = edit.add_page(PageDraft::new("second", 10.0, 10.0), At::End)?;
+                pages = Some((first, second));
+                Ok(())
+            })
+            .unwrap();
+        let created = session.commit(create).await.unwrap();
+        let (first, second) = pages.unwrap();
+        assert!(
+            desktop
+                .show_page(&created.snapshot, Some(first))
+                .await
+                .unwrap()
+        );
+        assert!(
+            desktop
+                .prepare_page(&created.snapshot, second)
+                .await
+                .unwrap()
+        );
+
+        let fade = created
+            .snapshot
+            .patch(|edit| {
+                edit.set(
+                    first,
+                    &Visibility {
+                        origin: Origin::User,
+                        visible: true,
+                        opacity: 0.5,
+                    },
+                )
+            })
+            .unwrap();
+        let faded = session.commit(fade).await.unwrap();
+        desktop
+            .synchronize(&faded.snapshot, Some(first), &faded)
+            .await
+            .unwrap();
+
+        let mut cache = desktop.page_frames.lock();
+        assert!(cache.get(second, faded.revision).is_some());
+        assert!(
+            cache.get(second, created.revision).is_none(),
+            "the older revision of a carried page is dropped"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_prefetch_does_not_supersede_the_presented_preparation() {
+        let desktop = Desktop::new().unwrap();
+        let presented = desktop.request_preparation();
+        let prefetch = desktop.request_prefetch();
+
+        assert!(desktop.is_current_preparation(presented));
+        assert!(desktop.is_current_prefetch(prefetch));
+        let newer_prefetch = desktop.request_prefetch();
+        assert!(!desktop.is_current_prefetch(prefetch));
+        desktop.request_preparation();
+        assert!(!desktop.is_current_prefetch(newer_prefetch));
     }
 }

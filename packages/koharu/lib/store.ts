@@ -246,8 +246,45 @@ export function receiveInpaintingModels(inpaintingModels: InpaintingModelChoice[
   useKoharuStore.setState({ inpaintingModels })
 }
 
+/** The fewest milliseconds between two resource monitor updates. */
+const RESOURCE_UPDATE_INTERVAL = 500
+let resourcesUpdated = 0
+
+/**
+ * Native telemetry arrives every 100 ms. The monitor shows whole percents and
+ * tenths of a gigabyte, so a sample that reads the same is dropped, and the
+ * rest at most twice a second: each update re-renders the status bar.
+ */
 export function receiveResources(resources: ModelResources): void {
+  const previous = useKoharuStore.getState().resources
+  if (previous) {
+    const now = Date.now()
+    if (
+      now - resourcesUpdated < RESOURCE_UPDATE_INTERVAL ||
+      displayedResources(previous) === displayedResources(resources)
+    )
+      return
+    resourcesUpdated = now
+  } else {
+    resourcesUpdated = Date.now()
+  }
   useKoharuStore.setState({ resources })
+}
+
+function displayedResources(resources: ModelResources): string {
+  const tenthGb = (value: number | null) => (value === null ? -1 : Math.round(value / 1e8))
+  return JSON.stringify([
+    Math.round(resources.process_cpu),
+    tenthGb(resources.process_memory),
+    tenthGb(resources.system_memory),
+    resources.devices.map((device) => [
+      device.name,
+      device.selected,
+      device.utilization === null ? -1 : Math.round(device.utilization),
+      tenthGb(device.memory_used),
+      tenthGb(device.memory_budget),
+    ]),
+  ])
 }
 
 export function receiveError(message: string): void {

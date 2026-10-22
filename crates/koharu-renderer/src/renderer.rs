@@ -140,18 +140,31 @@ impl Renderer {
         }
         let affected = AffectedDependencies::new(snapshot, change)?;
         if !affected.intersects(previous.dependencies()) {
-            return Ok(previous.at_revision(
-                change.to,
-                RetentionStats {
-                    candidate_layers: 0,
-                    reused_layers: previous.layers().len(),
-                    rebuilt_layers: 0,
-                },
-            ));
+            return Ok(unchanged_at(previous, change.to));
         }
         let compiled = self.compile(snapshot, previous.page())?;
         self.finish(snapshot, compiled, Some(previous), Some(&affected))
             .await
+    }
+
+    /// `previous` carried to the revision after `change` when the change leaves
+    /// everything it draws untouched, without rendering anything; `None` when
+    /// the change reaches the frame or does not follow it.
+    pub fn carry_forward(
+        &self,
+        previous: &Frame,
+        snapshot: &Snapshot,
+        change: &Change,
+    ) -> Result<Option<Frame>> {
+        if previous.revision() != change.from || snapshot.revision() != change.to {
+            return Ok(None);
+        }
+        if change.from == change.to {
+            return Ok(Some(previous.clone()));
+        }
+        let affected = AffectedDependencies::new(snapshot, change)?;
+        Ok((!affected.intersects(previous.dependencies()))
+            .then(|| unchanged_at(previous, change.to)))
     }
 
     pub async fn available_fonts(&self) -> Result<Vec<FontFamily>> {
@@ -1814,6 +1827,17 @@ impl NodeCache {
     }
 }
 
+fn unchanged_at(previous: &Frame, revision: Revision) -> Frame {
+    previous.at_revision(
+        revision,
+        RetentionStats {
+            candidate_layers: 0,
+            reused_layers: previous.layers().len(),
+            rebuilt_layers: 0,
+        },
+    )
+}
+
 struct AffectedDependencies {
     entities: HashSet<EntityId>,
     hierarchy: HashSet<EntityId>,
@@ -2964,5 +2988,77 @@ mod tests {
             .await
             .unwrap_err();
         assert!(error.to_string().contains("not contiguous"));
+    }
+    #[tokio::test]
+    async fn another_pages_edit_carries_a_frame_forward_without_rendering() {
+        let mut session = Session::memory().await.unwrap();
+        let source = AssetRole::new("source").unwrap();
+        let mut ids = None;
+        let create = session
+            .snapshot()
+            .patch(|edit| {
+                let mut image_on = |name, color| {
+                    let page = edit.add_page(PageDraft::new(name, 4.0, 4.0), At::End)?;
+                    edit.set_asset(page, &source, asset(png(4, 4, color), 4, 4))?;
+                    let image = edit.add_entity(page, At::End)?;
+                    edit.set(image, &Geometry::rectangle(0.0, 0.0, 2.0, 2.0))?;
+                    edit.set_asset(image, &source, asset(png(2, 2, color), 2, 2))?;
+                    Ok::<_, koharu_scene::Error>((page, image))
+                };
+                let (_, first) = image_on("first", [1, 2, 3, 255])?;
+                let (second_page, second) = image_on("second", [4, 5, 6, 255])?;
+                ids = Some((second_page, first, second));
+                Ok(())
+            })
+            .unwrap();
+        let snapshot = session.commit(create).await.unwrap().snapshot;
+        let (second_page, first, second) = ids.unwrap();
+        let renderer = Renderer::new().unwrap();
+        let frame = renderer.render(&snapshot, second_page).await.unwrap();
+        let fade = |image| {
+            move |edit: &mut koharu_scene::Edit| {
+                edit.set(
+                    image,
+                    &Visibility {
+                        origin: Origin::User,
+                        visible: true,
+                        opacity: 0.5,
+                    },
+                )
+            }
+        };
+
+        let elsewhere = session
+            .commit(snapshot.patch(fade(first)).unwrap())
+            .await
+            .unwrap();
+        let carried = renderer
+            .carry_forward(&frame, &elsewhere.snapshot, &elsewhere.changes)
+            .unwrap()
+            .expect("an edit on another page leaves the frame as it is");
+        assert_eq!(carried.revision(), elsewhere.revision);
+        assert_eq!(
+            carried.prepared().frame.revision.get(),
+            elsewhere.revision.get()
+        );
+        assert!(Arc::ptr_eq(&frame.0.layers, &carried.0.layers));
+
+        let here = session
+            .commit(elsewhere.snapshot.patch(fade(second)).unwrap())
+            .await
+            .unwrap();
+        assert!(
+            renderer
+                .carry_forward(&carried, &here.snapshot, &here.changes)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            renderer
+                .carry_forward(&frame, &here.snapshot, &here.changes)
+                .unwrap()
+                .is_none(),
+            "a frame two revisions behind does not follow the change"
+        );
     }
 }

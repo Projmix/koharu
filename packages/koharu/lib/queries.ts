@@ -77,6 +77,24 @@ export function useCharacters(enabled = true) {
   })
 }
 
+/**
+ * A page's rail thumbnail as an object URL. A thumbnail follows the page's
+ * immutable source asset, so it is fetched once per session and its URL is
+ * shared by every view that shows it.
+ */
+export function useThumbnail(page: string | undefined, asset: string | undefined, enabled = true) {
+  return useQuery({
+    queryKey: ['thumbnail', asset],
+    queryFn: async () => {
+      const bytes = new Uint8Array(await call(commands.getThumbnail, page!))
+      return URL.createObjectURL(new Blob([bytes.buffer], { type: 'image/webp' }))
+    },
+    enabled: enabled && Boolean(page && asset),
+    gcTime: Number.POSITIVE_INFINITY,
+    notifyOnChangeProps: ['data'],
+  }).data
+}
+
 export function useFonts(enabled = true) {
   return useQuery({ ...fontsQuery, enabled })
 }
