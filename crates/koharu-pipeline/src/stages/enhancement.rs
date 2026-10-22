@@ -61,6 +61,44 @@ pub(crate) fn visible_enhancement_layer(
     Ok(visible.then_some(layer))
 }
 
+/// The ink edge of the chapter, for a monochrome page with too little ink to
+/// measure: the median over up to eight evenly spaced other monochrome pages
+/// that hold enough, when at least three do. A print scan washes every page
+/// alike, so a light page needs the same black point as its neighbours. It
+/// reads only imported sources, which never change, so the patch observes
+/// nothing more.
+async fn chapter_ink(input: &StageInput, page: EntityId) -> Result<Option<f32>> {
+    const SAMPLES: usize = 8;
+    let others = input
+        .scene
+        .pages()
+        .map(|page| page.id())
+        .filter(|&other| other != page)
+        .collect::<Vec<_>>();
+    let step = others.len().div_ceil(SAMPLES).max(1);
+    let mut edges = Vec::new();
+    for &other in others.iter().step_by(step) {
+        let Some(source) = input.images.get(&input.scene, other, "source").await? else {
+            continue;
+        };
+        let edge = tokio_rayon::spawn(move || {
+            let rgb = source.to_rgb8();
+            let luma = scan::Plane::luma(&rgb);
+            scan::Analysis::new(&rgb, &luma, &[])
+                .monochrome
+                .then(|| scan::ink_black(&luma))
+                .flatten()
+        })
+        .await;
+        edges.extend(edge);
+    }
+    if edges.len() < 3 {
+        return Ok(None);
+    }
+    edges.sort_by(f32::total_cmp);
+    Ok(Some(edges[edges.len() / 2]))
+}
+
 pub(super) struct Processor {
     config: EnhancementConfig,
     device: koharu_ml::Device,
@@ -218,8 +256,16 @@ impl StageProcessor for Processor {
             }
         }
         let tone = if self.config.tone && analysis.monochrome {
+            let own_ink = {
+                let after = after.clone();
+                tokio_rayon::spawn(move || scan::ink_black(&after)).await
+            };
+            let chapter_ink = match own_ink {
+                Some(_) => None,
+                None => chapter_ink(&input, page).await?,
+            };
             let (rgb, before, after) = (rgb.clone(), before.clone(), after.clone());
-            tokio_rayon::spawn(move || scan::tone(&rgb, &before, &after)).await
+            tokio_rayon::spawn(move || scan::tone(&rgb, &before, &after, chapter_ink)).await
         } else {
             None
         };

@@ -472,9 +472,17 @@ fn ink_edge(histogram: &[u64; 256], total: u64) -> Option<f32> {
     Some(edge as f32)
 }
 
-fn levels_of(histogram: &[u64; 256], total: u64) -> Levels {
+/// The light edge of a page's ink, when the page holds enough of it to tell.
+pub(crate) fn ink_black(plane: &Plane) -> Option<f32> {
+    let (histogram, total) = histogram(plane.data.iter().copied());
+    ink_edge(&histogram, total)
+}
+
+/// `chapter_ink` stands in for the page's own ink edge when the page holds
+/// too little ink to measure.
+fn levels_of(histogram: &[u64; 256], total: u64, chapter_ink: Option<f32>) -> Levels {
     let mut levels = Levels {
-        black: ink_edge(histogram, total).unwrap_or(0.0),
+        black: ink_edge(histogram, total).or(chapter_ink).unwrap_or(0.0),
         white: paper_edge(histogram, total).unwrap_or(255.0),
     };
     // Keep a real mid-tone band between the two ramps: the paper ramp
@@ -490,17 +498,24 @@ fn levels_of(histogram: &[u64; 256], total: u64) -> Levels {
 
 /// The tone curve of a monochrome page after its luminance changed from
 /// `before` to `after`: ink from luminance, paper per channel so tinted paper
-/// becomes white. `None` when it would change nothing.
-pub(crate) fn tone(image: &RgbImage, before: &Plane, after: &Plane) -> Option<[Levels; 3]> {
+/// becomes white. `chapter_ink` is the ink edge of the chapter's other
+/// monochrome pages, for a page with too little ink of its own. `None` when it
+/// would change nothing.
+pub(crate) fn tone(
+    image: &RgbImage,
+    before: &Plane,
+    after: &Plane,
+    chapter_ink: Option<f32>,
+) -> Option<[Levels; 3]> {
     let (histogram_luma, total) = histogram(after.data.iter().copied());
-    let black = levels_of(&histogram_luma, total).black;
+    let black = levels_of(&histogram_luma, total, chapter_ink).black;
     let levels: [Levels; 3] = std::array::from_fn(|channel| {
         let (histogram, total) = histogram(image.pixels().enumerate().map(|(index, pixel)| {
             f32::from(pixel[channel]) + after.data[index] - before.data[index]
         }));
         Levels {
             black,
-            white: levels_of(&histogram, total).white,
+            white: levels_of(&histogram, total, None).white,
         }
     });
     (!levels.iter().all(|levels| levels.is_identity())).then_some(levels)
@@ -769,7 +784,7 @@ mod tests {
         }
         histogram[255] = 6000;
         let total = histogram.iter().sum();
-        let levels = levels_of(&histogram, total);
+        let levels = levels_of(&histogram, total, None);
         assert!(
             (80.0..=90.0).contains(&levels.black),
             "the ink ends past its peak and before the screentone: {}",
@@ -788,6 +803,19 @@ mod tests {
         }
         histogram[255] = 6000;
         let total = histogram.iter().sum();
-        assert!(levels_of(&histogram, total).black < 8.0);
+        assert!(levels_of(&histogram, total, None).black < 8.0);
+    }
+
+    #[test]
+    fn a_page_with_little_ink_takes_the_chapter_black() {
+        // A light page: its ink at 98 holds well under 1% of the page.
+        let mut histogram = [0u64; 256];
+        for value in 92..=104 {
+            histogram[value] = 4;
+        }
+        histogram[255] = 9000;
+        let total = histogram.iter().sum();
+        assert_eq!(levels_of(&histogram, total, None).black, 0.0);
+        assert_eq!(levels_of(&histogram, total, Some(90.0)).black, 90.0);
     }
 }

@@ -49,6 +49,10 @@ original and the run says why.
    above, so no single bin reached the old 2% and the ink stayed grey. When
    the ramps would squeeze the mid-tones below 64 levels, the paper ramp
    shortens first and black is lowered only as far as the band needs.
+   A monochrome page with too little ink to measure (a light page of a
+   washed scan, Shanpankouru 2 pages 30 and 82) takes the chapter's black:
+   the median ink edge of up to eight evenly spaced other monochrome pages,
+   when at least three measure one.
 5. **Result**: one opaque raster layer of kind `Enhancement` at the bottom of
    the page, owned by `dev.koharu.pipeline.enhancement`. The source asset is
    never replaced. Detection, OCR, markup, translation crops and inpainting
