@@ -50,4 +50,5 @@ windows = { workspace = true, features = [
 ] }
 
 [dev-dependencies]
+koharu-torch = { workspace = true }
 toml = { workspace = true }

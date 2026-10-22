@@ -1859,7 +1859,12 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "needs a real project in KOHARU_BENCH_PROJECT"]
-    async fn balloon_fill_benchmark() {
+    async fn cleaning_benchmark() {
+        // KOHARU_BENCH_MODEL picks `balloon-fill` (default) or `lama`;
+        // KOHARU_BENCH_THREADS sets libtorch's thread count; with
+        // KOHARU_BENCH_OUT each page's cleanup layer is saved there, and with
+        // KOHARU_BENCH_REFERENCE it is compared to an earlier run's.
+
         use std::{
             hash::{DefaultHasher, Hash as _, Hasher as _},
             time::Instant,
@@ -1887,6 +1892,30 @@ mod tests {
             .pages()
             .map(|page| page.id())
             .collect::<Vec<_>>();
+        let model_name = std::env::var("KOHARU_BENCH_MODEL").unwrap_or("balloon-fill".into());
+        let model = match model_name.as_str() {
+            "lama" => Model::load(koharu_ml::Device::cpu(), &InpaintingModel::LaMa {})
+                .await
+                .unwrap(),
+            _ => Model::BalloonFill,
+        };
+        if let Ok(threads) = std::env::var("KOHARU_BENCH_THREADS") {
+            koharu_torch::set_num_threads(threads.parse().unwrap());
+        }
+        println!(
+            "{model_name}, {} libtorch threads",
+            koharu_torch::get_num_threads()
+        );
+        let output = std::env::var("KOHARU_BENCH_OUT")
+            .ok()
+            .map(std::path::PathBuf::from);
+        if let Some(output) = &output {
+            std::fs::create_dir_all(output).unwrap();
+        }
+        let reference = std::env::var("KOHARU_BENCH_REFERENCE")
+            .ok()
+            .map(std::path::PathBuf::from);
+        let (mut changed_total, mut worst_total) = (0_u64, 0_u8);
         let images = Arc::new(crate::ImageCache::default());
         let (mut prepare_total, mut run_total, mut digest) = (0.0, 0.0, DefaultHasher::new());
         for (index, &page) in pages.iter().enumerate() {
@@ -1902,7 +1931,9 @@ mod tests {
             let prepared = prepare(&input(), false, false).await.unwrap();
             let prepare_ms = started.elapsed().as_secs_f64() * 1000.0;
             let started = Instant::now();
-            let patch = Model::BalloonFill.run(input()).await.unwrap();
+            let tiles = inpaint_tiles(&prepared.unfilled_mask).1;
+            let tile_pixels = tiles.iter().map(|tile| bounds_area(tile.crop)).sum::<u64>();
+            let patch = model.run(input()).await.unwrap();
             let run_ms = started.elapsed().as_secs_f64() * 1000.0;
             prepare_total += prepare_ms;
             run_total += run_ms;
@@ -1921,26 +1952,49 @@ mod tests {
                     .unwrap()
                     .unwrap();
                 let bytes = committed.read_blob(asset.blob).await.unwrap();
-                image::load_from_memory(&bytes)
-                    .unwrap()
-                    .to_rgba8()
-                    .as_raw()
-                    .hash(&mut page_digest);
+                let layer = image::load_from_memory(&bytes).unwrap().to_rgba8();
+                layer.as_raw().hash(&mut page_digest);
+                let name = format!("page-{:02}.png", index + 1);
+                if let Some(output) = &output {
+                    layer.save(output.join(&name)).unwrap();
+                }
+                if let Some(reference) = &reference {
+                    let earlier = image::open(reference.join(&name)).unwrap().to_rgba8();
+                    let (mut changed, mut worst) = (0_u64, 0_u8);
+                    for (now, then) in layer.as_raw().iter().zip(earlier.as_raw()) {
+                        let difference = now.abs_diff(*then);
+                        changed += u64::from(difference > 2);
+                        worst = worst.max(difference);
+                    }
+                    println!(
+                        "  vs reference: {changed} channel values off by more than 2, worst {worst}"
+                    );
+                    changed_total += changed;
+                    worst_total = worst_total.max(worst);
+                }
             }
             let page_digest = page_digest.finish();
             page_digest.hash(&mut digest);
             println!(
                 "page {:>2}: first prepare {first:>7.1} ms, prepare {prepare_ms:>7.1} ms, \
-                 balloon fill {run_ms:>7.1} ms, {} filled pixels, digest {page_digest:016x}",
+                 {model_name} {run_ms:>7.1} ms, {} filled pixels, {} tiles of {:.2} Mpx, \
+                 digest {page_digest:016x}",
                 index + 1,
                 prepared.flat_fill.len(),
+                tiles.len(),
+                tile_pixels as f64 / 1e6,
             );
         }
         println!(
-            "{} pages: prepare {prepare_total:.0} ms, balloon fill {run_total:.0} ms, digest {:016x}",
+            "{} pages: prepare {prepare_total:.0} ms, {model_name} {run_total:.0} ms, digest {:016x}",
             pages.len(),
             digest.finish()
         );
+        if reference.is_some() {
+            println!(
+                "vs reference: {changed_total} channel values off by more than 2, worst {worst_total}"
+            );
+        }
         drop(session);
         let _ = std::fs::remove_dir_all(&copy);
     }
