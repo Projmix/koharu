@@ -45,8 +45,10 @@ impl Processor {
 
 struct Target {
     entity: EntityId,
+    layer: EntityId,
     source: String,
     page: usize,
+    bounds: Option<(f64, f64, f64, f64)>,
     metadata: TranslationSegmentMetadata,
 }
 
@@ -63,9 +65,21 @@ struct OrderedEntry {
 /// The complete, ordered chapter translation input and its target entities.
 /// Keeping request construction and patch construction together ensures that
 /// network responses and manually imported files target the same scene entities.
+/// One block of a chapter request, with where it sits for the manual
+/// exchange: its page number, its number among the page's blocks in reading
+/// order, and its source region's extents.
+struct ChapterTarget {
+    entity: EntityId,
+    layer: EntityId,
+    source: String,
+    page: usize,
+    number: usize,
+    bounds: Option<(f64, f64, f64, f64)>,
+}
+
 pub struct ChapterTranslation {
     snapshot: koharu_scene::Snapshot,
-    targets: Vec<(EntityId, String)>,
+    targets: Vec<ChapterTarget>,
     request: TranslationRequest,
     source_language: Language,
     target_language: Language,
@@ -130,7 +144,14 @@ impl ChapterTranslation {
             snapshot: input.scene.clone(),
             targets: targets
                 .into_iter()
-                .map(|target| (target.entity, target.source))
+                .map(|target| ChapterTarget {
+                    entity: target.entity,
+                    layer: target.layer,
+                    source: target.source,
+                    page: target.page,
+                    number: target.metadata.order_index.unwrap_or_default() + 1,
+                    bounds: target.bounds,
+                })
                 .collect(),
             request,
             source_language,
@@ -161,7 +182,7 @@ impl ChapterTranslation {
             self.target_language,
             self.targets
                 .iter()
-                .map(|(entity, source)| (*entity, source.as_str()))
+                .map(|target| (target.entity, target.source.as_str()))
                 .zip(translated)
                 .collect(),
         )
@@ -438,8 +459,10 @@ fn collect_inputs(
             entries.push(OrderedEntry {
                 entry: TranslationEntry::Target(Box::new(Target {
                     entity: content.id(),
+                    layer: layer.id(),
                     source,
                     page: page_index + 1,
+                    bounds,
                     metadata: TranslationSegmentMetadata {
                         role,
                         inside_balloon: bubble_id.is_some(),
@@ -1016,10 +1039,12 @@ mod tests {
         config.chapter.model.model = None;
         let chapter = ChapterTranslation::from_snapshot(session.snapshot(), &config).unwrap();
 
-        let export = chapter.manual_export().unwrap();
+        let export = chapter.manual_export().await.unwrap();
         assert!(export.prompt.contains("translation.json"));
         let segment = &export.document["pages"][0]["units"][0]["segments"][0];
         assert_eq!(segment["source_text"], "source");
+        assert_eq!(segment["number"], 1);
+        assert_eq!(segment["box"], serde_json::json!([10.0, 10.0, 20.0, 30.0]));
         assert!(segment.get("page_id").is_none());
         assert!(segment.get("region_id").is_none());
         for key in ["provider", "model", "request", "endpoint"] {
@@ -1092,7 +1117,7 @@ mod tests {
             "language",
             "unknown",
             "duplicate",
-            "source",
+            "empty-source",
             "empty",
             "missing",
             "extra",
@@ -1104,8 +1129,8 @@ mod tests {
                 "language" => invalid["target_language"] = serde_json::json!("en-US"),
                 "unknown" => invalid["translations"][0]["id"] = serde_json::json!("unknown"),
                 "duplicate" => invalid["translations"][0] = invalid["translations"][1].clone(),
-                "source" => {
-                    invalid["translations"][0]["source_text"] = serde_json::json!("changed")
+                "empty-source" => {
+                    invalid["translations"][0]["source_text"] = serde_json::json!(" ")
                 }
                 "empty" => {
                     invalid["translations"][0]["translated_text"] = serde_json::json!(" \n ")
@@ -1207,7 +1232,7 @@ mod tests {
         let chapter =
             ChapterTranslation::from_snapshot(session.snapshot(), &TranslationConfig::default())
                 .unwrap();
-        let export = chapter.manual_export().unwrap();
+        let export = chapter.manual_export().await.unwrap();
         let segments = export.document["pages"][0]["units"]
             .as_array()
             .unwrap()
@@ -1330,13 +1355,130 @@ mod tests {
             .unwrap();
         assert_eq!(manual.text.value, "manual translation");
         assert!(matches!(manual.text.origin, Origin::User));
+    }
 
-        let changed = response.to_string().replace("\"source\"", "\"changed\"");
-        assert!(
-            chapter
-                .patch_from_response(&processor().translator, &changed)
-                .await
-                .is_err()
+    #[tokio::test]
+    async fn manual_import_corrects_ocr_and_adds_missed_lettering() {
+        let mut session = koharu_scene::Session::memory().await.unwrap();
+        let mut edit = session.snapshot().edit();
+        let page = edit
+            .add_page(PageDraft::new("page", 120.0, 180.0), At::End)
+            .unwrap();
+        let (target, region, _) = add_text(&mut edit, page, "ちがう", (80.0, 10.0, 20.0, 30.0));
+        let bubble = edit
+            .add_analysis_region::<BubbleRegion>(
+                page,
+                At::End,
+                &Geometry::rectangle(0.0, 100.0, 60.0, 60.0),
+                None,
+            )
+            .unwrap();
+        session.commit(edit.finish().unwrap()).await.unwrap();
+        let config = TranslationConfig::default();
+        let chapter = ChapterTranslation::from_snapshot(session.snapshot(), &config).unwrap();
+        let response = serde_json::json!({
+            "project_id": session.project_id().to_string(),
+            "target_language": config.target_language,
+            "translations": [{
+                "id": format!("page:{page}::region:{region}"),
+                "source_text": "違う",
+                "translated_text": "Не так"
+            }],
+            "added": [
+                {"page_index": 1, "box": [10, 110, 30, 30], "kind": "dialogue",
+                 "source_text": "え？", "translated_text": "А?"},
+                {"page_index": 1, "box": [70, 120, 40, 50], "kind": "sound_effect",
+                 "source_text": "ドン", "translated_text": "БАМ"}
+            ]
+        });
+        for invalid in [
+            serde_json::json!({"page_index": 2, "box": [0, 0, 10, 10], "kind": "text",
+                "source_text": "a", "translated_text": "b"}),
+            serde_json::json!({"page_index": 1, "box": [0, 0, 0, 10], "kind": "text",
+                "source_text": "a", "translated_text": "b"}),
+            serde_json::json!({"page_index": 1, "box": [0, 0, 10, 10], "kind": "art",
+                "source_text": "a", "translated_text": "b"}),
+        ] {
+            let mut file = response.clone();
+            file["added"] = serde_json::json!([invalid]);
+            assert!(
+                chapter
+                    .patch_from_response(&processor().translator, &file.to_string())
+                    .await
+                    .is_err(),
+                "{invalid}"
+            );
+        }
+
+        let patch = chapter
+            .patch_from_response(&processor().translator, &response.to_string())
+            .await
+            .unwrap();
+        session.commit(patch).await.unwrap();
+        let snapshot = session.snapshot();
+        let source = snapshot.component::<SourceText>(target).unwrap().unwrap();
+        assert_eq!(source.text.value, "違う");
+        assert!(matches!(source.text.origin, Origin::User));
+        assert_eq!(
+            snapshot
+                .component::<Translation>(target)
+                .unwrap()
+                .unwrap()
+                .text
+                .value,
+            "Не так"
+        );
+        assert_eq!(
+            snapshot
+                .relations_from_as::<RecognizedFrom>(target)
+                .next()
+                .unwrap()
+                .value()
+                .target,
+            region,
+            "the corrected block keeps its OCR region"
+        );
+
+        let group = snapshot.page(page).unwrap().text_group().unwrap().unwrap();
+        let mut added = Vec::new();
+        for layer in group.text_layers().unwrap() {
+            let content = layer.content().unwrap();
+            if content.id() == target {
+                continue;
+            }
+            let region = content.source_region().unwrap().unwrap().id();
+            added.push((
+                content.source().unwrap().unwrap().text.value,
+                snapshot
+                    .component::<Translation>(content.id())
+                    .unwrap()
+                    .unwrap()
+                    .text
+                    .value,
+                content.role().unwrap().unwrap().role,
+                snapshot
+                    .relations_from_as::<koharu_scene::Inside>(region)
+                    .next()
+                    .map(|relation| relation.value().target),
+            ));
+        }
+        added.sort();
+        assert_eq!(
+            added,
+            [
+                (
+                    "え？".to_owned(),
+                    "А?".to_owned(),
+                    "dev.koharu.text.dialogue".to_owned(),
+                    Some(bubble)
+                ),
+                (
+                    "ドン".to_owned(),
+                    "БАМ".to_owned(),
+                    "dev.koharu.text.onomatopoeia".to_owned(),
+                    None
+                ),
+            ]
         );
     }
 
@@ -1772,8 +1914,10 @@ mod tests {
         OrderedEntry {
             entry: TranslationEntry::Target(Box::new(Target {
                 entity: EntityId::new(),
+                layer: EntityId::new(),
                 source: source.to_owned(),
                 page: 1,
+                bounds: Some(bounds),
                 metadata: TranslationSegmentMetadata::default(),
             })),
             bounds: Some(bounds),
@@ -1789,8 +1933,10 @@ mod tests {
     ) -> Target {
         Target {
             entity: EntityId::new(),
+            layer: EntityId::new(),
             source: source.to_owned(),
             page: 1,
+            bounds: None,
             metadata: TranslationSegmentMetadata {
                 role: role.map(str::to_owned),
                 page_id: Some("page-a".to_owned()),

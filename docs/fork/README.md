@@ -49,8 +49,18 @@ Known gaps after the rebuild:
 ## Fork features
 
 - Chapter translation export/import (`export_chapter_translation`,
-  `import_chapter_translation`): the exact chapter request as JSON for an
-  external chat, and import of its answer as a normal pipeline patch.
+  `import_chapter_translation`) for an external agent with file access
+  (Claude Code on another machine). The archive holds the chapter request
+  as JSON, every page as it reads after scan enhancement, and a copy with
+  each block outlined: red with its reading-order number when it is to be
+  translated, blue when the user already translated it. Each segment carries
+  its page, number and box. The agent works page by page (corrects the OCR
+  text, translates, adds lettering no outline covers as `added` blocks with a
+  page box and kind), saves each page under `work/`, then reviews the whole
+  chapter before writing `translation.json`. The import is one user edit and
+  one undo step: a corrected `source_text` replaces the OCR text as an edit
+  in the app would (the region and its OCR analysis stay), translations and
+  added blocks are the user's, so later OCR or translation runs keep them.
 - Named project versions (`save_project_version` and friends).
 - OCR method `local`, `api` or hybrid `local-api`. The hybrid method uses an
   internal `OcrPass { Local, Final }`: the scheduler runs the local pass on

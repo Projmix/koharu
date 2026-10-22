@@ -11,13 +11,19 @@ use super::{
     ChannelExt as _, Error, canvas::CanvasChannel, processing::Processing, project::CurrentProject,
 };
 
-fn archive(prompt: &str, document: &Value) -> Result<Vec<u8>> {
+fn archive(prompt: &str, document: &Value, images: &[(String, Vec<u8>)]) -> Result<Vec<u8>> {
     let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
     let options = zip::write::SimpleFileOptions::default();
     zip.start_file("prompt.txt", options)?;
     zip.write_all(prompt.as_bytes())?;
     zip.start_file("chapter.json", options)?;
     zip.write_all(&serde_json::to_vec_pretty(document)?)?;
+    // JPEG is already compressed.
+    let stored = options.compression_method(zip::CompressionMethod::Stored);
+    for (path, bytes) in images {
+        zip.start_file(path.as_str(), stored)?;
+        zip.write_all(bytes)?;
+    }
     Ok(zip.finish()?.into_inner())
 }
 
@@ -39,11 +45,12 @@ pub(crate) async fn export_chapter_translation(
         project.as_ref().context("no project is open")?.snapshot()
     };
     let config = PipelineConfig::load()?.read()?.clone();
-    let export =
-        ChapterTranslation::from_snapshot(snapshot, &config.translation)?.manual_export()?;
-    let bytes = archive(&export.prompt, &export.document)?;
+    let export = ChapterTranslation::from_snapshot(snapshot, &config.translation)?
+        .manual_export()
+        .await?;
+    let bytes = archive(&export.prompt, &export.document, &export.images)?;
     let Some(file) = rfd::AsyncFileDialog::new()
-        .add_filter("ZIP — prompt.txt + chapter.json", &["zip"])
+        .add_filter("ZIP — prompt.txt + chapter.json + pages", &["zip"])
         .set_file_name("koharu-translation.zip")
         .set_parent(&window)
         .save_file()
@@ -120,11 +127,18 @@ mod tests {
     use std::io::Read;
 
     #[test]
-    fn manual_translation_archive_contains_separate_prompt_and_json() {
+    fn manual_translation_archive_contains_prompt_json_and_pages() {
         let document = serde_json::json!({"project_id": "project", "pages": []});
-        let bytes = archive("Translate chapter.json", &document).unwrap();
+        let images = [("pages/001.jpg".to_owned(), vec![1, 2, 3])];
+        let bytes = archive("Translate chapter.json", &document, &images).unwrap();
         let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
-        assert_eq!(zip.len(), 2);
+        assert_eq!(zip.len(), 3);
+        let mut page = Vec::new();
+        zip.by_name("pages/001.jpg")
+            .unwrap()
+            .read_to_end(&mut page)
+            .unwrap();
+        assert_eq!(page, [1, 2, 3]);
         let mut prompt = String::new();
         zip.by_name("prompt.txt")
             .unwrap()

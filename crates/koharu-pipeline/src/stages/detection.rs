@@ -78,9 +78,9 @@ const DARK_BALLOON_MIN_LETTERING: f32 = 0.03;
 /// rest of the page keeps the model's thresholds, because lowering them
 /// everywhere admits screentone, hair and speed lines as text.
 const INVERTED_TEXT_MIN_SCORE: f32 = 0.1;
-const FREE_TEXT_ROLE: &str = "dev.koharu.text.free-text";
-const DIALOGUE_ROLE: &str = "dev.koharu.text.dialogue";
-const ONOMATOPOEIA_ROLE: &str = "dev.koharu.text.onomatopoeia";
+pub(crate) const FREE_TEXT_ROLE: &str = "dev.koharu.text.free-text";
+pub(crate) const DIALOGUE_ROLE: &str = "dev.koharu.text.dialogue";
+pub(crate) const ONOMATOPOEIA_ROLE: &str = "dev.koharu.text.onomatopoeia";
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, Type)]
 #[serde(default)]

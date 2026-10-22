@@ -730,7 +730,7 @@ fn crop(
     Ok(DynamicImage::ImageRgb8(crop))
 }
 
-fn nested_geometry(parent: &Geometry, child: &Geometry) -> bool {
+pub(crate) fn nested_geometry(parent: &Geometry, child: &Geometry) -> bool {
     let Some((parent_left, parent_top, parent_right, parent_bottom)) = geometry_extents(parent)
     else {
         return false;
@@ -772,7 +772,7 @@ fn nested_geometry(parent: &Geometry, child: &Geometry) -> bool {
         && contained_samples as f64 / child_samples as f64 >= OCR_EXCLUSION_CONTAINMENT_THRESHOLD
 }
 
-fn polygon_area(geometry: &Geometry) -> f64 {
+pub(crate) fn polygon_area(geometry: &Geometry) -> f64 {
     if geometry.points.len() < 3 {
         return 0.0;
     }
