@@ -6,6 +6,7 @@
     "version": "Version"
   },
   "activity": {
+    "chapter": "Chapitre",
     "dismiss": "Ignorer",
     "downloadFailed": "Échec du téléchargement.",
     "downloadingFiles": "Téléchargement de {{count}} fichiers",
@@ -53,17 +54,61 @@
     "title": "Agent",
     "working": "Travail en cours…"
   },
+  "batch": {
+    "title": "Traitement par lots",
+    "description": "Exécuter les étapes choisies sur plusieurs projets, l'un après l'autre.",
+    "refresh": "Actualiser",
+    "stages": "Étapes",
+    "run": "Lancer ({{count}})",
+    "stop": "Arrêter",
+    "selectAll": "Sélectionner tous les projets",
+    "state": "État",
+    "missing": "Nécessite d'abord {{stages}}",
+    "hint": "Chaque étape indique les pages traitées sur le total. Le nettoyage ignore les pages qui ont déjà un calque de nettoyage. Arrêter la tâche en cours arrête tout le lot ; l'échec d'un projet n'arrête pas les autres.",
+    "runState": {
+      "queued": "En attente",
+      "running": "En cours",
+      "finished": "Terminé",
+      "failed": "Échec",
+      "stopped": "Arrêté"
+    }
+  },
   "canvas": {
     "empty": "Sélectionnez une page pour commencer.",
     "fit": "Ajuster à la fenêtre",
     "surface": "Canevas Koharu",
-    "unavailable": "Canevas WebGPU indisponible"
+    "unavailable": "Canevas WebGPU indisponible",
+    "unboxedText": {
+      "create": "Créer un bloc de texte ici",
+      "dismiss": "Pas du texte"
+    },
+    "compareOriginal": "Comparer avec l'original",
+    "original": "Original",
+    "previousPage": "Page précédente",
+    "nextPage": "Page suivante",
+    "regenerateCleanup": "Régénérer le nettoyage",
+    "regenerateCleanupDescription": "Nettoyer à nouveau cette page avec le modèle de nettoyage configuré et une nouvelle graine",
+    "cleanupDone": "Nettoyage terminé",
+    "cleanupDoneDescription": "Garder le nettoyage de cette page tel quel : le nettoyage automatique, y compris l'édition dans le cloud, l'ignore. La suppression et la restauration fonctionnent toujours."
   },
   "colorPicker": {
     "brushColor": "Couleur du pinceau",
     "hexCode": "Code couleur hexadécimal",
     "sampleCanvas": "Prélever une couleur sur le canevas",
     "transparent": "Transparent"
+  },
+  "chapterCheck": {
+    "title": "Vérifier avant l'export",
+    "checking": "Vérification des pages…",
+    "issueCount": "{{count}} blocs de texte à vérifier. Sélectionnez-en un pour l'ouvrir.",
+    "issueCount_one": "{{count}} bloc de texte à vérifier. Sélectionnez-le pour l'ouvrir.",
+    "issueCount_other": "{{count}} blocs de texte à vérifier. Sélectionnez-en un pour l'ouvrir.",
+    "emptyTranslation": "Pas de traduction",
+    "japaneseText": "Caractères japonais restés dans la traduction",
+    "unboxedText": "Texte peut-être oublié : {{count}}",
+    "unboxedText_one": "Texte peut-être oublié : {{count}}",
+    "unboxedText_other": "Texte peut-être oublié : {{count}}",
+    "exportAnyway": "Exporter quand même"
   },
   "common": {
     "back": "Retour",
@@ -126,12 +171,20 @@
   "inference": {
     "currentPage": "Page actuelle",
     "currentPageDescription": "Traiter uniquement la page affichée sur le canevas.",
+    "automatic": "Automatique",
+    "compactMode": "Utiliser les commandes de traitement compactes",
     "entireProject": "Projet entier",
     "entireProjectDescription": "Traiter toutes les pages de ce projet.",
+    "exportChapter": "Exporter pour traduction manuelle (ZIP)",
+    "expandedMode": "Utiliser les commandes de traitement détaillées",
     "model": "Modèle",
     "noModel": "Aucun modèle",
     "notSet": "Non défini",
     "output": "Sortie",
+    "importChapter": "Importer le JSON traduit",
+    "exportChapterHelp": "Extrayez l'archive. Collez prompt.txt dans le chat de votre choix et joignez chapter.json. Enregistrez la réponse sous translation.json et importez-la.",
+    "importChapterDone": "Traductions importées",
+    "pageProfile": "Profil de page",
     "pipelineStages": "Étapes du pipeline",
     "providerDefault": "Par défaut du fournisseur",
     "run": "Lancer",
@@ -154,9 +207,14 @@
     "stageCount_other": "{{count}} étapes",
     "stages": "Étapes",
     "stop": "Arrêter",
-    "stopProcessing": "Arrêter le traitement"
+    "stopProcessing": "Arrêter le traitement",
+    "typing": "Lettrage"
   },
   "inspector": {
+    "transformTarget": "Transformer",
+    "transformText": "Texte",
+    "transformRegion": "Zone OCR",
+    "transformHint": "Faites glisser le bloc pour le déplacer, ou ses poignées pour le redimensionner. Auto ajuste la police au cadre.",
     "alignBottom": "Aligner en bas",
     "alignCenter": "Centrer",
     "alignLeft": "Aligner à gauche",
@@ -173,6 +231,7 @@
     "color": "Couleur",
     "customFrame": "Cadre personnalisé",
     "decreaseBorderWidth": "Réduire l’épaisseur du contour",
+    "decreaseFontSize": "Réduire la taille de police de 1 pt",
     "direction": "Direction",
     "font": "Police",
     "fontSize": "Taille de police",
@@ -185,9 +244,13 @@
     "fontWeight": "Graisse",
     "horizontal": "Horizontal",
     "increaseBorderWidth": "Augmenter l’épaisseur du contour",
+    "increaseFontSize": "Augmenter la taille de police de 1 pt",
+    "invertBorder": "Échanger les couleurs du texte et du contour",
     "opacity": "Opacité",
     "placement": "Positionnement",
     "resetAutoFit": "Rétablir l’ajustement auto",
+    "drawArea": "Dessiner la zone dans laquelle ce texte s'ajuste",
+    "drawAreaShort": "Dessiner la zone",
     "selectPage": "Sélectionnez une page pour inspecter ses calques.",
     "size": "Taille",
     "source": "Texte source",
@@ -195,11 +258,31 @@
     "textColor": "Couleur du texte",
     "textDirection": "Sens du texte",
     "translation": "Traduction",
+    "translationReview": "La traduction a peut-être adouci des grossièretés",
+    "shortenTranslation": "Raccourcir",
+    "shortenTranslationHint": "Réécrire cette traduction plus courte pour qu'elle tienne ; appuyez à nouveau pour raccourcir encore",
+    "translationReviewKeep": "Garder",
+    "translationReviewKeepHint": "Garder cette traduction et effacer l'avertissement",
+    "translationReviewReference": "Traduction automatique",
     "type": "Type",
     "unplaced": "Non placé",
     "vertical": "Vertical",
     "weight": "Graisse",
-    "width": "Largeur"
+    "width": "Largeur",
+    "speechKind": "Type",
+    "speechKindLabel": "Type de {{name}}",
+    "speechKinds": {
+      "speech": "Dialogue",
+      "thought": "Pensée",
+      "narration": "Narration",
+      "sound-effect": "Onomatopée",
+      "sign": "Panneau",
+      "aside": "Aparté"
+    },
+    "speaker": "Locuteur",
+    "speakerLabel": "Locuteur de {{name}}",
+    "noSpeaker": "Aucun",
+    "unmarked": "Non annoté"
   },
   "languages": {
     "en-US": "English",
@@ -215,15 +298,23 @@
     "zh-TW": "繁體中文"
   },
   "layers": {
+    "textOverflow": "Le texte ne tient pas dans sa zone",
+    "textBelowReadableSize": "Le texte est réduit sous la taille lisible",
+    "textLowContrast": "Le texte se distingue à peine de l'image en dessous",
+    "ocrUnverified": "OCR non vérifié : relancez l'OCR",
+    "cleaningUnverified": "Texte resté après le nettoyage : vérifiez le nettoyage",
+    "collapse": "Replier {{name}}",
     "delete": "Supprimer {{name}}",
     "edit": "Modifier {{name}}",
     "empty": "Aucun calque sur cette page.",
+    "expand": "Déplier {{name}}",
     "hide": "Masquer {{name}}",
     "imageName": "Image {{index}}",
     "kinds": {
       "cleanup": "Nettoyage",
       "dialogue": "Dialogue",
       "freeText": "Texte libre",
+      "onomatopoeia": "Son",
       "group": "Groupe",
       "image": "Image",
       "paint": "Peinture",
@@ -235,6 +326,7 @@
     "moveDown": "Descendre {{name}}",
     "moveUp": "Monter {{name}}",
     "opacityLabel": "Opacité de {{name}}",
+    "roleLabel": "Type de texte pour {{name}}",
     "originalArtwork": "Image originale",
     "show": "Afficher {{name}}",
     "sourceLabel": "Texte source de {{name}}",
@@ -244,6 +336,8 @@
   },
   "menu": {
     "about": "À propos",
+    "batch": "Traitement par lots",
+    "clearProject": "Vider le projet",
     "closeProject": "Fermer le projet",
     "delete": "Supprimer la sélection",
     "discord": "Discord",
@@ -258,12 +352,33 @@
     "processLayers": "Traiter les calques sélectionnés",
     "processPages": "Traiter les pages sélectionnées",
     "processProject": "Traiter le projet",
+    "projectVersions": "Versions du projet…",
     "redo": "Rétablir",
     "runPhase": "Lancer : {{phase}}",
     "selectAllLayers": "Sélectionner tous les calques",
     "settings": "Paramètres",
     "undo": "Annuler",
-    "view": "Affichage"
+    "view": "Affichage",
+    "pagesPanel": "Panneau des pages",
+    "inspectorPanel": "Panneau latéral"
+  },
+  "versions": {
+    "delete": "Supprimer",
+    "deleteDescription": "La version « {{name}} » sera définitivement supprimée. L'état actuel du projet ne changera pas.",
+    "deleteLabel": "Supprimer la version {{name}}",
+    "deleteTitle": "Supprimer cette version ?",
+    "description": "Enregistrez des instantanés nommés du projet complet et revenez-y plus tard.",
+    "emptyDescription": "Enregistrez une version avant une grosse modification ou un traitement.",
+    "emptyTitle": "Aucune version enregistrée",
+    "nameLabel": "Nom de la version",
+    "namePlaceholder": "Par exemple : OCR terminé",
+    "restore": "Restaurer",
+    "restoreDescription": "Le projet reviendra à la version « {{name}} » sous forme de nouvelle révision. Enregistrez d'abord l'état actuel comme version si vous en avez besoin.",
+    "restoreLabel": "Restaurer la version {{name}}",
+    "restoreTitle": "Restaurer cette version ?",
+    "revision": "révision {{revision}}",
+    "save": "Enregistrer",
+    "title": "Versions du projet"
   },
   "model": {
     "baseUrl": "URL de base",
@@ -282,6 +397,10 @@
   "navigator": {
     "actionsFor": "Actions pour {{page}}",
     "delete": "Supprimer",
+    "deleteAllAction": "Supprimer toutes les pages",
+    "deleteAllDescription": "Cela retire du projet toutes les pages ({{count}} au total) et leur contenu. Vous pouvez annuler cette action.",
+    "deleteAllTitle": "Supprimer toutes les pages ?",
+    "deletingPages": "Suppression des pages…",
     "emptyDescription": "Importez des fichiers image ou un dossier pour ajouter des pages.",
     "emptyTitle": "Aucune page pour l’instant",
     "filter": "Filtrer les pages",
@@ -297,10 +416,19 @@
     "noResults": "Aucune page ne correspond à ce filtre.",
     "pageName": "Nom de la page",
     "pages": "Pages",
+    "duplicate": "Dupliquer",
     "rename": "Renommer",
     "renameDescription": "Choisissez un nouveau nom pour cette page.",
     "renameTitle": "Renommer la page",
-    "selected": "Sélection : {{count}}"
+    "selected": "Sélection : {{count}}",
+    "markupMissing": {
+      "refused": "Annotation de scène : le modèle a refusé cette page",
+      "content-filter": "Annotation de scène : bloquée par le filtre de contenu du fournisseur",
+      "empty": "Annotation de scène : le modèle n'a rien renvoyé",
+      "invalid": "Annotation de scène : la réponse était invalide et a été ignorée",
+      "failed": "Annotation de scène : la requête a échoué"
+    },
+    "switchProject": "Changer de projet"
   },
   "outputPicker": {
     "instructions": "Instructions de traduction",
@@ -310,14 +438,26 @@
   },
   "phase": {
     "detection": "Détection",
+    "enhancement": "Amélioration du scan",
     "inpainting": "Inpainting",
     "ocr": "OCR",
+    "markup": "Annotation de scène",
+    "translation": "Traduction"
+  },
+  "phaseShort": {
+    "detection": "Détection",
+    "enhancement": "Amélioration",
+    "inpainting": "Nettoyage",
+    "ocr": "OCR",
+    "markup": "Annotation",
     "translation": "Traduction"
   },
   "phaseDescription": {
     "detection": "Repérer le texte sur la page.",
+    "enhancement": "Supprimer le bruit JPEG et le papier gris des scans de faible qualité. L'original reste dans la page.",
     "inpainting": "Reconstruire l’image derrière le texte supprimé.",
     "ocr": "Lire le texte de chaque zone.",
+    "markup": "Indiquer le type, le locuteur et la suite de chaque texte pour la traduction.",
     "translation": "Convertir le texte source dans la langue cible."
   },
   "providerDescriptions": {
@@ -333,7 +473,8 @@
     "minimax": "Modèles de langage MiniMax.",
     "openai": "Modèles de langage OpenAI.",
     "openai-compatible": "Tout serveur proposant une API compatible OpenAI.",
-    "openrouter": "Modèles acheminés via OpenRouter."
+    "openrouter": "Modèles acheminés via OpenRouter.",
+    "qwen-ocr": "Qwen-VL-OCR dédié via Alibaba Cloud. Clé API et point d'accès régional distincts."
   },
   "resources": {
     "cpu": "CPU",
@@ -383,13 +524,64 @@
     "loading": "Chargement des préférences…",
     "pipeline": {
       "description": "Choisissez les modèles et les options utilisés pour traiter chaque page.",
+      "enhancement": {
+        "classical": "Filtre léger",
+        "mangajpeg": "MangaJPEG",
+        "mangajpegDescription": "Supprimer les artefacts JPEG avec le modèle adapté à la compression de la page. Désactivé : seulement un filtre léger qui préserve les contours.",
+        "tone": "Points noir et blanc",
+        "toneDescription": "Rendre noire l'encre presque noire et blanc le papier presque blanc sur les pages monochromes. Les tons moyens et les pages teintées restent inchangés."
+      },
       "modelLabel": "Modèle de {{stage}}",
       "options": {
         "bubbleThreshold": "Seuil des bulles",
         "negativePrompt": "Prompt négatif",
+        "applyMode": "Mode d'application",
+        "fullPage": "Page entière",
+        "mask": "Masque",
         "panelThreshold": "Seuil des cases",
         "prompt": "Prompt",
         "textThreshold": "Seuil du texte"
+      },
+      "ocr": {
+        "api": "API / cloud",
+        "apiModel": "Modèle de vision API",
+        "instructions": "Instructions OCR",
+        "instructionsDescription": "Consignes pour une transcription exacte, l'ordre de lecture, les furigana ou les onomatopées.",
+        "instructionsPlaceholder": "Consignes OCR facultatives",
+        "local": "Local (CPU)",
+        "localModel": "Modèle OCR local",
+        "method": "Méthode OCR",
+        "hybrid": "Local + API",
+        "hybridDescription": "Faire l'OCR local de toutes les pages du chapitre, puis vérifier les brouillons avec le modèle API choisi. Les résultats sont appliqués automatiquement.",
+        "crossCheck": "Contre-vérifier avec un second modèle local",
+        "crossCheckDescription": "Lire aussi chaque extrait avec un second modèle local et n'envoyer à l'API que les extraits où les deux divergent. Désactivé : tout est envoyé, environ trois fois plus cher, un peu plus précis sur l'écriture manuscrite."
+      },
+      "markup": {
+        "model": "Modèle d'annotation",
+        "instructions": "Instructions supplémentaires",
+        "instructionsDescription": "Ajoutées à la requête d'annotation, par exemple des indications sur les personnages."
+      },
+      "inpainting": {
+        "apiModel": "Modèle d'édition d'image",
+        "localModel": "Modèle de nettoyage local",
+        "restorationModel": "Modèle de restauration",
+        "restorationProvider": "Fournisseur de restauration",
+        "restorationPrompt": "Prompt de restauration",
+        "method": "Méthode de nettoyage",
+        "options": "Options du nettoyage API",
+        "promptPreset": "Prompt prédéfini",
+        "promptPresets": {
+          "cleanup-all": "Supprimer tout le texte et les filigranes",
+          "cleanup-text": "Supprimer uniquement le texte",
+          "custom": "Prompt personnalisé",
+          "translate-russian": "Remplacer le lettrage par du russe"
+        },
+        "provider": "Fournisseur d'images",
+        "removeDescription": "Modèle local pour le pinceau Supprimer. Indépendant du nettoyage des pages et de la restauration rectangulaire.",
+        "restorationDescription": "Modèle API pour l'outil Restaurer avec une sélection rectangulaire. Indépendant du nettoyage des pages et du pinceau Supprimer.",
+        "previewBeforeSend": "Aperçu avant l'envoi à l'API",
+        "previewBeforeSendDescription": "Afficher l'image envoyée et modifier le prompt avant le nettoyage de page par API ou la restauration d'une sélection. La suppression locale n'est pas concernée.",
+        "balloonFill": "Remplissage des bulles uniquement"
       },
       "processing": "Traitement",
       "stages": {
@@ -404,6 +596,10 @@
         "ocr": {
           "description": "Lire le texte source dans les zones détectées.",
           "title": "OCR"
+        },
+        "markup": {
+          "title": "Annotation de scène",
+          "description": "Un modèle de vision indique le type de chaque texte, son locuteur et la réplique qu'il prolonge. Il ne modifie jamais le texte."
         }
       },
       "title": "Pipeline"
@@ -413,6 +609,8 @@
       "configured": "Configuré",
       "connections": "Connexions",
       "connectionsDescription": "Les identifiants sont stockés de façon sécurisée sur cet appareil.",
+      "falDescription": "Identifiant utilisé par les modèles d'édition d'image Fal.ai.",
+      "replicateDescription": "Édition d'image FLUX. Le contrôle de sécurité des sorties est désactivé pour Dev et Klein ; Pro, Max et Flex conservent les restrictions du modèle.",
       "credential": "Identifiants",
       "credentialLabel": "Identifiants {{provider}}",
       "description": "Connectez des fournisseurs de traduction et de modèles de langage.",
@@ -436,29 +634,49 @@
     "title": "Paramètres",
     "translation": {
       "description": "Choisissez le modèle de n’importe quel fournisseur configuré, puis appliquez un ensemble commun d’options de traduction et de génération.",
+      "chapterProfile": "Chapitre",
+      "instructions": "Instructions",
       "instructionsDescription": "Indications sur les noms, le ton, la terminologie ou la mise en forme.",
       "instructionsLabel": "Instructions de traduction",
       "instructionsPlaceholder": "Indications facultatives pour tout le projet",
+      "promptPreset": "Prompt prédéfini du chapitre",
+      "promptPresetDescription": "Charger un prompt de style et de terminologie prêt à l'emploi dans le profil de chapitre.",
+      "presetCustom": "Instructions personnalisées",
+      "presetBnhaBakugoMidoriya": "BNHA — Bakugo / Midoriya (russe)",
+      "presetBnhaDoujinshi": "BNHA — doujinshi (russe)",
+      "presetMangaAdaptive": "Manga — chapitre adaptatif (russe)",
       "model": "Modèle",
+      "pageProfile": "Page",
       "modelDescription": "Les libellés de fournisseur indiquent où chaque modèle s’exécute ; les connexions se configurent séparément.",
       "modelQuantization": "Quantification du modèle",
       "output": "Sortie",
       "quantization": "Quantification",
       "quantizationDescription": "Les formats plus compacts utilisent moins de mémoire, généralement au détriment de la qualité.",
       "selectQuantization": "Sélectionner une quantification",
+      "sourceLanguage": "Langue source",
+      "sourceLanguageDescription": "Choisissez la langue des pages sources. Elle guide l'OCR et la traduction.",
       "targetLanguageDescription": "Choisissez la langue dans laquelle traduire le texte.",
       "title": "Traduction",
       "translationModel": "Modèle de traduction",
-      "translationModelDescription": "Choisissez le modèle utilisé pour traduire le texte."
+      "translationModelDescription": "Choisissez le modèle utilisé pour traduire le texte.",
+      "unitPolicy": "Regroupement de la traduction",
+      "unitPolicyDescription": "Choisissez comment le texte du chapitre est regroupé avant la traduction.",
+      "pageOnly": "Page seule",
+      "adaptiveV1": "Adaptatif v1 (contexte du chapitre)"
     },
     "typesetting": {
       "addFamily": "Ajouter une famille de polices",
+      "clearKindFont": "Utiliser les familles par défaut pour {{kind}}",
       "defaultFamilies": "Familles de polices par défaut",
       "description": "Définissez la liste ordonnée de polices utilisée lorsqu’aucune famille n’est attribuée à un calque de texte.",
       "empty": "Aucune famille par défaut. Koharu utilisera la police de secours du système.",
       "familyLabel": "Famille de polices par défaut {{index}}",
       "fontFallback": "Police de secours",
       "fontFallbackDescription": "Koharu utilise la première famille disponible qui prend en charge le texte.",
+      "kindFontDefault": "Familles par défaut",
+      "kindFontLabel": "Police pour {{kind}}",
+      "kindFonts": "Police par type de texte",
+      "kindFontsDescription": "Utilisée avant les familles par défaut pour le texte de ce type issu de l'annotation de scène. Une police choisie sur un calque de texte reste prioritaire.",
       "loadError": "Impossible de charger les polices. Les familles existantes peuvent toujours être supprimées.",
       "loadingFonts": "Chargement des polices…",
       "removeFamily": "Retirer {{family}}",
@@ -505,8 +723,10 @@
     "draw": "Pinceau",
     "eraser": "Gomme",
     "increaseBrushSize": "Augmenter la taille du pinceau",
+    "ocr": "Zone OCR",
     "pan": "Déplacer",
     "remove": "Retirer",
+    "restore": "Restaurer",
     "select": "Sélection",
     "text": "Texte"
   },
@@ -527,12 +747,56 @@
     "later": "Plus tard",
     "noNotes": "Aucune note de version fournie.",
     "retry": "Réessayer",
-    "update": "Mettre à jour"
+    "update": "Mettre à jour",
+    "upstream": {
+      "title": "Le Koharu original a une mise à jour",
+      "description": "Le Koharu original {{version}} est plus récent que la version intégrée {{integratedVersion}}. Ses changements peuvent être utiles à ce fork. Les mises à jour automatiques n'installent que les versions de Projmix/koharu.",
+      "view": "Voir la version originale",
+      "dismiss": "Ignorer cette version"
+    }
   },
   "window": {
     "close": "Fermer",
     "maximize": "Agrandir",
     "minimize": "Réduire",
     "restore": "Restaurer"
+  },
+  "imageEditPreview": {
+    "title": "Aperçu de la requête d'édition d'image",
+    "description": "Vérifiez l'image et le prompt envoyés. Les modifications du prompt ne s'appliquent qu'à cette requête et ne sont pas enregistrées dans les paramètres.",
+    "image": "Image envoyée",
+    "prompt": "Prompt de cette requête",
+    "resetPrompt": "Réinitialiser le prompt",
+    "send": "Envoyer à l'API",
+    "cancel": "Annuler la tâche",
+    "close": "Fermer",
+    "actualSize": "100 %",
+    "fitImage": "Ajuster l'image",
+    "restoration": "Restaurer la sélection",
+    "cleanup": "Nettoyage de la page",
+    "failed": "Impossible de résoudre l'aperçu : {{error}}",
+    "cleanupLayers": "Original + calques Peinture visibles. Un PNG ; les calques de texte, les masques et les poignées sont exclus.",
+    "restorationLayers": "Zone sélectionnée de l'original + calques Nettoyage et Peinture visibles, dans l'ordre des calques. Un PNG ; les calques de texte, les masques et les poignées sont exclus."
+  },
+  "characters": {
+    "tab": "Distribution",
+    "title": "Personnages",
+    "description": "Noms et genres utilisés par l'annotation de scène et la traduction. Dès que vous modifiez la liste, elle vous appartient et l'annotation ne la change plus.",
+    "empty": "Aucun personnage pour l'instant. L'annotation de scène remplit cette liste, ou ajoutez-les ici.",
+    "name": "Nom",
+    "gender": "Genre",
+    "genders": {
+      "male": "Masculin",
+      "female": "Féminin",
+      "unknown": "Inconnu"
+    },
+    "notes": "Notes",
+    "notesPlaceholder": "Notes, par ex. sa façon de parler",
+    "remove": "Retirer {{name}}",
+    "newName": "Nom du nouveau personnage",
+    "add": "Ajouter",
+    "import": "Importer depuis un projet…",
+    "importNone": "Aucun autre projet",
+    "imported": "Personnages ajoutés : {{count}}"
   }
 }
