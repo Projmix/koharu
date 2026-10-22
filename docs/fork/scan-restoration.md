@@ -40,6 +40,15 @@ original and the run says why.
    lowers paper noise or blockiness.
 4. **Tone**: on monochrome pages, the masked Levels curve. Ink edge from the
    luminance histogram, paper edge per channel (tinted paper becomes white).
+   Ink is the darkest 5-level window peak in 0..=112 holding 1% of the page
+   (not the tallest: Osananajimi page 20 holds more grey tone at 38 than ink
+   at 0). Its edge goes up while the histogram keeps falling and stays above
+   half the peak, at most 16 levels (a tenth let the anti-aliased tail of
+   clean ink run 30-60 levels into dark tone): a print scan
+   (Shanpankouru 2) spreads its black over 70-110 with dark screentone just
+   above, so no single bin reached the old 2% and the ink stayed grey. When
+   the ramps would squeeze the mid-tones below 64 levels, the paper ramp
+   shortens first and black is lowered only as far as the band needs.
 5. **Result**: one opaque raster layer of kind `Enhancement` at the bottom of
    the page, owned by `dev.koharu.pipeline.enhancement`. The source asset is
    never replaced. Detection, OCR, markup, translation crops and inpainting

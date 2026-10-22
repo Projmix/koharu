@@ -442,16 +442,31 @@ fn paper_edge(histogram: &[u64; 256], total: u64) -> Option<f32> {
     Some(edge as f32)
 }
 
-/// The ink's light edge: the tallest bin in 0..=96 holding at least 2% of the
-/// page, extended up the same way.
+/// The ink's light edge: the darkest 5-level window in 0..=112 that holds at
+/// least 1% of the page and stops rising, extended up while it stays above
+/// half its height and keeps falling, at most 16 levels: just past the peak,
+/// as in the Levels step of a scanlation clean. Windows rather than bins, and a range
+/// past 96, because a washed-out print scan spreads its black over 70-110
+/// instead of stacking it in one level. The darkest peak rather than the
+/// tallest, because a page with real black can hold more mid-grey screentone
+/// than ink, and that tone must not become black.
 fn ink_edge(histogram: &[u64; 256], total: u64) -> Option<f32> {
-    let peak = (0..=96).max_by_key(|&value| (histogram[value], std::cmp::Reverse(value)))?;
-    if histogram[peak] * 50 < total {
-        return None;
-    }
-    let floor = histogram[peak] / 10;
+    let window = |value: usize| {
+        histogram[value.saturating_sub(2)..=(value + 2).min(255)]
+            .iter()
+            .sum::<u64>()
+    };
+    let peak = (0..=112)
+        .find(|&value| window(value) * 100 >= total && window(value) >= window(value + 1))?;
+    // Half height, not a tenth: the anti-aliased tail of clean black ink
+    // stays above a tenth of a window for 30-60 levels.
+    let floor = window(peak) / 2;
     let mut edge = peak;
-    while edge < peak + 40 && edge < 96 && histogram[edge + 1] >= floor {
+    while edge < peak + 16
+        && edge < 112
+        && window(edge + 1) >= floor
+        && window(edge + 1) <= window(edge)
+    {
         edge += 1;
     }
     Some(edge as f32)
@@ -462,11 +477,13 @@ fn levels_of(histogram: &[u64; 256], total: u64) -> Levels {
         black: ink_edge(histogram, total).unwrap_or(0.0),
         white: paper_edge(histogram, total).unwrap_or(255.0),
     };
-    // Keep a real mid-tone band between the two ramps.
+    // Keep a real mid-tone band between the two ramps: the paper ramp
+    // shortens first, then the ink ramp gives up only what the band needs.
     let (low, high) = levels.identity_band();
     if high - low < 64.0 {
-        levels.black = levels.black.min(32.0);
         levels.white = levels.white.max(223.0);
+        let (_, high) = levels.identity_band();
+        levels.black = levels.black.min(((high - 64.0) / 2.0).max(32.0));
     }
     levels
 }
@@ -737,5 +754,40 @@ mod tests {
             assert!(mapped >= previous, "the curve is monotonic");
             previous = mapped;
         }
+    }
+
+    #[test]
+    fn washed_out_ink_is_found_before_dark_screentone() {
+        // A print scan's black spread over 66-86 with dark screentone at
+        // 90-100 above it, on mostly white paper.
+        let mut histogram = [0u64; 256];
+        for value in 66..=86 {
+            histogram[value] = 50 - (value as u64).abs_diff(74) * 2;
+        }
+        for value in 87..=100 {
+            histogram[value] = 30 + (value as u64).abs_diff(87);
+        }
+        histogram[255] = 6000;
+        let total = histogram.iter().sum();
+        let levels = levels_of(&histogram, total);
+        assert!(
+            (80.0..=90.0).contains(&levels.black),
+            "the ink ends past its peak and before the screentone: {}",
+            levels.black
+        );
+        assert_eq!(levels.white, 255.0);
+    }
+
+    #[test]
+    fn mid_grey_screentone_is_not_taken_for_ink() {
+        // Real black at 0 and more grey screentone around 38 than ink.
+        let mut histogram = [0u64; 256];
+        histogram[0] = 120;
+        for value in 30..=46 {
+            histogram[value] = 40;
+        }
+        histogram[255] = 6000;
+        let total = histogram.iter().sum();
+        assert!(levels_of(&histogram, total).black < 8.0);
     }
 }

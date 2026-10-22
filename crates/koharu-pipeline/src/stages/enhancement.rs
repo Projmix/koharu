@@ -30,7 +30,7 @@ use crate::{EnhancementConfig, ModelCell};
 
 const PRODUCER: &str = "dev.koharu.pipeline.enhancement";
 /// Bumped whenever the analysis, filters or checks change what a page gets.
-const REVISION: &str = "1";
+const REVISION: &str = "3";
 const LAYER_NAME: &str = "Scan enhancement";
 
 /// The page's scan enhancement layer, when it has one.
