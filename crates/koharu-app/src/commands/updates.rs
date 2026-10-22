@@ -6,9 +6,9 @@ use specta::Type;
 
 use super::Error;
 
-// Last integrated upstream: koharu-rs/koharu@eaa42f240824796e3a0422ddd9c880c2cd2f2bd2.
+// Last integrated upstream: koharu-rs/koharu@52bb4f55e2266f72c1523562a583c827ec191ceb.
 // Advance this baseline only when integrating upstream, independently of fork releases.
-const INTEGRATED_UPSTREAM_VERSION: &str = "0.82.1";
+const INTEGRATED_UPSTREAM_VERSION: &str = "0.83.5";
 
 #[derive(Debug, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -75,10 +75,10 @@ mod tests {
     #[test]
     fn compares_stable_releases_with_integrated_upstream_not_the_fork_version() {
         for tag in [
-            "0.81.9",
-            "v0.82.1",
-            "0.82.1+fork.20",
-            "0.83.0-beta.1",
+            "0.82.1",
+            "v0.83.5",
+            "0.83.5+fork.20",
+            "0.84.0-beta.1",
             "not-a-version",
         ] {
             assert!(
@@ -92,7 +92,7 @@ mod tests {
                 "{tag}"
             );
         }
-        for tag in ["0.82.2", "v0.83.0", "0.100.0", "1.0.0"] {
+        for tag in ["0.83.6", "v0.84.0", "0.100.0", "1.0.0"] {
             let update = Release {
                 tag_name: tag.to_owned(),
                 draft: false,
@@ -100,7 +100,7 @@ mod tests {
             }
             .newer_than_integrated()
             .expect(tag);
-            assert_eq!(update.integrated_version, "0.82.1");
+            assert_eq!(update.integrated_version, "0.83.5");
             assert_eq!(
                 update.url,
                 format!("https://github.com/koharu-rs/koharu/releases/tag/{tag}")

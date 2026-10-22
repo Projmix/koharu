@@ -6,8 +6,8 @@ The updater verifies their signatures against this fork's public key in
 `crates/koharu/tauri.conf.json`.
 
 The original `koharu-rs/koharu` channel is informational. Its latest stable release
-is compared with integrated upstream version **0.82.1**, commit
-`eaa42f240824796e3a0422ddd9c880c2cd2f2bd2`, independently of the fork's version.
+is compared with integrated upstream version **0.83.5**, commit
+`52bb4f55e2266f72c1523562a583c827ec191ceb`, independently of the fork's version.
 Update the baseline in `crates/koharu-app/src/commands/updates.rs` only after
 integrating a newer upstream release. The notice links to the original release,
 can be dismissed for that version, and cannot install it. A fork update takes
