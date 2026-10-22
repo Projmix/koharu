@@ -1892,6 +1892,7 @@ mod tests {
             .pages()
             .map(|page| page.id())
             .collect::<Vec<_>>();
+        koharu_ml::init().await.unwrap();
         let model_name = std::env::var("KOHARU_BENCH_MODEL").unwrap_or("balloon-fill".into());
         let model = match model_name.as_str() {
             "lama" => Model::load(koharu_ml::Device::cpu(), &InpaintingModel::LaMa {})
@@ -1954,6 +1955,14 @@ mod tests {
                 let bytes = committed.read_blob(asset.blob).await.unwrap();
                 let layer = image::load_from_memory(&bytes).unwrap().to_rgba8();
                 layer.as_raw().hash(&mut page_digest);
+                // Earlier cleanup layers, such as a cloud run's, are only hashed.
+                let earlier = base
+                    .asset(entity.id(), &AssetRole::new("source").unwrap())
+                    .ok()
+                    .flatten();
+                if earlier.is_some_and(|earlier| earlier.blob == asset.blob) {
+                    continue;
+                }
                 let name = format!("page-{:02}.png", index + 1);
                 if let Some(output) = &output {
                     layer.save(output.join(&name)).unwrap();
