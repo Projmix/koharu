@@ -124,7 +124,30 @@ if (profile) {
   })
   const total = [...self.values()].reduce((sum, value) => sum + value, 0)
   console.log(`profile of 6 paused steps: ${total.toFixed(0)} ms busy; top self time:`)
-  for (const [key, ms] of [...self].sort((left, right) => right[1] - left[1]).slice(0, 30)) {
+  for (const [key, ms] of [...self].sort((left, right) => right[1] - left[1]).slice(0, 15)) {
+    console.log(`  ${ms.toFixed(1).padStart(7)} ms  ${key}`)
+  }
+  // Inclusive time of the app's own functions, which names the components
+  // whose renders create the elements above.
+  const parents = new Map<number, number>()
+  for (const node of recorded.nodes) {
+    for (const child of node.children ?? []) parents.set(child, node.id)
+  }
+  const inclusive = new Map<string, number>()
+  ;(recorded.samples ?? []).forEach((id, index) => {
+    const delta = (deltas[index + 1] ?? 0) / 1000
+    const seen = new Set<string>()
+    for (let node: number | undefined = id; node !== undefined; node = parents.get(node)) {
+      const frame = ids.get(node)?.callFrame
+      if (!frame?.url.includes('packages_koharu') || !frame.functionName) continue
+      const key = `${frame.functionName} ${frame.url.split('/').slice(-1)[0]}:${frame.lineNumber + 1}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      inclusive.set(key, (inclusive.get(key) ?? 0) + delta)
+    }
+  })
+  console.log('app functions by inclusive time:')
+  for (const [key, ms] of [...inclusive].sort((left, right) => right[1] - left[1]).slice(0, 40)) {
     console.log(`  ${ms.toFixed(1).padStart(7)} ms  ${key}`)
   }
 }
