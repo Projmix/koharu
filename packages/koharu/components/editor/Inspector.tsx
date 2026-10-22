@@ -1308,6 +1308,11 @@ function InlineText({
       rows={1}
       className='[field-sizing:content] min-h-0 w-full min-w-0 resize-none rounded-sm border-primary/40 bg-background px-1 py-0.5 text-[11px] leading-4 font-medium md:text-[11px]'
       value={value}
+      onFocus={(event) => {
+        // The caret starts after the text, ready to continue it.
+        const end = event.currentTarget.value.length
+        event.currentTarget.setSelectionRange(end, end)
+      }}
       onClick={(event) => event.stopPropagation()}
       onKeyDown={(event) => {
         event.stopPropagation()
