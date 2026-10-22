@@ -346,6 +346,7 @@ function installProject() {
     layers: [textLayer],
     regions: [],
     unboxed_text: [],
+    cleanup_done: false,
   }
   queryClient.setQueryData(projectKey, {
     name: 'Book',
@@ -824,6 +825,7 @@ describe('greenfield editor', () => {
         layers: [],
         regions: [],
         unboxed_text: [],
+        cleanup_done: false,
       },
       {
         id: 'page-2',
@@ -832,6 +834,7 @@ describe('greenfield editor', () => {
         layers: [],
         regions: [],
         unboxed_text: [],
+        cleanup_done: false,
       },
       {
         id: 'page-3',
@@ -840,6 +843,7 @@ describe('greenfield editor', () => {
         layers: [],
         regions: [],
         unboxed_text: [],
+        cleanup_done: false,
       },
     ]
     queryClient.setQueryData(
@@ -944,6 +948,7 @@ describe('greenfield editor', () => {
       layers: [],
       regions: [],
       unboxed_text: [],
+      cleanup_done: false,
     }
     queryClient.setQueryData(pagesKey, [
       ...(queryClient.getQueryData<PageSummary[]>(pagesKey) ?? []),
@@ -978,6 +983,7 @@ describe('greenfield editor', () => {
       layers: [],
       regions: [],
       unboxed_text: [],
+      cleanup_done: false,
     }
     queryClient.setQueryData(pagesKey, [
       ...(queryClient.getQueryData<PageSummary[]>(pagesKey) ?? []),

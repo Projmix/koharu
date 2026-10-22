@@ -34,6 +34,33 @@ pub struct RasterLayer {
     pub kind: RasterLayerKind,
 }
 
+/// The user marked a page's cleanup as finished. Automatic cleaning leaves
+/// the page as it is, so a reviewed local fill and the user's fixes to it are
+/// kept and no cloud edit is paid for; manual removal and restoration still
+/// work. User-owned: only the user sets or clears it.
+#[revisioned(revision = 1)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Type)]
+pub struct CleanupDone {
+    pub origin: Origin,
+}
+
+impl Component for CleanupDone {
+    const KIND: &'static str = "dev.koharu.page.cleanup-done";
+
+    fn validate(&self, _context: &ValidationContext<'_>) -> Result<()> {
+        self.origin.validate()
+    }
+
+    fn origin(&self) -> Option<&Origin> {
+        Some(&self.origin)
+    }
+
+    fn set_origin(&mut self, origin: Origin) -> bool {
+        self.origin = origin;
+        true
+    }
+}
+
 impl Component for RasterLayer {
     const KIND: &'static str = "dev.koharu.layer.raster";
 

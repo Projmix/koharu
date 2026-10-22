@@ -35,6 +35,8 @@ export const commands = {
 	regions: AnalysisRegion[],
 	/**  Lettering scene markup saw outside every text region, still unresolved. */
 	unboxed_text: UnboxedText[],
+	/**  The user marked the page's cleanup as finished. */
+	cleanup_done: boolean,
 } | null>("get_page").then((v) => (v==null?v:({...v,layers:v.layers.map(i=>i),regions:v.regions.map(i=>({...i,geometry:({...i.geometry,points:i.geometry.points.map(i=>i)})})),unboxed_text:v.unboxed_text.map(i=>i)}) as typeof v)),
 	listProjects: () => __TAURI_INVOKE<ProjectSummary[]>("list_projects"),
 	createProject: (name: string) => __TAURI_INVOKE<null>("create_project", { name }),
@@ -61,6 +63,11 @@ export const commands = {
 	setTranslation: (layer: EntityId, text: string | null) => __TAURI_INVOKE<null>("set_translation", { layer, text }),
 	setSpeechMarkup: (layer: EntityId, kind: SpeechKind, speaker: string | null) => __TAURI_INVOKE<null>("set_speech_markup", { layer, kind, speaker }),
 	dismissUnboxedText: (page: EntityId, flag: UnboxedText) => __TAURI_INVOKE<null>("dismiss_unboxed_text", { page, flag }),
+	/**
+	 *  Mark a page's cleanup as finished so automatic cleaning skips it, or clear
+	 *  the mark.
+	 */
+	setCleanupDone: (page: EntityId, done: boolean) => __TAURI_INVOKE<null>("set_cleanup_done", { page, done }),
 	setCharacters: (characters: CharacterInput[]) => __TAURI_INVOKE<null>("set_characters", { characters }),
 	/**
 	 *  Add another project's characters to the open project. Returns how many
@@ -569,6 +576,8 @@ export type Page = {
 	regions: AnalysisRegion[],
 	/**  Lettering scene markup saw outside every text region, still unresolved. */
 	unboxed_text: UnboxedText[],
+	/**  The user marked the page's cleanup as finished. */
+	cleanup_done: boolean,
 };
 
 export type PageImportSource = "files" | "folder";
@@ -604,6 +613,8 @@ export type PageSummary = {
 	warning: PageWarning | null,
 	/**  Why scene markup could not label this page, when it tried and failed. */
 	markup_missing: PageMarkupMissing | null,
+	/**  The user marked the page's cleanup as finished. */
+	cleanup_done: boolean,
 };
 
 export type PageWarning = {

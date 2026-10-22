@@ -87,7 +87,9 @@
     "previousPage": "前のページ",
     "nextPage": "次のページ",
     "regenerateCleanup": "クリーンアップを再生成",
-    "regenerateCleanupDescription": "設定したクリーンアップモデルと新しいシードでこのページを再度クリーンアップします"
+    "regenerateCleanupDescription": "設定したクリーンアップモデルと新しいシードでこのページを再度クリーンアップします",
+    "cleanupDone": "クリーンアップ完了",
+    "cleanupDoneDescription": "このページのクリーンアップをそのまま保持します。クラウド編集を含む自動クリーンアップはこのページをスキップします。手動の除去と復元は引き続き使えます。"
   },
   "colorPicker": {
     "brushColor": "ブラシカラー",

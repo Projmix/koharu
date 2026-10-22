@@ -87,7 +87,9 @@
     "previousPage": "Previous page",
     "nextPage": "Next page",
     "regenerateCleanup": "Regenerate cleanup",
-    "regenerateCleanupDescription": "Clean this page again with the configured cleanup model and a new seed"
+    "regenerateCleanupDescription": "Clean this page again with the configured cleanup model and a new seed",
+    "cleanupDone": "Cleanup done",
+    "cleanupDoneDescription": "Keep this page's cleanup as it is: automatic cleaning, the cloud edit included, skips it. Removal and restoration still work."
   },
   "colorPicker": {
     "brushColor": "Brush color",

@@ -114,6 +114,7 @@ function installProject() {
     layers: [layer],
     regions: [],
     unboxed_text: [],
+    cleanup_done: false,
   }
   queryClient.setQueryData(projectKey, {
     name: 'Book',

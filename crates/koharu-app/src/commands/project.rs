@@ -10,7 +10,7 @@ use image::{DynamicImage, ImageFormat, RgbaImage};
 use koharu_desktop::Frame;
 use koharu_scene::{
     AssetInput, AssetMetadata, AssetRole, At, Authored, BubbleRegion, Character, CharacterId,
-    CharacterList, Commit, EntityId, EntityOrigin, FitsTo, FlowsIn, Gender,
+    CharacterList, CleanupDone, Commit, EntityId, EntityOrigin, FitsTo, FlowsIn, Gender,
     Geometry as SceneGeometry, Group as SceneGroup, Inside, Origin, PageDraft, PageMarkup,
     PageMarkupMissing, PageMarkupStatus, Point as ScenePoint, Presents,
     RasterLayer as SceneRasterLayer, RasterLayerKind, RecognizedFrom, Region as SceneRegion,
@@ -77,6 +77,8 @@ pub struct PageSummary {
     pub warning: Option<PageWarning>,
     /// Why scene markup could not label this page, when it tried and failed.
     pub markup_missing: Option<PageMarkupMissing>,
+    /// The user marked the page's cleanup as finished.
+    pub cleanup_done: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Type)]
@@ -88,6 +90,8 @@ pub struct Page {
     pub regions: Vec<AnalysisRegion>,
     /// Lettering scene markup saw outside every text region, still unresolved.
     pub unboxed_text: Vec<UnboxedText>,
+    /// The user marked the page's cleanup as finished.
+    pub cleanup_done: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Type)]
@@ -494,6 +498,7 @@ impl Project {
                         Some(PageMarkupStatus::Missing(reason)) => Some(reason),
                         _ => None,
                     },
+                    cleanup_done: snapshot.component::<CleanupDone>(page.id())?.is_some(),
                 })
             })
             .collect()
@@ -1473,6 +1478,26 @@ impl Project {
         self.commit(patch).await
     }
 
+    /// Mark a page's cleanup as finished, or clear the mark, as one undo
+    /// step. Automatic cleaning leaves a marked page as it is.
+    pub(crate) async fn set_cleanup_done(&mut self, page: EntityId, done: bool) -> Result<Commit> {
+        let snapshot = self.snapshot();
+        snapshot.page(page)?;
+        let patch = snapshot.patch(|edit| {
+            if done {
+                edit.set(
+                    page,
+                    &CleanupDone {
+                        origin: Origin::User,
+                    },
+                )
+            } else {
+                edit.remove::<CleanupDone>(page)
+            }
+        })?;
+        self.commit(patch).await
+    }
+
     /// Save the character list as the user's. A character that is no longer
     /// listed is also cleared from every text that names it as the speaker,
     /// in the same patch, so the edit undoes as one step.
@@ -2273,6 +2298,7 @@ impl Project {
             layers,
             regions,
             unboxed_text: koharu_pipeline::open_unboxed_text(snapshot, page)?,
+            cleanup_done: snapshot.component::<CleanupDone>(page)?.is_some(),
         })
     }
 

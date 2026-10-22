@@ -3,6 +3,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { observeElementRect, useVirtualizer } from '@tanstack/react-virtual'
 import {
+  CheckCheck,
   CircleAlert,
   MessageSquareDashed,
   Copy,
@@ -559,6 +560,16 @@ function PageItem({
                 {page.warning.message}
               </TooltipContent>
             </Tooltip>
+          )}
+          {page.cleanup_done && (
+            <span
+              data-testid={`cleanup-done-${page.id}`}
+              className='mt-0.5 shrink-0 text-primary'
+              title={t('canvas.cleanupDone')}
+              aria-label={t('canvas.cleanupDone')}
+            >
+              <CheckCheck className='size-3' />
+            </span>
           )}
           {page.markup_missing && (
             <Tooltip>

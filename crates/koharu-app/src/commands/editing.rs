@@ -262,6 +262,29 @@ pub(crate) async fn set_speech_markup(
     Ok(())
 }
 
+/// Mark a page's cleanup as finished so automatic cleaning skips it, or clear
+/// the mark.
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn set_cleanup_done(
+    page: EntityId,
+    done: bool,
+    desktop: State<'_, Desktop>,
+    project: State<'_, CurrentProject>,
+    canvas_channel: State<'_, CanvasChannel>,
+) -> Result<(), Error> {
+    let (commit, active) = {
+        let mut project = project.project.lock().await;
+        let project = project.as_mut().context("no project is open")?;
+        let commit = project.set_cleanup_done(page, done).await?;
+        project.record_commit(&commit);
+        (commit, project.active_page())
+    };
+    let canvas = synchronize_canvas(&desktop, &commit, active).await?;
+    canvas_channel.channel.publish(canvas);
+    Ok(())
+}
+
 #[tauri::command]
 #[specta::specta]
 pub(crate) async fn dismiss_unboxed_text(

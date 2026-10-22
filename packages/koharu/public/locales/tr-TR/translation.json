@@ -87,7 +87,9 @@
     "previousPage": "Önceki sayfa",
     "nextPage": "Sonraki sayfa",
     "regenerateCleanup": "Temizliği yeniden oluştur",
-    "regenerateCleanupDescription": "Bu sayfayı ayarlı temizleme modeliyle ve yeni bir tohumla yeniden temizler"
+    "regenerateCleanupDescription": "Bu sayfayı ayarlı temizleme modeliyle ve yeni bir tohumla yeniden temizler",
+    "cleanupDone": "Temizlik tamam",
+    "cleanupDoneDescription": "Bu sayfanın temizliğini olduğu gibi korur: bulut düzenlemesi dahil otomatik temizlik bu sayfayı atlar. Elle kaldırma ve geri yükleme çalışmaya devam eder."
   },
   "colorPicker": {
     "brushColor": "Fırça rengi",

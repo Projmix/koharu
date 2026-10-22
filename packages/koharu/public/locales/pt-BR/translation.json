@@ -87,7 +87,9 @@
     "previousPage": "Página anterior",
     "nextPage": "Próxima página",
     "regenerateCleanup": "Regenerar limpeza",
-    "regenerateCleanupDescription": "Limpa esta página novamente com o modelo de limpeza configurado e uma nova semente"
+    "regenerateCleanupDescription": "Limpa esta página novamente com o modelo de limpeza configurado e uma nova semente",
+    "cleanupDone": "Limpeza concluída",
+    "cleanupDoneDescription": "Mantém a limpeza desta página como está: a limpeza automática, incluindo a edição na nuvem, a ignora. Remover e restaurar continuam funcionando."
   },
   "colorPicker": {
     "brushColor": "Cor do pincel",

@@ -87,7 +87,9 @@
     "previousPage": "上一頁",
     "nextPage": "下一頁",
     "regenerateCleanup": "重新產生清理",
-    "regenerateCleanupDescription": "使用已設定的清理模型和新的隨機種子重新清理此頁"
+    "regenerateCleanupDescription": "使用已設定的清理模型和新的隨機種子重新清理此頁",
+    "cleanupDone": "清理已完成",
+    "cleanupDoneDescription": "保留此頁的清理結果：自動清理（包括雲端編輯）將略過此頁。手動移除和還原仍可使用。"
   },
   "colorPicker": {
     "brushColor": "筆刷顏色",

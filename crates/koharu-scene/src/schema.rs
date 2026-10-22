@@ -5,10 +5,10 @@
 //! relation endpoints.
 
 use crate::{
-    BubbleRegion, CharacterList, DetectionAnalysis, EntityId, EntityOrigin, Error, Geometry, Group,
-    OcrAnalysis, Page, PageMarkup, Project, RasterLayer, Region, RegionSpec, Relation, Result,
-    SourceText, SpeechMarkup, TextContent, TextGroup, TextLayout, TextRegion, TextRole,
-    Translation, TranslationReview, Typography, UnboxedTextReview, Visibility,
+    BubbleRegion, CharacterList, CleanupDone, DetectionAnalysis, EntityId, EntityOrigin, Error,
+    Geometry, Group, OcrAnalysis, Page, PageMarkup, Project, RasterLayer, Region, RegionSpec,
+    Relation, Result, SourceText, SpeechMarkup, TextContent, TextGroup, TextLayout, TextRegion,
+    TextRole, Translation, TranslationReview, Typography, UnboxedTextReview, Visibility,
     component::{Component, ComponentRecord, ValidationContext, decode, key},
     components::Assets,
     state::{Components, State},
@@ -66,6 +66,7 @@ component_schema! {
     PAGE_MARKUP = 20 => PageMarkup,
     CHARACTER_LIST = 21 => CharacterList,
     UNBOXED_TEXT_REVIEW = 22 => UnboxedTextReview,
+    CLEANUP_DONE = 23 => CleanupDone,
 }
 
 pub(crate) fn validate_components(

@@ -152,6 +152,16 @@ impl StageProcessor for Processor {
         )
     }
 
+    /// A page the user marked as cleaned is left as it is by automatic
+    /// cleaning; a drawn mask (removal, restoration) still runs.
+    fn skip(&self, input: &StageInput) -> Result<bool> {
+        Ok(input.inpainting_intent().is_none()
+            && input
+                .scene
+                .component::<koharu_scene::CleanupDone>(input.page()?)?
+                .is_some())
+    }
+
     fn unload(&self) -> bool {
         self.model.unload()
     }
@@ -679,6 +689,12 @@ pub(crate) fn cleaned(
     scene: &koharu_scene::Snapshot,
     page: koharu_scene::EntityId,
 ) -> Result<bool> {
+    if scene
+        .component::<koharu_scene::CleanupDone>(page)?
+        .is_some()
+    {
+        return Ok(true);
+    }
     for child in scene.children(page)? {
         if scene
             .component::<RasterLayer>(child)?
@@ -2417,6 +2433,40 @@ mod tests {
         // The gradient balloon and the text outside balloons stay for the model.
         assert_eq!(cleanup.get_pixel(27, 9)[3], 0);
         assert_eq!(cleanup.get_pixel(19, 10)[3], 0);
+    }
+
+    #[tokio::test]
+    async fn automatic_cleaning_leaves_a_page_marked_as_cleaned() {
+        let mut session = koharu_scene::Session::memory().await.unwrap();
+        let mut page = None;
+        let patch = session
+            .snapshot()
+            .patch(|edit| {
+                let id = edit.add_page(koharu_scene::PageDraft::new("page", 8.0, 8.0), At::End)?;
+                edit.set(
+                    id,
+                    &koharu_scene::CleanupDone {
+                        origin: Origin::User,
+                    },
+                )?;
+                page = Some(id);
+                Ok(())
+            })
+            .unwrap();
+        let snapshot = session.commit(patch).await.unwrap().snapshot;
+        let page = page.unwrap();
+        let processor =
+            Processor::new(InpaintingModel::BalloonFill {}, koharu_ml::Device::cpu()).unwrap();
+        let input = StageInput::new(
+            snapshot.clone(),
+            page,
+            None,
+            None,
+            Arc::new(crate::ImageCache::default()),
+            None,
+        );
+        assert!(processor.skip(&input).unwrap());
+        assert!(cleaned(&snapshot, page).unwrap());
     }
 
     #[test]

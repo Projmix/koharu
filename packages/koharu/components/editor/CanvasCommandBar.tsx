@@ -1,6 +1,7 @@
 'use client'
 
 import {
+  CheckCheck,
   ChevronLeft,
   ChevronRight,
   Columns2,
@@ -16,7 +17,15 @@ import { InferenceControl } from '@/components/editor/InferenceControl'
 import { call } from '@/lib/backend'
 import { enqueueHistory } from '@/lib/history'
 import { stepPage } from '@/lib/navigation'
-import { usePage, usePages, useProject } from '@/lib/queries'
+import {
+  pageKey,
+  pagesKey,
+  projectKey,
+  refresh,
+  usePage,
+  usePages,
+  useProject,
+} from '@/lib/queries'
 import { useKoharuStore, type PipelineScope } from '@/lib/store'
 import { commands, type Scope, type Stage } from '@koharu/bridge/protocol'
 import { Button } from '@koharu/ui/components/button'
@@ -98,6 +107,24 @@ export function CanvasCommandBar() {
               onClick={() => stepPage(1)}
             >
               <ChevronRight className='size-3.5' />
+            </Button>
+            <Button
+              type='button'
+              variant={page?.cleanup_done ? 'secondary' : 'ghost'}
+              size='sm'
+              className='h-7 gap-1.5 px-2 text-[11px]'
+              aria-pressed={Boolean(page?.cleanup_done)}
+              title={t('canvas.cleanupDoneDescription')}
+              disabled={!page}
+              onClick={() => {
+                if (!page) return
+                void call(commands.setCleanupDone, page.id, !page.cleanup_done)
+                  .then(() => refresh(projectKey, pagesKey, pageKey))
+                  .catch(() => undefined)
+              }}
+            >
+              <CheckCheck className='size-3.5' />
+              {t('canvas.cleanupDone')}
             </Button>
             <Button
               type='button'
