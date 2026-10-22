@@ -3,7 +3,7 @@
 Every detector, OCR and cleaning model the fork uses, ships unused, has
 measured, or has decided against. The point is to never evaluate the same
 model twice: before trying a model, look it up here; after trying it, record
-the result. Last updated 2026-10-19.
+the result. Last updated 2026-10-22.
 
 ## Rules
 
@@ -111,6 +111,54 @@ API, through `ocr.method = api` or `local-api`.
 | GLM-5.3 Flash, GPT-6 Luna, GPT-5.4 mini, Ling-3.0 Flash VL (OpenRouter) | rejected 2026-10-18 | 240-crop run above | CER 10.7–16.2% printed and 14–44% handwritten, worse than every local model. GLM returned no content on 24/240 crops. |
 | Qwen3.8 Flash (OpenRouter) | rejected 2026-10-18 | 240-crop run above | 67% CER. It ignores the `{"text"}` shape on 137/240 crops, and at 4 requests in flight it hit rate limits on 184/240. |
 | DeepSeek-OCR 2 | rejected 2026-08-24 | `docs/research/api-ocr-models-2026-08.md` | No hosted OpenAI-compatible endpoint; self-hosting needs CUDA/vLLM. Revisit if a hosted API appears. |
+
+## Chinese OCR (Traditional, vertical)
+
+Measured 2026-10-22 on 102 crops (88 lines, 14 sound effects) from 13 pages
+of a Taiwanese doujinshi chapter, cut by the Koharu detector; first and last
+pages excluded. The reference was transcribed by hand from the crops. CER
+counts letters, digits and Han characters only, in order; a simplified
+character in place of a traditional one is an error. The sound-effect column
+covers only 26 characters. Local models ran on the owner's CPU (i5-1235U, 16
+GB): GGUF models through `llama-server` from llama.cpp `b11818`, time per
+crop measured alone on 10 lines. API rows ran through Koharu's OpenRouter OCR
+path before the owner stopped API use for this work; they were not rerun.
+Method, failure cases and how to repeat the run:
+[chinese-ocr.ru.md](chinese-ocr.ru.md).
+
+| Model | CER | Lines | SFX | Time per crop | $ per 1000 crops |
+| --- | --- | --- | --- | --- | --- |
+| Qwen3-VL 8B Instruct Q4_K_M (local) | 1.63% | 0.70% | 26.9% | ~8 s | 0 |
+| Qwen3-VL 2B Instruct Q8_0 (local) | 2.85% | 2.11% | 23.1% | 3.4 s | 0 |
+| Qwen3-VL 4B Instruct Q4_K_M (local) | 3.66% | 2.95% | 23.1% | 4.7 s | 0 |
+| PaddleOCR-VL 1.6 GGUF (local, default) | 5.15% | 3.23% | 57.7% | 9.9 s (debug) | 0 |
+| GLM-OCR 0.9B Q8_0 (local) | 6.91% | 5.90% | 34.6% | 2.1 s | 0 |
+| Qwen3.5 4B Q4_K_M (local) | 8.67% | 7.87% | 30.8% | 5.4 s | 0 |
+| HunyuanOCR 1B Q8_0 (local) | 10.8–11.9% | 6.7–11.9% | | 10.3 s | 0 |
+| Manga OCR (local) | 32.3% | 29.4% | | 0.4 s | 0 |
+| PP-OCRv6 det + rec (local) | 93% | | | ~40 s (debug) | 0 |
+| Qwen3-VL 235B A22B | 1.08% | 0.98% | 3.9% | 1.9 s | ~0.09 |
+| GLM-5.3 Flash | 1.36% | 0.98% | 11.5% | 1.4 s | ~0.02 |
+| Gemini 3.5 Flash-Lite | 2.57% | 1.97% | 19.2% | 1.1 s | ~0.32 |
+| Qwen3.7-plus | 3.79% | 3.51% | 11.5% | 5.3 s | ~0.55 |
+| Gemini 3.8 Flash | 4.07% | 3.93% | 7.7% | 3.6 s | ~1.1 |
+| Gemini 3.7 Flash | 4.34% | 4.07% | 11.5% | 3.2 s | ~1.7 |
+| Seed 2.0 mini | 8.94% | 7.16% | 57.7% | 4.9 s | ~0.35 |
+
+| Model | Status | Source | Notes |
+| --- | --- | --- | --- |
+| Qwen3-VL 8B Instruct | candidate (high, best local for Chinese) | `Qwen/Qwen3-VL-8B-Instruct-GGUF` | Apache-2.0. About 6 GB RAM. Folds the small gloss beside a word into the line and misreads stylised SFX. Not ported; porting is a model integration. |
+| Qwen3-VL 2B Instruct | candidate (high, fast local for Chinese) | `Qwen/Qwen3-VL-2B-Instruct-GGUF` | Apache-2.0. About 2.5 GB RAM. More accurate than the default PaddleOCR-VL 1.6 on this set. |
+| Qwen3-VL 4B Instruct | candidate (low) | `Qwen/Qwen3-VL-4B-Instruct-GGUF` | Worse than 2B here and invents text on 10 of 12 empty crops. |
+| GLM-OCR 0.9B | rejected 2026-10-22 for Chinese | `ggml-org/GLM-OCR-GGUF` | Fastest local VLM, but swaps traditional characters for simplified ones (紛紛來 → 纷纷来). |
+| HunyuanOCR 1B | rejected 2026-10-22 for Chinese | `ggml-org/HunyuanOCR-GGUF` | Reads vertical columns left to right; a prompt that states the order fixes only part of it and makes it describe the prompt on some crops. |
+| Qwen3.5 4B | rejected 2026-10-22 for Chinese | `unsloth/Qwen3.5-4B-GGUF` | Reverses or splits character order on several crops. |
+| PP-OCRv6 det + rec | rejected 2026-10-22 for Chinese | shipped | Garbage on vertical columns even with tall lines rotated as PaddleOCR does. |
+| Manga OCR | rejected 2026-10-22 for Chinese | shipped | Japanese-only model. |
+| GLM-5.3 Flash (OpenRouter) | candidate (high, API, Chinese only) | | Rejected for Japanese above, but near the best on Chinese at the lowest price. |
+| Qwen3-VL 235B (OpenRouter) | candidate (high, API) | | Best on Chinese overall, including SFX. |
+| Gemini 3.7 / 3.8 Flash (OpenRouter) | candidate (low for Chinese) | | Both truncate the JSON on the same crop with `——` every time (3/3 retries); that crop is half their CER. |
+| Qwen3.7 Flash (OpenRouter) | rejected 2026-10-22 | | No OpenRouter endpoint accepts `json_schema` (404 on every crop). |
 
 ## Cleaning
 
