@@ -730,7 +730,11 @@
     "remove": "Kaldır",
     "restore": "Geri yükle",
     "select": "Seç",
-    "text": "Metin"
+    "text": "Metin",
+    "clone": "Klon Damgası",
+    "cloneSourceMissing": "Önce Alt+tıklama ile klon kaynağını belirleyin.",
+    "cloneOpacity": "Damga opaklığı",
+    "cloneOpacityValue": "Damga opaklığı %{{value}}"
   },
   "updater": {
     "available": {

@@ -730,7 +730,11 @@
     "remove": "移除",
     "restore": "恢复",
     "select": "选择",
-    "text": "文本"
+    "text": "文本",
+    "clone": "仿制图章",
+    "cloneSourceMissing": "请先按 Alt 并单击设置仿制源。",
+    "cloneOpacity": "图章不透明度",
+    "cloneOpacityValue": "图章不透明度 {{value}}%"
   },
   "updater": {
     "available": {

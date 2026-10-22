@@ -10,6 +10,7 @@ import {
   Plus,
   ScanText,
   Sparkles,
+  Stamp,
   Type,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -46,6 +47,7 @@ const tools = [
   ['ocr', ScanText],
   ['draw', Brush],
   ['eraser', Eraser],
+  ['clone', Stamp],
   ['color_picker', Pipette],
   ['remove', Eraser],
   ['pan', Hand],
@@ -152,9 +154,59 @@ export function ToolBar() {
             value={brush.diameter}
             onChange={(diameter) => setBrush({ ...brush, diameter })}
           />
+          {active === 'clone' && <CloneOpacity />}
         </div>
       )}
     </aside>
+  )
+}
+
+function CloneOpacity() {
+  const { t } = useTranslation()
+  const opacity = useKoharuStore((state) => Math.round(state.cloneOpacity * 100))
+  return (
+    <Popover>
+      <Tooltip>
+        <PopoverTrigger
+          render={
+            <TooltipTrigger
+              render={
+                <Button
+                  type='button'
+                  variant='ghost'
+                  size='icon'
+                  aria-label={t('tools.cloneOpacityValue', { value: opacity })}
+                  className='size-8 rounded-xl font-sans text-[10px] leading-none font-medium text-muted-foreground tabular-nums hover:bg-foreground/[0.06] hover:text-foreground'
+                />
+              }
+            >
+              {opacity}%
+            </TooltipTrigger>
+          }
+        />
+        <TooltipContent side='right'>{t('tools.cloneOpacity')}</TooltipContent>
+      </Tooltip>
+      <PopoverContent
+        side='right'
+        align='center'
+        sideOffset={8}
+        className='w-48 gap-2.5 rounded-xl p-2.5'
+      >
+        <div className='flex items-center justify-between gap-3'>
+          <PopoverTitle className='text-[11px]'>{t('tools.cloneOpacity')}</PopoverTitle>
+          <span className='text-[11px] tabular-nums'>{opacity}%</span>
+        </div>
+        <Slider
+          aria-label={t('tools.cloneOpacity')}
+          min={5}
+          max={100}
+          step={5}
+          value={opacity}
+          className='py-1 [&_[data-slot=slider-thumb]]:size-2.5'
+          onValueChange={(value) => useKoharuStore.setState({ cloneOpacity: value / 100 })}
+        />
+      </PopoverContent>
+    </Popover>
   )
 }
 

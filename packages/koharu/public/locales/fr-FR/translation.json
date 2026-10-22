@@ -730,7 +730,11 @@
     "remove": "Retirer",
     "restore": "Restaurer",
     "select": "Sélection",
-    "text": "Texte"
+    "text": "Texte",
+    "clone": "Tampon de duplication",
+    "cloneSourceMissing": "Définissez d'abord la source du tampon avec Alt+clic.",
+    "cloneOpacity": "Opacité du tampon",
+    "cloneOpacityValue": "Opacité du tampon {{value}} %"
   },
   "updater": {
     "available": {

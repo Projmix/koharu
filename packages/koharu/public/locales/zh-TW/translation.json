@@ -730,7 +730,11 @@
     "remove": "移除",
     "restore": "修復",
     "select": "選取",
-    "text": "文字"
+    "text": "文字",
+    "clone": "仿製印章",
+    "cloneSourceMissing": "請先按 Alt 並按一下設定仿製來源。",
+    "cloneOpacity": "印章不透明度",
+    "cloneOpacityValue": "印章不透明度 {{value}}%"
   },
   "updater": {
     "available": {

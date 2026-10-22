@@ -730,7 +730,11 @@
     "remove": "Удаление",
     "restore": "Восстановление",
     "select": "Выбор",
-    "text": "Текст"
+    "text": "Текст",
+    "clone": "Штамп",
+    "cloneSourceMissing": "Сначала задайте источник штампа: Alt+клик.",
+    "cloneOpacity": "Непрозрачность штампа",
+    "cloneOpacityValue": "Непрозрачность штампа {{value}}%"
   },
   "updater": {
     "available": {

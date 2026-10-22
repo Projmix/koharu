@@ -6,6 +6,7 @@ import { useTranslation } from 'react-i18next'
 import { useColorSampling } from '@/components/controls/ColorSampling'
 import { CanvasCommandBar } from '@/components/editor/CanvasCommandBar'
 import { CanvasOverlay } from '@/components/editor/CanvasOverlay'
+import { ClonePreview, type CloneStroke } from '@/components/editor/ClonePreview'
 import { OriginalView } from '@/components/editor/OriginalView'
 import { PagePreview } from '@/components/editor/PagePreview'
 import { StatusBar } from '@/components/editor/StatusBar'
@@ -73,6 +74,7 @@ const canvasCursors = {
   ocr: 'crosshair',
   draw: 'none',
   eraser: 'none',
+  clone: 'none',
   color_picker: 'crosshair',
   remove: 'none',
   restore: 'crosshair',
@@ -99,13 +101,15 @@ type Gesture =
   | StrokeGesture
 
 interface StrokeGesture {
-  kind: 'paint' | 'erase' | 'inpaint'
+  kind: 'paint' | 'erase' | 'inpaint' | 'clone'
   pointer: number
   revision: number
   layer: string | null
   points: Point[]
   diameter: number
   color?: CanvasColor
+  /** Page offset from a Clone Stamp stroke to the pixels it copies. */
+  offset?: Point
 }
 
 interface CanvasView {
@@ -201,6 +205,8 @@ export function CanvasWorkspace() {
 
   const page = usePage().data
   const compareOriginal = useKoharuStore((state) => state.compareOriginal)
+  const cloneSource = useKoharuStore((state) => state.cloneSource)
+  const [cloneStroke, setCloneStroke] = useState<CloneStroke | null>(null)
   const pendingPage = useKoharuStore((state) => state.pendingPage)
   const pages = usePages().data
   const canvasPage = useKoharuStore((state) => state.canvasPage)
@@ -265,6 +271,8 @@ export function CanvasWorkspace() {
         canvasRevision < committedEdit.revision)
     )
       return
+    // The committed frame now shows the Clone Stamp stroke.
+    setCloneStroke(null)
     try {
       if (committedEdit.kind === 'stroke') committedEdit.canvas.cancelStroke()
       else committedEdit.canvas.cancelTransform()
@@ -446,7 +454,12 @@ export function CanvasWorkspace() {
   const cancelGesture = useCallback(() => {
     const current = gesture.current
     gesture.current = null
-    if (current?.kind === 'paint' || current?.kind === 'erase' || current?.kind === 'inpaint') {
+    if (
+      current?.kind === 'paint' ||
+      current?.kind === 'erase' ||
+      current?.kind === 'inpaint' ||
+      current?.kind === 'clone'
+    ) {
       strokeUpdates.clear()
       canvas?.cancelStroke()
     }
@@ -726,6 +739,7 @@ export function CanvasWorkspace() {
           'draw',
           'eraser',
           'color_picker',
+          'clone',
           'remove',
           'restore',
           'pan',
@@ -948,9 +962,22 @@ export function CanvasWorkspace() {
           ? draftFrame(current.start, end)
           : rectangleFrame(current.start, end)
       setDraft(current.frame)
-    } else if (current.kind === 'paint' || current.kind === 'erase' || current.kind === 'inpaint') {
+    } else if (
+      current.kind === 'paint' ||
+      current.kind === 'erase' ||
+      current.kind === 'inpaint' ||
+      current.kind === 'clone'
+    ) {
       current.points.push(...points)
-      strokeUpdates.schedule({ kind: current.kind, points })
+      if (current.kind === 'clone') {
+        setCloneStroke({
+          points: [...current.points],
+          diameter: current.diameter,
+          offset: current.offset!,
+        })
+      } else {
+        strokeUpdates.schedule({ kind: current.kind, points })
+      }
     }
   }
 
@@ -1000,10 +1027,15 @@ export function CanvasWorkspace() {
       void enqueue(() => call(commands.commitRestore, current.revision, current.frame))
         .catch(() => undefined)
         .finally(() => (commitPending.current = false))
-    } else if (current.kind === 'paint' || current.kind === 'erase' || current.kind === 'inpaint') {
+    } else if (
+      current.kind === 'paint' ||
+      current.kind === 'erase' ||
+      current.kind === 'inpaint' ||
+      current.kind === 'clone'
+    ) {
       strokeUpdates.commit()
       try {
-        canvas?.finishStroke()
+        if (current.kind !== 'clone') canvas?.finishStroke()
       } catch (error) {
         canvas?.cancelStroke()
         receiveError(errorMessage(error))
@@ -1027,14 +1059,16 @@ export function CanvasWorkspace() {
               selectLayers([result.layer])
               return refresh(projectKey, pagesKey, pageKey)
             })
-          : current.kind === 'erase'
+          : current.kind === 'clone'
             ? enqueue(() =>
                 call(
-                  commands.commitErase,
+                  commands.commitClone,
                   current.revision,
-                  current.layer!,
+                  current.layer,
                   current.points,
                   current.diameter,
+                  current.offset!,
+                  useKoharuStore.getState().cloneOpacity,
                 ),
               ).then((result) => {
                 if (canvas)
@@ -1047,9 +1081,29 @@ export function CanvasWorkspace() {
                 selectLayers([result.layer])
                 return refresh(projectKey, pagesKey, pageKey)
               })
-            : enqueue(() =>
-                call(commands.commitInpaint, current.revision, current.points, current.diameter),
-              )
+            : current.kind === 'erase'
+              ? enqueue(() =>
+                  call(
+                    commands.commitErase,
+                    current.revision,
+                    current.layer!,
+                    current.points,
+                    current.diameter,
+                  ),
+                ).then((result) => {
+                  if (canvas)
+                    setCommittedEdit({
+                      canvas,
+                      page: page.id,
+                      revision: result.revision,
+                      kind: 'stroke',
+                    })
+                  selectLayers([result.layer])
+                  return refresh(projectKey, pagesKey, pageKey)
+                })
+              : enqueue(() =>
+                  call(commands.commitInpaint, current.revision, current.points, current.diameter),
+                )
       commitPending.current = true
       void operation
         .then(() => {
@@ -1058,6 +1112,7 @@ export function CanvasWorkspace() {
         .catch(() => {
           canvas?.cancelStroke()
           setCommittedEdit(null)
+          setCloneStroke(null)
         })
         .finally(() => (commitPending.current = false))
     }
@@ -1212,6 +1267,36 @@ export function CanvasWorkspace() {
                 gesture.current = null
                 receiveError(errorMessage(error))
               }
+            } else if (tool === 'clone') {
+              // Alt+click picks the source; a stroke copies the page from it.
+              if (event.altKey) {
+                useKoharuStore.setState({ cloneSource: { source: point, offset: null } })
+                event.preventDefault()
+                return
+              }
+              const clone = useKoharuStore.getState().cloneSource
+              if (!clone) {
+                receiveError(t('tools.cloneSourceMissing'))
+                return
+              }
+              const offset = clone.offset ?? {
+                x: clone.source.x - point.x,
+                y: clone.source.y - point.y,
+              }
+              if (!clone.offset) useKoharuStore.setState({ cloneSource: { ...clone, offset } })
+              const layer = selectedRaster?.id ?? eraserRaster?.id ?? null
+              strokeUpdates.clear()
+              gesture.current = {
+                kind: 'clone',
+                pointer: event.pointerId,
+                revision: canvasRevision,
+                layer,
+                points: [point],
+                diameter: brush.diameter,
+                offset,
+              }
+              // The copy is made natively; ClonePreview shows it meanwhile.
+              setCloneStroke({ points: [point], diameter: brush.diameter, offset })
             } else if (tool === 'remove') {
               strokeUpdates.clear()
               gesture.current = {
@@ -1327,6 +1412,10 @@ export function CanvasWorkspace() {
           {pendingPage && pendingPage !== canvasPage && (
             <PagePreview page={pages?.find((summary) => summary.id === pendingPage)} />
           )}
+          {/* Mounted with the tool, so the source is loaded before the first stroke. */}
+          {page && (tool === 'clone' || cloneStroke) && (
+            <ClonePreview page={page} revision={canvasRevision} stroke={cloneStroke} />
+          )}
           <canvas
             ref={setCanvasElement}
             data-testid='webgpu-canvas'
@@ -1344,6 +1433,7 @@ export function CanvasWorkspace() {
               cursor={cursor}
               brushSize={brush.diameter}
               showBrushCursor={isBrushTool(tool)}
+              cloneSource={tool === 'clone' ? cloneSource : null}
               showDetectionRegions={tool === 'select' || tool === 'ocr'}
               onCreateUnboxedText={readUnboxedText}
               onDismissUnboxedText={dismissUnboxedText}

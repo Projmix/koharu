@@ -277,6 +277,66 @@ pub(crate) async fn commit_erase(
     .await
 }
 
+/// The active page as it shows without text, PNG encoded: what the Clone
+/// Stamp copies from, for its live preview.
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn get_clone_source(
+    page: EntityId,
+    project: State<'_, CurrentProject>,
+) -> Result<super::output::ImageBytes, Error> {
+    let snapshot = project
+        .project
+        .lock()
+        .await
+        .as_ref()
+        .context("no project is open")?
+        .snapshot();
+    let image = Project::composited_page(&snapshot, page).await?;
+    let bytes = tokio_rayon::spawn(move || -> anyhow::Result<Vec<u8>> {
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(image).write_to(&mut bytes, image::ImageFormat::Png)?;
+        Ok(bytes.into_inner())
+    })
+    .await?;
+    Ok(super::output::ImageBytes(bytes))
+}
+
+/// Clone Stamp stroke: paints the page as it shows, read `offset` page units
+/// from each stroke point, into `layer` or the page's visible cleanup layer.
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn commit_clone(
+    expected_revision: Revision,
+    layer: Option<EntityId>,
+    points: Vec<Point>,
+    diameter: f32,
+    offset: Point,
+    opacity: f32,
+    desktop: State<'_, Desktop>,
+    project: State<'_, CurrentProject>,
+    canvas_channel: State<'_, CanvasChannel>,
+) -> Result<LayerCommit, Error> {
+    if !offset.x.is_finite() || !offset.y.is_finite() || !(0.0..=1.0).contains(&opacity) {
+        return Err(anyhow!("the clone offset must be finite and its opacity within 0..1").into());
+    }
+    commit_raster_stroke(
+        expected_revision,
+        layer,
+        points,
+        diameter,
+        [0; 4],
+        RasterStrokeMode::Clone {
+            offset: (offset.x, offset.y),
+            opacity,
+        },
+        &desktop,
+        &project,
+        &canvas_channel,
+    )
+    .await
+}
+
 #[tauri::command]
 #[specta::specta]
 pub(crate) async fn import_cleanup_image(

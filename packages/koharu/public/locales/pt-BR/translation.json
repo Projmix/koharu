@@ -730,7 +730,11 @@
     "remove": "Remover",
     "restore": "Restaurar",
     "select": "Selecionar",
-    "text": "Texto"
+    "text": "Texto",
+    "clone": "Carimbo",
+    "cloneSourceMissing": "Primeiro use Alt+clique para definir a origem do carimbo.",
+    "cloneOpacity": "Opacidade do carimbo",
+    "cloneOpacityValue": "Opacidade do carimbo {{value}}%"
   },
   "updater": {
     "available": {

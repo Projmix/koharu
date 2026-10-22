@@ -730,7 +730,11 @@
     "remove": "Remove",
     "restore": "Restore",
     "select": "Select",
-    "text": "Text"
+    "text": "Text",
+    "clone": "Clone Stamp",
+    "cloneSourceMissing": "Alt+click to set the Clone Stamp source first.",
+    "cloneOpacity": "Stamp opacity",
+    "cloneOpacityValue": "Stamp opacity {{value}}%"
   },
   "updater": {
     "available": {

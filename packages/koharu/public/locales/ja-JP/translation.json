@@ -730,7 +730,11 @@
     "remove": "削除",
     "restore": "修復",
     "select": "選択",
-    "text": "テキスト"
+    "text": "テキスト",
+    "clone": "コピースタンプ",
+    "cloneSourceMissing": "先に Alt+クリックでコピー元を指定してください。",
+    "cloneOpacity": "スタンプの不透明度",
+    "cloneOpacityValue": "スタンプの不透明度 {{value}}%"
   },
   "updater": {
     "available": {

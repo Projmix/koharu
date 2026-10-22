@@ -17,6 +17,7 @@ import type {
   StartupState,
   ModelResources,
   PageSize,
+  Point,
 } from '@koharu/bridge/protocol'
 import { toast } from '@koharu/ui/components/toast'
 
@@ -26,6 +27,7 @@ export type CanvasTool =
   | 'ocr'
   | 'draw'
   | 'eraser'
+  | 'clone'
   | 'color_picker'
   | 'remove'
   | 'restore'
@@ -38,7 +40,7 @@ export function maxBrushDiameter(size: PageSize): number {
 }
 
 export function isBrushTool(tool: CanvasTool): boolean {
-  return tool === 'draw' || tool === 'eraser' || tool === 'remove'
+  return tool === 'draw' || tool === 'eraser' || tool === 'clone' || tool === 'remove'
 }
 
 export interface CanvasBrush {
@@ -96,6 +98,14 @@ interface KoharuStore {
   compareOriginal: boolean
   /** Whether the page rail and the right sidebar are shown. */
   panels: Record<EditorPanel, boolean>
+  /**
+   * Clone Stamp source, as in Photoshop: Alt+click sets `source`; the first
+   * stroke fixes `offset` from its start to the source, and later strokes
+   * keep it (aligned sampling) until the source is set again.
+   */
+  cloneSource: { source: Point; offset: Point | null } | null
+  /** Clone Stamp opacity, 0..1, as in Photoshop. */
+  cloneOpacity: number
   /** Display-only opacity of the page's cleanup layers, for seeing what was cleaned. */
   cleanupOpacity: number
   shortcuts: Shortcuts
@@ -123,6 +133,7 @@ export const defaultShortcuts: Shortcuts = {
   ocr: 'o',
   draw: 'b',
   eraser: 'e',
+  clone: 's',
   color_picker: 'i',
   remove: 'j',
   restore: 'r',
@@ -164,6 +175,8 @@ export const useKoharuStore = create<KoharuStore>()((set) => ({
   compareOriginal: false,
   panels: { pages: true, inspector: true },
   cleanupOpacity: 1,
+  cloneSource: null,
+  cloneOpacity: 1,
   shortcuts: defaultShortcuts,
   selectPages: (selectedPages) => set({ selectedPages: [...new Set(selectedPages)] }),
   showInspector: (inspector) => set({ inspector }),

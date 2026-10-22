@@ -121,6 +121,16 @@ export const commands = {
 	addOcrRegion: (frame: Frame) => __TAURI_INVOKE<OcrRegionCommit>("add_ocr_region", { frame }),
 	commitPaint: (expectedRevision: Revision, layer: string | null, points: Point[], brush: PaintBrush) => __TAURI_INVOKE<LayerCommit>("commit_paint", { expectedRevision, layer, points: points.map(i=>i), brush }),
 	commitErase: (expectedRevision: Revision, layer: string | null, points: Point[], diameter: number) => __TAURI_INVOKE<LayerCommit>("commit_erase", { expectedRevision, layer, points: points.map(i=>i), diameter }),
+	/**
+	 *  Clone Stamp stroke: paints the page as it shows, read `offset` page units
+	 *  from each stroke point, into `layer` or the page's visible cleanup layer.
+	 */
+	commitClone: (expectedRevision: Revision, layer: string | null, points: Point[], diameter: number, offset: Point, opacity: number) => __TAURI_INVOKE<LayerCommit>("commit_clone", { expectedRevision, layer, points: points.map(i=>i), diameter, offset, opacity }),
+	/**
+	 *  The active page as it shows without text, PNG encoded: what the Clone
+	 *  Stamp copies from, for its live preview.
+	 */
+	getCloneSource: (page: EntityId) => __TAURI_INVOKE<ImageBytes>("get_clone_source", { page }),
 	importCleanupImage: (dataUrl: string) => __TAURI_INVOKE<LayerCommit>("import_cleanup_image", { dataUrl }),
 	commitTransform: (expectedRevision: Revision, elements: TransformFrame[]) => __TAURI_INVOKE<number | null>("commit_transform", { expectedRevision, elements }).then((v) => (v==null?v:v as typeof v)),
 	commitInpaint: (expectedRevision: Revision, points: Point[], diameter: number) => __TAURI_INVOKE<string | null>("commit_inpaint", { expectedRevision, points: points.map(i=>i), diameter }),

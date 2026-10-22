@@ -730,7 +730,11 @@
     "remove": "Eliminar",
     "restore": "Restaurar",
     "select": "Seleccionar",
-    "text": "Texto"
+    "text": "Texto",
+    "clone": "Tampón de clonar",
+    "cloneSourceMissing": "Primero pulsa Alt y haz clic para fijar el origen del tampón.",
+    "cloneOpacity": "Opacidad del tampón",
+    "cloneOpacityValue": "Opacidad del tampón {{value}} %"
   },
   "updater": {
     "available": {

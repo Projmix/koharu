@@ -42,6 +42,8 @@ interface CanvasOverlayProps {
   cursor: Point | null
   brushSize: number
   showBrushCursor: boolean
+  /** Clone Stamp source, marked where the next stroke copies from. */
+  cloneSource?: { source: Point; offset: Point | null } | null
   showDetectionRegions: boolean
   onCreateUnboxedText: (flag: UnboxedText) => void
   onDismissUnboxedText: (flag: UnboxedText) => void
@@ -60,6 +62,7 @@ export function CanvasOverlay({
   cursor,
   brushSize,
   showBrushCursor,
+  cloneSource = null,
   showDetectionRegions,
   onCreateUnboxedText,
   onDismissUnboxedText,
@@ -180,6 +183,24 @@ export function CanvasOverlay({
             width: brushSize * scale,
             height: brushSize * scale,
           }}
+        />
+      )}
+
+      {cloneSource && (cloneSource.offset ? cursor : true) && (
+        <CloneSourceMarker
+          // Physical pixels, like the brush cursor.
+          point={
+            cloneSource.offset && cursor
+              ? {
+                  x: cursor.x + cloneSource.offset.x * camera.zoom,
+                  y: cursor.y + cloneSource.offset.y * camera.zoom,
+                }
+              : {
+                  x: camera.translation[0] + cloneSource.source.x * camera.zoom,
+                  y: camera.translation[1] + cloneSource.source.y * camera.zoom,
+                }
+          }
+          size={brushSize * scale}
         />
       )}
 
@@ -388,5 +409,20 @@ function DraftOverlay({ frame, camera }: { frame: Frame; camera: Camera }) {
         transform: `rotate(${position.angle}deg)`,
       }}
     />
+  )
+}
+
+function CloneSourceMarker({ point, size }: { point: Point; size: number }) {
+  const left = point.x / window.devicePixelRatio
+  const top = point.y / window.devicePixelRatio
+  return (
+    <div
+      data-testid='clone-source'
+      className='absolute rounded-full border border-dashed border-white/95 shadow-[0_0_0_1px_rgb(0_0_0/0.9)]'
+      style={{ left: left - size / 2, top: top - size / 2, width: size, height: size }}
+    >
+      <span className='absolute top-1/2 left-1/2 h-px w-3 -translate-x-1/2 bg-white shadow-[0_0_0_1px_rgb(0_0_0/0.8)]' />
+      <span className='absolute top-1/2 left-1/2 h-3 w-px -translate-y-1/2 bg-white shadow-[0_0_0_1px_rgb(0_0_0/0.8)]' />
+    </div>
   )
 }

@@ -133,6 +133,8 @@ pub fn bindings() -> tauri_specta::Builder<tauri_runtime_cef::CefRuntime> {
             canvas::add_ocr_region,
             canvas::commit_paint,
             canvas::commit_erase,
+            canvas::commit_clone,
+            canvas::get_clone_source,
             canvas::import_cleanup_image,
             canvas::commit_transform,
             canvas::commit_inpaint,

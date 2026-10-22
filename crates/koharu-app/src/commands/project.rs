@@ -33,10 +33,16 @@ const FREE_TEXT_ROLE: &str = "dev.koharu.text.free-text";
 const DIALOGUE_ROLE: &str = "dev.koharu.text.dialogue";
 const ONOMATOPOEIA_ROLE: &str = "dev.koharu.text.onomatopoeia";
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum RasterStrokeMode {
     Paint,
     Erase,
+    /// Clone Stamp: paints the page as it shows, read `offset` page pixels
+    /// away from each painted pixel, at `opacity`.
+    Clone {
+        offset: (f64, f64),
+        opacity: f32,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Type)]
@@ -1951,18 +1957,24 @@ impl Project {
         }
         let layer = match layer {
             Some(layer) => Some(layer),
-            None if mode == RasterStrokeMode::Erase => snapshot.children(page)?.find(|entity| {
-                snapshot
-                    .component::<SceneRasterLayer>(*entity)
-                    .ok()
-                    .flatten()
-                    .is_some_and(|layer| layer.kind == RasterLayerKind::Cleanup)
-                    && snapshot
-                        .component::<SceneVisibility>(*entity)
+            None if matches!(
+                mode,
+                RasterStrokeMode::Erase | RasterStrokeMode::Clone { .. }
+            ) =>
+            {
+                snapshot.children(page)?.find(|entity| {
+                    snapshot
+                        .component::<SceneRasterLayer>(*entity)
                         .ok()
                         .flatten()
-                        .is_none_or(|visibility| visibility.visible)
-            }),
+                        .is_some_and(|layer| layer.kind == RasterLayerKind::Cleanup)
+                        && snapshot
+                            .component::<SceneVisibility>(*entity)
+                            .ok()
+                            .flatten()
+                            .is_none_or(|visibility| visibility.visible)
+                })
+            }
             None => None,
         };
         let mut raster_layer = None;
@@ -1995,7 +2007,24 @@ impl Project {
         if image.dimensions() != (width, height) {
             bail!("raster layer dimensions must match the page");
         }
-        rasterize_stroke(&mut image, mode, color, diameter, &points);
+        let clone_source = match mode {
+            RasterStrokeMode::Clone { .. } => Some(Self::composited_page(&snapshot, page).await?),
+            _ => None,
+        };
+        if clone_source
+            .as_ref()
+            .is_some_and(|source| source.dimensions() != (width, height))
+        {
+            bail!("the page image dimensions must match the page");
+        }
+        rasterize_stroke(
+            &mut image,
+            mode,
+            color,
+            diameter,
+            &points,
+            clone_source.as_ref(),
+        );
         let mut bytes = Cursor::new(Vec::new());
         DynamicImage::ImageRgba8(image).write_to(&mut bytes, ImageFormat::Png)?;
         let source = AssetRole::new("source")?;
@@ -2060,6 +2089,67 @@ impl Project {
             self.commit(patch).await?,
             committed_layer.expect("raster layer was selected or added while building the patch"),
         ))
+    }
+
+    /// The page as it shows without text: the visible scan enhancement or the
+    /// source, with the visible raster layers over it in layer order and at
+    /// their opacity. The Clone Stamp samples it, like Photoshop's "All
+    /// Layers" sampling.
+    pub(crate) async fn composited_page(snapshot: &Snapshot, page: EntityId) -> Result<RgbaImage> {
+        let role = AssetRole::new("source")?;
+        let visible = |entity: EntityId| -> Result<f32> {
+            let mut opacity = 1.0_f32;
+            let mut current = Some(entity);
+            while let Some(entity) = current.filter(|entity| *entity != page) {
+                if let Some(visibility) = snapshot.component::<SceneVisibility>(entity)? {
+                    if !visibility.visible {
+                        return Ok(0.0);
+                    }
+                    opacity *= visibility.opacity as f32;
+                }
+                current = snapshot.parent(entity)?;
+            }
+            Ok(opacity.clamp(0.0, 1.0))
+        };
+        let mut base = None;
+        let mut layers = Vec::new();
+        for entity in snapshot.descendants(page)? {
+            let entity = entity.id();
+            let Some(raster) = snapshot.component::<SceneRasterLayer>(entity)? else {
+                continue;
+            };
+            let opacity = visible(entity)?;
+            if opacity == 0.0 {
+                continue;
+            }
+            if raster.kind == RasterLayerKind::Enhancement {
+                base = Some(entity);
+            } else {
+                layers.push((entity, opacity));
+            }
+        }
+        let base = snapshot
+            .asset(base.unwrap_or(page), &role)?
+            .context("the page has no source image")?;
+        let mut composite =
+            image::load_from_memory(&snapshot.read_blob(base.blob).await?)?.to_rgba8();
+        for (layer, opacity) in layers {
+            let Some(asset) = snapshot.asset(layer, &role)? else {
+                continue;
+            };
+            let mut image =
+                image::load_from_memory(&snapshot.read_blob(asset.blob).await?)?.to_rgba8();
+            if image.dimensions() != composite.dimensions() {
+                continue;
+            }
+            if opacity < 1.0 {
+                for pixel in image.pixels_mut() {
+                    pixel[3] = (f32::from(pixel[3]) * opacity).round() as u8;
+                }
+            }
+            image::imageops::overlay(&mut composite, &image, 0, 0);
+        }
+        Ok(composite)
     }
 
     pub(crate) async fn import_cleanup_image(
@@ -2691,8 +2781,13 @@ fn rasterize_stroke(
     color: [u8; 4],
     diameter: f32,
     points: &[ScenePoint],
+    clone_source: Option<&RgbaImage>,
 ) {
     let radius = f64::from(diameter) * 0.5;
+    let (width, height) = image.dimensions();
+    // The stroke's coverage is the most any of its segments gives a pixel, so
+    // overlapping segments and a translucent stroke paint evenly, as one dab.
+    let mut coverage = std::collections::HashMap::<(u32, u32), f32>::new();
     for (start, end) in points
         .iter()
         .zip(points.iter().skip(1))
@@ -2702,10 +2797,10 @@ fn rasterize_stroke(
         let top = (start.y.min(end.y) - radius - 0.5).floor().max(0.0) as u32;
         let right = (start.x.max(end.x) + radius + 0.5)
             .ceil()
-            .min(f64::from(image.width())) as u32;
+            .min(f64::from(width)) as u32;
         let bottom = (start.y.max(end.y) + radius + 0.5)
             .ceil()
-            .min(f64::from(image.height())) as u32;
+            .min(f64::from(height)) as u32;
         let dx = end.x - start.x;
         let dy = end.y - start.y;
         let length_squared = dx * dx + dy * dy;
@@ -2720,33 +2815,53 @@ fn rasterize_stroke(
                 };
                 let distance =
                     ((px - (start.x + t * dx)).powi(2) + (py - (start.y + t * dy)).powi(2)).sqrt();
-                let coverage = (radius + 0.5 - distance).clamp(0.0, 1.0) as f32;
-                if coverage == 0.0 {
+                let value = (radius + 0.5 - distance).clamp(0.0, 1.0) as f32;
+                if value > 0.0 {
+                    let entry = coverage.entry((x, y)).or_insert(0.0);
+                    *entry = entry.max(value);
+                }
+            }
+        }
+    }
+    for ((x, y), coverage) in coverage {
+        let color = match (mode, clone_source) {
+            (RasterStrokeMode::Clone { offset, opacity }, Some(source)) => {
+                let sx = (f64::from(x) + offset.0).round();
+                let sy = (f64::from(y) + offset.1).round();
+                if sx < 0.0
+                    || sy < 0.0
+                    || sx >= f64::from(source.width())
+                    || sy >= f64::from(source.height())
+                {
                     continue;
                 }
-                let pixel = image.get_pixel_mut(x, y);
-                match mode {
-                    RasterStrokeMode::Paint => {
-                        let source_alpha = f32::from(color[3]) / 255.0 * coverage;
-                        let destination_alpha = f32::from(pixel[3]) / 255.0;
-                        let output_alpha = source_alpha + destination_alpha * (1.0 - source_alpha);
-                        if output_alpha > 0.0 {
-                            for channel in 0..3 {
-                                let source = f32::from(color[channel]) / 255.0;
-                                let destination = f32::from(pixel[channel]) / 255.0;
-                                pixel[channel] = (((source * source_alpha
-                                    + destination * destination_alpha * (1.0 - source_alpha))
-                                    / output_alpha)
-                                    * 255.0)
-                                    .round() as u8;
-                            }
-                        }
-                        pixel[3] = (output_alpha * 255.0).round() as u8;
-                    }
-                    RasterStrokeMode::Erase => {
-                        pixel[3] = (f32::from(pixel[3]) * (1.0 - coverage)).round() as u8;
+                let mut sampled = source.get_pixel(sx as u32, sy as u32).0;
+                sampled[3] = (f32::from(sampled[3]) * opacity.clamp(0.0, 1.0)).round() as u8;
+                sampled
+            }
+            _ => color,
+        };
+        let pixel = image.get_pixel_mut(x, y);
+        match mode {
+            RasterStrokeMode::Paint | RasterStrokeMode::Clone { .. } => {
+                let source_alpha = f32::from(color[3]) / 255.0 * coverage;
+                let destination_alpha = f32::from(pixel[3]) / 255.0;
+                let output_alpha = source_alpha + destination_alpha * (1.0 - source_alpha);
+                if output_alpha > 0.0 {
+                    for channel in 0..3 {
+                        let source = f32::from(color[channel]) / 255.0;
+                        let destination = f32::from(pixel[channel]) / 255.0;
+                        pixel[channel] = (((source * source_alpha
+                            + destination * destination_alpha * (1.0 - source_alpha))
+                            / output_alpha)
+                            * 255.0)
+                            .round() as u8;
                     }
                 }
+                pixel[3] = (output_alpha * 255.0).round() as u8;
+            }
+            RasterStrokeMode::Erase => {
+                pixel[3] = (f32::from(pixel[3]) * (1.0 - coverage)).round() as u8;
             }
         }
     }
@@ -4008,6 +4123,7 @@ mod tests {
             [210, 40, 20, 255],
             5.0,
             &points,
+            None,
         );
         for x in 4..28 {
             assert_eq!(image.get_pixel(x, 8).0, [210, 40, 20, 255]);
@@ -4019,6 +4135,7 @@ mod tests {
             [0, 0, 0, 0],
             5.0,
             &[ScenePoint { x: 16.0, y: 8.0 }],
+            None,
         );
         assert_eq!(image.get_pixel(16, 8)[3], 0);
         assert_eq!(image.get_pixel(4, 8)[3], 255);
@@ -4030,8 +4147,70 @@ mod tests {
             [255, 255, 255, 255],
             3.0,
             &[ScenePoint { x: 2.0, y: 2.0 }],
+            None,
         );
         assert_eq!(white.get_pixel(2, 2).0, [255, 255, 255, 255]);
+    }
+
+    #[test]
+    fn a_clone_stroke_copies_the_page_from_its_offset() {
+        // The left half of the page is red, the right half blue; cloning
+        // with an offset of +16 paints the right half's blue on the left.
+        let source = RgbaImage::from_fn(32, 16, |x, _| {
+            if x < 16 {
+                image::Rgba([255, 0, 0, 255])
+            } else {
+                image::Rgba([0, 0, 255, 255])
+            }
+        });
+        let mut layer = RgbaImage::new(32, 16);
+        rasterize_stroke(
+            &mut layer,
+            RasterStrokeMode::Clone {
+                offset: (16.0, 0.0),
+                opacity: 1.0,
+            },
+            [0; 4],
+            5.0,
+            &[ScenePoint { x: 6.0, y: 8.0 }],
+            Some(&source),
+        );
+        assert_eq!(layer.get_pixel(6, 8).0, [0, 0, 255, 255]);
+        assert_eq!(layer.get_pixel(20, 8)[3], 0, "only the stroke is painted");
+
+        // A source point off the page leaves the layer as it was.
+        let mut edge = RgbaImage::new(32, 16);
+        rasterize_stroke(
+            &mut edge,
+            RasterStrokeMode::Clone {
+                offset: (40.0, 0.0),
+                opacity: 1.0,
+            },
+            [0; 4],
+            3.0,
+            &[ScenePoint { x: 6.0, y: 8.0 }],
+            Some(&source),
+        );
+        assert_eq!(edge.get_pixel(6, 8)[3], 0);
+
+        // At half opacity a dab over its own path paints half, not more.
+        let mut half = RgbaImage::new(32, 16);
+        rasterize_stroke(
+            &mut half,
+            RasterStrokeMode::Clone {
+                offset: (16.0, 0.0),
+                opacity: 0.5,
+            },
+            [0; 4],
+            5.0,
+            &[
+                ScenePoint { x: 6.0, y: 8.0 },
+                ScenePoint { x: 6.5, y: 8.0 },
+                ScenePoint { x: 6.0, y: 8.0 },
+            ],
+            Some(&source),
+        );
+        assert_eq!(half.get_pixel(6, 8).0, [0, 0, 255, 128]);
     }
 
     #[tokio::test]

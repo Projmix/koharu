@@ -730,7 +730,11 @@
     "remove": "제거",
     "restore": "복원",
     "select": "선택",
-    "text": "텍스트"
+    "text": "텍스트",
+    "clone": "복제 도장",
+    "cloneSourceMissing": "먼저 Alt+클릭으로 복제 원본을 지정하세요.",
+    "cloneOpacity": "도장 불투명도",
+    "cloneOpacityValue": "도장 불투명도 {{value}}%"
   },
   "updater": {
     "available": {
