@@ -711,7 +711,9 @@
     "title": "Preparando o Koharu"
   },
   "status": {
-    "zoom": "Zoom"
+    "zoom": "Zoom",
+    "cleanupOpacity": "Limpeza",
+    "cleanupOpacityHint": "Opacidade na tela das camadas de limpeza, para ver o que foi limpo. Não altera as camadas nem a exportação."
   },
   "tools": {
     "brushSize": "Tamanho do pincel",

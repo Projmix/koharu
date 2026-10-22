@@ -15,17 +15,10 @@ import { useTranslation } from 'react-i18next'
 
 import { InferenceControl } from '@/components/editor/InferenceControl'
 import { call } from '@/lib/backend'
+import { toggleCleanupDone } from '@/lib/cleanup'
 import { enqueueHistory } from '@/lib/history'
 import { stepPage } from '@/lib/navigation'
-import {
-  pageKey,
-  pagesKey,
-  projectKey,
-  refresh,
-  usePage,
-  usePages,
-  useProject,
-} from '@/lib/queries'
+import { usePage, usePages, useProject } from '@/lib/queries'
 import { useKoharuStore, type PipelineScope } from '@/lib/store'
 import { commands, type Scope, type Stage } from '@koharu/bridge/protocol'
 import { Button } from '@koharu/ui/components/button'
@@ -40,6 +33,7 @@ export function CanvasCommandBar() {
   const compareOriginal = useKoharuStore((state) => state.compareOriginal)
   const setCompareOriginal = useKoharuStore((state) => state.setCompareOriginal)
   const panels = useKoharuStore((state) => state.panels)
+  const cleanupShortcut = useKoharuStore((state) => state.shortcuts.cleanup_done)
   const setPanelOpen = useKoharuStore((state) => state.setPanelOpen)
   const pages = usePages().data ?? []
   const index = page ? pages.findIndex((summary) => summary.id === page.id) : -1
@@ -114,14 +108,9 @@ export function CanvasCommandBar() {
               size='icon-sm'
               aria-pressed={Boolean(page?.cleanup_done)}
               aria-label={t('canvas.cleanupDone')}
-              title={`${t('canvas.cleanupDone')}: ${t('canvas.cleanupDoneDescription')}`}
+              title={`${t('canvas.cleanupDone')} (Alt+${cleanupShortcut.toUpperCase()}): ${t('canvas.cleanupDoneDescription')}`}
               disabled={!page}
-              onClick={() => {
-                if (!page) return
-                void call(commands.setCleanupDone, page.id, !page.cleanup_done)
-                  .then(() => refresh(projectKey, pagesKey, pageKey))
-                  .catch(() => undefined)
-              }}
+              onClick={toggleCleanupDone}
             >
               <CheckCheck className='size-3.5' />
             </Button>

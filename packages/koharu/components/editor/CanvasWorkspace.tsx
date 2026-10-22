@@ -12,6 +12,7 @@ import { StatusBar } from '@/components/editor/StatusBar'
 import { ToolBar } from '@/components/editor/ToolBar'
 import { useCanvas } from '@/components/editor/useCanvas'
 import { call } from '@/lib/backend'
+import { toggleCleanupDone } from '@/lib/cleanup'
 import { expandLayerSelection } from '@/lib/document'
 import {
   controlFrame,
@@ -565,6 +566,24 @@ export function CanvasWorkspace() {
     fitCanvas()
   }, [fitCanvas, fitCanvasRequest])
 
+  // The status bar's cleanup opacity is a display override: it never changes
+  // the layers, and a new frame drops overrides, so it is applied again.
+  const cleanupOpacity = useKoharuStore((state) => state.cleanupOpacity)
+  useEffect(() => {
+    if (!canvas || !page || canvasState.status !== 'ready') return
+    for (const layer of page.layers) {
+      if (layer.type !== 'raster' || layer.kind !== 'cleanup' || !layer.visibility.visible) continue
+      try {
+        canvas.previewOpacity(
+          layer.id,
+          cleanupOpacity === 1 ? null : cleanupOpacity * layer.visibility.opacity,
+        )
+      } catch {
+        // The layer is not in the presented frame yet.
+      }
+    }
+  }, [canvas, page, canvasState.status, canvasState.generation, canvasRevision, cleanupOpacity])
+
   useEffect(() => {
     if (pendingPage && pendingPage === canvasPage) useKoharuStore.setState({ pendingPage: null })
   }, [canvasPage, pendingPage])
@@ -690,6 +709,12 @@ export function CanvasWorkspace() {
         event.preventDefault()
         event.stopPropagation()
         requestCanvasFit()
+        return
+      }
+      if (toolShortcut && key === state.shortcuts.cleanup_done) {
+        event.preventDefault()
+        event.stopPropagation()
+        toggleCleanupDone()
         return
       }
       if (!toolShortcut) return

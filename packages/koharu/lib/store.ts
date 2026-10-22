@@ -46,7 +46,7 @@ export interface CanvasBrush {
   color: string
 }
 export type InspectorSection = 'copy' | 'type' | 'layers'
-export type ShortcutAction = CanvasTool | 'fit'
+export type ShortcutAction = CanvasTool | 'fit' | 'cleanup_done'
 export type Shortcuts = Record<ShortcutAction, string>
 export type PipelineScope = 'page' | 'selected-pages' | 'project'
 export const pipelineStages: readonly Stage[] = [
@@ -96,6 +96,8 @@ interface KoharuStore {
   compareOriginal: boolean
   /** Whether the page rail and the right sidebar are shown. */
   panels: Record<EditorPanel, boolean>
+  /** Display-only opacity of the page's cleanup layers, for seeing what was cleaned. */
+  cleanupOpacity: number
   shortcuts: Shortcuts
   selectPages: (pages: EntityId[]) => void
   showInspector: (section: InspectorSection) => void
@@ -126,6 +128,7 @@ export const defaultShortcuts: Shortcuts = {
   restore: 'r',
   pan: 'h',
   fit: 'f',
+  cleanup_done: 'g',
 }
 
 export const useKoharuStore = create<KoharuStore>()((set) => ({
@@ -160,6 +163,7 @@ export const useKoharuStore = create<KoharuStore>()((set) => ({
   batchOpen: false,
   compareOriginal: false,
   panels: { pages: true, inspector: true },
+  cleanupOpacity: 1,
   shortcuts: defaultShortcuts,
   selectPages: (selectedPages) => set({ selectedPages: [...new Set(selectedPages)] }),
   showInspector: (inspector) => set({ inspector }),

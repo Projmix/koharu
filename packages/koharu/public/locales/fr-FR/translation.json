@@ -711,7 +711,9 @@
     "title": "Préparation de Koharu"
   },
   "status": {
-    "zoom": "Zoom"
+    "zoom": "Zoom",
+    "cleanupOpacity": "Nettoyage",
+    "cleanupOpacityHint": "Opacité à l'écran des calques de nettoyage, pour voir ce qui a été nettoyé. Ne modifie ni les calques ni l'export."
   },
   "tools": {
     "brushSize": "Taille du pinceau",
