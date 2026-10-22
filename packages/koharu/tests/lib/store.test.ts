@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
-import { receiveDownload, useKoharuStore } from '@/lib/store'
+import { receiveDownload, receiveResources, useKoharuStore } from '@/lib/store'
 
 describe('editor state', () => {
   it('retains failed downloads until they are dismissed', () => {
@@ -24,5 +24,33 @@ describe('editor state', () => {
 
   it('defaults paint brush color to pure white (#FFFFFF)', () => {
     expect(useKoharuStore.getState().brush.color).toBe('#FFFFFF')
+  })
+
+  it('updates the resource monitor only when what it shows changes, twice a second at most', () => {
+    vi.useFakeTimers()
+    try {
+      const sample = (cpu: number) => ({
+        process_memory: 2e9,
+        system_memory: 16e9,
+        process_cpu: cpu,
+        devices: [],
+      })
+      useKoharuStore.setState({ resources: null })
+      receiveResources(sample(5))
+      const first = useKoharuStore.getState().resources
+      expect(first).toMatchObject({ process_cpu: 5 })
+
+      vi.advanceTimersByTime(100)
+      receiveResources(sample(9))
+      expect(useKoharuStore.getState().resources).toBe(first)
+
+      vi.advanceTimersByTime(500)
+      receiveResources(sample(5.2))
+      expect(useKoharuStore.getState().resources).toBe(first)
+      receiveResources(sample(9))
+      expect(useKoharuStore.getState().resources).toMatchObject({ process_cpu: 9 })
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
