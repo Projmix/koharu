@@ -77,7 +77,7 @@ export function ClonePreview({
       data-testid='clone-preview'
       width={Math.round(page.size.width)}
       height={Math.round(page.size.height)}
-      className='pointer-events-none absolute max-w-none'
+      className='pointer-events-none absolute z-10 max-w-none'
       style={{
         left: camera.translation[0] / dpr,
         top: camera.translation[1] / dpr,
