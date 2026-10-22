@@ -426,7 +426,8 @@
       "empty": "Sahne işaretlemesi: model hiçbir şey döndürmedi",
       "invalid": "Sahne işaretlemesi: yanıt geçersizdi ve atıldı",
       "failed": "Sahne işaretlemesi: istek başarısız oldu"
-    }
+    },
+    "switchProject": "Projeyi değiştir"
   },
   "outputPicker": {
     "instructions": "Çeviri talimatları",

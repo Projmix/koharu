@@ -19,6 +19,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { DeleteAllPagesDialog } from '@/components/app/DeleteAllPagesDialog'
+import { ProjectSwitcher } from '@/components/editor/ProjectSwitcher'
 import { ResourceMonitor } from '@/components/editor/ResourceMonitor'
 import { call } from '@/lib/backend'
 import { abandonPageSwitch, switchPage } from '@/lib/navigation'
@@ -256,8 +257,9 @@ export function PageRail() {
     <>
       <aside className='flex h-full min-h-0 flex-col bg-[var(--surface-sidebar)]'>
         <header className='flex h-10 shrink-0 items-center px-2.5'>
-          <div className='flex min-w-0 items-center gap-2'>
-            <h2 className='text-[11px] font-semibold'>{t('navigator.pages')}</h2>
+          <div className='flex min-w-0 items-center gap-1'>
+            <h2 className='sr-only'>{t('navigator.pages')}</h2>
+            <ProjectSwitcher />
             <span className='rounded-full bg-primary/[0.07] px-1.5 py-0.5 text-[9px] text-muted-foreground tabular-nums'>
               {pages.length}
             </span>

@@ -426,7 +426,8 @@
       "empty": "장면 분석: 모델이 아무것도 반환하지 않았습니다",
       "invalid": "장면 분석: 응답이 잘못되어 버렸습니다",
       "failed": "장면 분석: 요청이 실패했습니다"
-    }
+    },
+    "switchProject": "프로젝트 전환"
   },
   "outputPicker": {
     "instructions": "번역 지침",

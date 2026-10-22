@@ -426,7 +426,8 @@
       "empty": "Marcado de escena: el modelo no devolvió nada",
       "invalid": "Marcado de escena: la respuesta no era válida y se descartó",
       "failed": "Marcado de escena: la solicitud falló"
-    }
+    },
+    "switchProject": "Cambiar de proyecto"
   },
   "outputPicker": {
     "instructions": "Instrucciones de traducción",

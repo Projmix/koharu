@@ -426,7 +426,8 @@
       "empty": "場景標註：模型沒有回傳內容",
       "invalid": "場景標註：回覆無效，已捨棄",
       "failed": "場景標註：請求失敗"
-    }
+    },
+    "switchProject": "切換專案"
   },
   "outputPicker": {
     "instructions": "翻譯指示",

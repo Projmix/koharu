@@ -11,7 +11,13 @@ type CommitTextareaProps = Omit<ComponentProps<typeof Textarea>, 'value' | 'onCh
   onCommit: (value: string) => void | Promise<void>
 }
 
-export function CommitTextarea({ value, delay = 360, onCommit, ...props }: CommitTextareaProps) {
+export function CommitTextarea({
+  value,
+  delay = 360,
+  onCommit,
+  onBlur,
+  ...props
+}: CommitTextareaProps) {
   const [draft, setDraft] = useState(value)
   const timer = useRef<number | null>(null)
   const composing = useRef(false)
@@ -101,8 +107,9 @@ export function CommitTextarea({ value, delay = 360, onCommit, ...props }: Commi
         setDraft(next)
         schedule(next)
       }}
-      onBlur={() => {
+      onBlur={(event) => {
         void commit(draft).catch(() => undefined)
+        onBlur?.(event)
       }}
     />
   )

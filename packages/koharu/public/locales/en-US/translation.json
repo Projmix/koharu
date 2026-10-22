@@ -426,7 +426,8 @@
       "empty": "Scene markup: the model returned nothing",
       "invalid": "Scene markup: the answer was invalid and discarded",
       "failed": "Scene markup: the request failed"
-    }
+    },
+    "switchProject": "Switch project"
   },
   "outputPicker": {
     "instructions": "Translation instructions",

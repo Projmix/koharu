@@ -426,7 +426,8 @@
       "empty": "Marcação de cena: o modelo não retornou nada",
       "invalid": "Marcação de cena: a resposta era inválida e foi descartada",
       "failed": "Marcação de cena: a solicitação falhou"
-    }
+    },
+    "switchProject": "Trocar de projeto"
   },
   "outputPicker": {
     "instructions": "Instruções de tradução",

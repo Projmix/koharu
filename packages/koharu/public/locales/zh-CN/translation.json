@@ -426,7 +426,8 @@
       "empty": "场景标注：模型没有返回内容",
       "invalid": "场景标注：回复无效，已丢弃",
       "failed": "场景标注：请求失败"
-    }
+    },
+    "switchProject": "切换项目"
   },
   "outputPicker": {
     "instructions": "翻译说明",

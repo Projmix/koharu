@@ -26,7 +26,16 @@ import {
   TriangleAlert,
   Type,
 } from 'lucide-react'
-import { type MouseEvent, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
+import {
+  type MouseEvent,
+  type SyntheticEvent,
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { ColorWell } from '@/components/controls/ColorWell'
@@ -615,7 +624,14 @@ function LayersInspector() {
   const anchor = useRef<EntityId | null>(null)
   const [collapsedGroups, setCollapsedGroups] = useState<Set<EntityId>>(() => new Set())
 
+  const inlineSelection = useRef(false)
+
   useEffect(() => {
+    // Selecting a row by editing its text in place keeps the panel closed.
+    if (inlineSelection.current) {
+      inlineSelection.current = false
+      return
+    }
     setExpandedLayer(selected.length === 1 ? (selected[0] ?? null) : null)
   }, [selected])
 
@@ -879,6 +895,13 @@ function LayersInspector() {
                 onSelect={(event) =>
                   selectLayer(layer.id, event.ctrlKey || event.metaKey, event.shiftKey)
                 }
+                onInlineEdit={() => {
+                  anchor.current = layer.id
+                  if (selected.length === 1 && selected[0] === layer.id) return
+                  inlineSelection.current = true
+                  setExpandedLayer(null)
+                  selectLayers([layer.id])
+                }}
                 onToggle={() =>
                   void call(commands.setVisibility, [layer.id], !layer.visibility.visible, null)
                     .then(() => refresh(projectKey, pageKey))
@@ -953,6 +976,7 @@ function LayerRow({
   onDragEnd,
   onDragOver,
   onDelete,
+  onInlineEdit,
 }: {
   layer: Layer
   index: number
@@ -978,6 +1002,7 @@ function LayerRow({
   onDragEnd: () => void
   onDragOver: () => void
   onDelete?: () => void
+  onInlineEdit?: () => void
 }) {
   const { t } = useTranslation()
   const name = localizedLayerName(layer, index, t)
@@ -1100,7 +1125,11 @@ function LayerRow({
             )}
             <span className='min-w-0 flex-1'>
               <span className='flex min-w-0 items-center gap-1'>
-                <span className='truncate text-[11px] font-medium'>{name}</span>
+                {isTextLayer(layer) && onInlineEdit ? (
+                  <InlineText layer={layer} name={name} onEdit={onInlineEdit} />
+                ) : (
+                  <span className='truncate text-[11px] font-medium'>{name}</span>
+                )}
                 {warning && (
                   <TriangleAlert
                     role='img'
@@ -1151,7 +1180,7 @@ function LayerRow({
           )}
           {!locked && (
             <div
-              className={`pointer-events-none absolute top-1/2 z-10 flex -translate-y-1/2 rounded-md bg-background/80 p-0.5 opacity-0 shadow-sm ring-1 ring-border/40 backdrop-blur-md transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100 motion-reduce:transition-none ${onRoleChange ? (expanded ? 'right-[5.5rem]' : 'right-[8.5rem]') : expanded ? 'right-7' : 'right-[3.25rem]'}`}
+              className={`pointer-events-none absolute top-1/2 z-10 flex -translate-y-1/2 rounded-md bg-background/80 p-0.5 opacity-0 shadow-sm ring-1 ring-border/40 backdrop-blur-md transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-has-[textarea:focus]:hidden focus-within:pointer-events-auto focus-within:opacity-100 motion-reduce:transition-none ${onRoleChange ? (expanded ? 'right-[5.5rem]' : 'right-[8.5rem]') : expanded ? 'right-7' : 'right-[3.25rem]'}`}
             >
               <button
                 type='button'
@@ -1220,6 +1249,83 @@ function LayerRow({
         )}
       </div>
     </div>
+  )
+}
+
+/**
+ * The row's text, edited in place: the translation once there is one,
+ * otherwise the source. The field grows with its text while editing; which
+ * text it edits is fixed when editing starts, so clearing a translation does
+ * not switch to the source mid-edit.
+ */
+function InlineText({
+  layer,
+  name,
+  onEdit,
+}: {
+  layer: Extract<Layer, { type: 'text' }>
+  name: string
+  onEdit: () => void
+}) {
+  const { t } = useTranslation()
+  const [field, setField] = useState<'source' | 'translation' | null>(null)
+  const translated = Boolean(layer.content.translation?.text.trim())
+  const start = (event: SyntheticEvent) => {
+    event.stopPropagation()
+    event.preventDefault()
+    setField(translated ? 'translation' : 'source')
+    onEdit()
+  }
+  if (!field) {
+    return (
+      <span
+        role='textbox'
+        tabIndex={0}
+        aria-label={t(translated ? 'layers.translationLabel' : 'layers.sourceLabel', { name })}
+        data-testid={`inline-text-${layer.id}`}
+        className='min-w-0 cursor-text truncate rounded-sm text-[11px] font-medium hover:bg-foreground/[0.05]'
+        onClick={start}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' || event.key === 'F2') start(event)
+        }}
+      >
+        {name}
+      </span>
+    )
+  }
+  const value =
+    field === 'translation'
+      ? (layer.content.translation?.text ?? '')
+      : (layer.content.source?.text ?? '')
+  return (
+    <CommitTextarea
+      autoFocus
+      data-layer-editor
+      data-testid={`inline-${field}-${layer.id}`}
+      aria-label={t(field === 'translation' ? 'layers.translationLabel' : 'layers.sourceLabel', {
+        name,
+      })}
+      rows={1}
+      className='[field-sizing:content] min-h-0 w-full min-w-0 resize-none rounded-sm border-primary/40 bg-background px-1 py-0.5 text-[11px] leading-4 font-medium md:text-[11px]'
+      value={value}
+      onClick={(event) => event.stopPropagation()}
+      onKeyDown={(event) => {
+        event.stopPropagation()
+        if (event.key === 'Escape' || (event.key === 'Enter' && !event.shiftKey)) {
+          event.preventDefault()
+          event.currentTarget.blur()
+        }
+      }}
+      onBlur={() => setField(null)}
+      onCommit={(text) =>
+        (field === 'translation'
+          ? call(commands.setTranslation, layer.id, text.trim() ? text : null)
+          : call(commands.setSourceText, layer.id, text)
+        )
+          .then(() => refresh(projectKey, pageKey))
+          .catch(() => undefined)
+      }
+    />
   )
 }
 

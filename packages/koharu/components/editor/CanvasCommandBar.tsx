@@ -111,10 +111,10 @@ export function CanvasCommandBar() {
             <Button
               type='button'
               variant={page?.cleanup_done ? 'secondary' : 'ghost'}
-              size='sm'
-              className='h-7 gap-1.5 px-2 text-[11px]'
+              size='icon-sm'
               aria-pressed={Boolean(page?.cleanup_done)}
-              title={t('canvas.cleanupDoneDescription')}
+              aria-label={t('canvas.cleanupDone')}
+              title={`${t('canvas.cleanupDone')}: ${t('canvas.cleanupDoneDescription')}`}
               disabled={!page}
               onClick={() => {
                 if (!page) return
@@ -124,19 +124,17 @@ export function CanvasCommandBar() {
               }}
             >
               <CheckCheck className='size-3.5' />
-              {t('canvas.cleanupDone')}
             </Button>
             <Button
               type='button'
               variant='ghost'
-              size='sm'
-              className='h-7 gap-1.5 px-2 text-[11px]'
-              title={t('canvas.regenerateCleanupDescription')}
+              size='icon-sm'
+              aria-label={t('canvas.regenerateCleanup')}
+              title={`${t('canvas.regenerateCleanup')}: ${t('canvas.regenerateCleanupDescription')}`}
               disabled={!page || Boolean(running)}
               onClick={() => run('page', ['inpainting'])}
             >
               <RefreshCw className='size-3.5' />
-              {t('canvas.regenerateCleanup')}
             </Button>
           </>
         )}
