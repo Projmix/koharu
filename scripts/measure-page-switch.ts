@@ -6,11 +6,15 @@
 // on pages nothing prepared yet. It only presses arrows and clicks rail
 // items; it edits nothing.
 //
-//   bun scripts/measure-page-switch.ts [steps]
+//   bun scripts/measure-page-switch.ts [steps] [--profile]
+//
+// With --profile it also records a CPU profile of a few paused steps and
+// prints the functions that took the most main-thread time.
 
 import { chromium, type Page } from 'playwright'
 
-const steps = Number(process.argv[2] ?? 12)
+const steps = Number(process.argv.slice(2).find((arg) => /^\d+$/.test(arg)) ?? 12)
+const profile = process.argv.includes('--profile')
 const browser = await chromium.connectOverCDP('http://127.0.0.1:4000')
 const page = browser
   .contexts()
@@ -99,6 +103,31 @@ const quick = await timeSwitch(async () => {
 console.log(
   `${steps} quick steps back: last page shown after ${quick.shown.toFixed(0)} ms, main thread ${quick.busy.toFixed(0)} ms`,
 )
+
+if (profile) {
+  await cdp.send('Profiler.enable')
+  await cdp.send('Profiler.setSamplingInterval', { interval: 200 })
+  await cdp.send('Profiler.start')
+  for (let step = 0; step < 6; step++) {
+    await timeSwitch(() => page.keyboard.press(step % 2 ? 'ArrowLeft' : 'ArrowRight'))
+  }
+  const { profile: recorded } = await cdp.send('Profiler.stop')
+  const self = new Map<string, number>()
+  const ids = new Map(recorded.nodes.map((node) => [node.id, node]))
+  const deltas = recorded.timeDeltas ?? []
+  ;(recorded.samples ?? []).forEach((id, index) => {
+    const frame = ids.get(id)?.callFrame
+    if (!frame || frame.functionName === '(idle)' || frame.functionName === '(program)') return
+    const file = frame.url.split('/').slice(-2).join('/')
+    const key = `${frame.functionName || '(anonymous)'} ${file}:${frame.lineNumber + 1}`
+    self.set(key, (self.get(key) ?? 0) + (deltas[index + 1] ?? 0) / 1000)
+  })
+  const total = [...self.values()].reduce((sum, value) => sum + value, 0)
+  console.log(`profile of 6 paused steps: ${total.toFixed(0)} ms busy; top self time:`)
+  for (const [key, ms] of [...self].sort((left, right) => right[1] - left[1]).slice(0, 30)) {
+    console.log(`  ${ms.toFixed(1).padStart(7)} ms  ${key}`)
+  }
+}
 
 // Leave the app window open; only the DevTools connection ends.
 process.exit(0)
