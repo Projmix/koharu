@@ -1635,6 +1635,94 @@ fn composite_generated(
 mod tests {
     use super::*;
 
+    /// Times balloon fill on every page of a real project and prints a digest
+    /// of each committed layer's pixels, so a change can be checked to leave
+    /// the output identical. Runs on a temporary copy of the project:
+    ///
+    /// `KOHARU_BENCH_PROJECT=<project.khrproj> cargo test --release -p koharu-pipeline balloon_fill_benchmark -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore = "needs a real project in KOHARU_BENCH_PROJECT"]
+    async fn balloon_fill_benchmark() {
+        use std::{
+            hash::{DefaultHasher, Hash as _, Hasher as _},
+            time::Instant,
+        };
+
+        fn copy_dir(from: &std::path::Path, to: &std::path::Path) {
+            std::fs::create_dir_all(to).unwrap();
+            for entry in std::fs::read_dir(from).unwrap() {
+                let entry = entry.unwrap();
+                let target = to.join(entry.file_name());
+                if entry.file_type().unwrap().is_dir() {
+                    copy_dir(&entry.path(), &target);
+                } else if entry.file_name() != "project.lock" {
+                    std::fs::copy(entry.path(), target).unwrap();
+                }
+            }
+        }
+
+        let source = std::env::var("KOHARU_BENCH_PROJECT").expect("KOHARU_BENCH_PROJECT");
+        let copy = std::env::temp_dir().join(format!("koharu-fill-bench-{}", std::process::id()));
+        copy_dir(std::path::Path::new(&source), &copy);
+        let mut session = koharu_scene::Session::open(&copy).await.unwrap();
+        let base = session.snapshot();
+        let pages = base.pages().map(|page| page.id()).collect::<Vec<_>>();
+        let images = Arc::new(crate::ImageCache::default());
+        let (mut prepare_total, mut run_total, mut digest) = (0.0, 0.0, DefaultHasher::new());
+        for (index, &page) in pages.iter().enumerate() {
+            let input =
+                || StageInput::new(base.clone(), page, None, None, Arc::clone(&images), None);
+            // Warms the image cache, so both timings below leave decoding out.
+            let started = Instant::now();
+            prepare(&input(), false, false).await.unwrap();
+            let first = started.elapsed().as_secs_f64() * 1000.0;
+            let started = Instant::now();
+            let prepared = prepare(&input(), false, false).await.unwrap();
+            let prepare_ms = started.elapsed().as_secs_f64() * 1000.0;
+            let started = Instant::now();
+            let patch = Model::BalloonFill.run(input()).await.unwrap();
+            let run_ms = started.elapsed().as_secs_f64() * 1000.0;
+            prepare_total += prepare_ms;
+            run_total += run_ms;
+            let committed = session.commit(patch).await.unwrap().snapshot;
+            let mut page_digest = DefaultHasher::new();
+            prepared.flat_fill.len().hash(&mut page_digest);
+            for entity in committed.descendants(page).unwrap() {
+                let Some(layer) = committed.component::<RasterLayer>(entity.id()).unwrap() else {
+                    continue;
+                };
+                if layer.kind != RasterLayerKind::Cleanup {
+                    continue;
+                }
+                let asset = committed
+                    .asset(entity.id(), &AssetRole::new("source").unwrap())
+                    .unwrap()
+                    .unwrap();
+                let bytes = committed.read_blob(asset.blob).await.unwrap();
+                image::load_from_memory(&bytes)
+                    .unwrap()
+                    .to_rgba8()
+                    .as_raw()
+                    .hash(&mut page_digest);
+            }
+            let page_digest = page_digest.finish();
+            page_digest.hash(&mut digest);
+            println!(
+                "page {:>2}: first prepare {first:>7.1} ms, prepare {prepare_ms:>7.1} ms, \
+                 balloon fill {run_ms:>7.1} ms, {} filled pixels, digest {page_digest:016x}",
+                index + 1,
+                prepared.flat_fill.len(),
+            );
+        }
+        println!(
+            "{} pages: prepare {prepare_total:.0} ms, balloon fill {run_total:.0} ms, digest {:016x}",
+            pages.len(),
+            digest.finish()
+        );
+        drop(session);
+        let _ = std::fs::remove_dir_all(&copy);
+    }
+
     #[tokio::test]
     async fn transient_inpainting_mask_replaces_persistent_page_masks() {
         let mut session = koharu_scene::Session::memory().await.unwrap();
