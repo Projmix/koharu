@@ -207,12 +207,10 @@ export function PageRail() {
   const deleteAllPages = async () => {
     if (deletingAll || pages.length === 0) return
     setDeletingAll(true)
-    try {
-      await deletePages(pages.map((page) => page.id))
-      setDeleteAllOpen(false)
-    } finally {
-      setDeletingAll(false)
-    }
+    // A promise chain rather than try/finally, which React Compiler cannot compile.
+    await deletePages(pages.map((page) => page.id))
+      .then(() => setDeleteAllOpen(false))
+      .finally(() => setDeletingAll(false))
   }
 
   useEffect(() => {
