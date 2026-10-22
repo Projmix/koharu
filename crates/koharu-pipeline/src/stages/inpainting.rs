@@ -1205,12 +1205,12 @@ fn lettering_reaches_outline(region: &FlatFillRegion, text_mask: &GrayImage) -> 
     let band = (width.max(height) as f32 / OUTLINE_BAND_DIVISOR).max(OUTLINE_BAND_MIN);
     let reach = band.ceil() as u32;
     let [left, top, right, bottom] = region.bounds;
+    let outline = OutlineIndex::new(&region.polygon, band);
     let mut touching = 0;
     for y in top.saturating_sub(reach)..(bottom + reach).min(height) {
         for x in left.saturating_sub(reach)..(right + reach).min(width) {
             if text_mask.get_pixel(x, y)[0] >= 127
-                && polygon_edge_distance_squared((x as f32 + 0.5, y as f32 + 0.5), &region.polygon)
-                    < band * band
+                && outline.within((x as f32 + 0.5, y as f32 + 0.5), band * band)
             {
                 touching += 1;
                 if touching >= OUTLINE_TOUCH_MIN_PIXELS {
@@ -1279,12 +1279,13 @@ fn fill_uniform_regions(
     let mut filled = Vec::new();
     for region in regions {
         let [left, top, right, bottom] = region.bounds;
+        let inside = polygon_interior(region);
         let mut targets = Vec::new();
         for y in top..bottom {
             for x in left..right {
                 if pending_mask.get_pixel(x, y)[0] >= 127
                     && text_mask.get_pixel(x, y)[0] >= 127
-                    && point_in_polygon((x as f32 + 0.5, y as f32 + 0.5), &region.polygon)
+                    && inside.contains(x, y)
                 {
                     targets.push((x, y));
                 }
@@ -1293,7 +1294,7 @@ fn fill_uniform_regions(
         if targets.is_empty() {
             continue;
         }
-        let Some(color) = uniform_region_color(output, pending_mask, region)
+        let Some(color) = uniform_region_color(output, pending_mask, region, &inside)
             .filter(|color| classic_balloon_color(*color))
         else {
             continue;
@@ -1302,12 +1303,9 @@ fn fill_uniform_regions(
             output.put_pixel(x, y, color);
             pending_mask.put_pixel(x, y, Luma([0]));
         }
-        let [left, top, right, bottom] = region.bounds;
         for y in top..bottom {
             for x in left..right {
-                if pending_mask.get_pixel(x, y)[0] < 127
-                    && point_in_polygon((x as f32 + 0.5, y as f32 + 0.5), &region.polygon)
-                {
+                if pending_mask.get_pixel(x, y)[0] < 127 && inside.contains(x, y) {
                     filled.push((x, y, *output.get_pixel(x, y)));
                 }
             }
@@ -1471,16 +1469,17 @@ fn uniform_region_color(
     image: &RgbImage,
     mask: &GrayImage,
     region: &FlatFillRegion,
+    inside: &PolygonInterior,
 ) -> Option<Rgb<u8>> {
     let [left, top, right, bottom] = region.bounds;
+    let outline = OutlineIndex::new(&region.polygon, FLAT_FILL_EDGE_MARGIN);
     let mut interior = Vec::new();
     let mut unmasked = Vec::new();
     for y in top..bottom {
         for x in left..right {
             let point = (x as f32 + 0.5, y as f32 + 0.5);
-            if !point_in_polygon(point, &region.polygon)
-                || polygon_edge_distance_squared(point, &region.polygon)
-                    < FLAT_FILL_EDGE_MARGIN * FLAT_FILL_EDGE_MARGIN
+            if !inside.contains(x, y)
+                || outline.within(point, FLAT_FILL_EDGE_MARGIN * FLAT_FILL_EDGE_MARGIN)
             {
                 continue;
             }
@@ -1550,6 +1549,7 @@ fn flat_color(pixels: &[Rgb<u8>]) -> Option<Rgb<u8>> {
     (deviations.iter().copied().fold(0.0, f64::max) < threshold).then_some(Rgb(medians))
 }
 
+#[cfg(test)]
 fn point_in_polygon(point: (f32, f32), polygon: &[(f32, f32)]) -> bool {
     let mut inside = false;
     let mut previous = polygon[polygon.len() - 1];
@@ -1567,28 +1567,167 @@ fn point_in_polygon(point: (f32, f32), polygon: &[(f32, f32)]) -> bool {
     inside
 }
 
+#[cfg(test)]
 fn polygon_edge_distance_squared(point: (f32, f32), polygon: &[(f32, f32)]) -> f32 {
     let mut minimum = f32::INFINITY;
     let mut start = polygon[polygon.len() - 1];
     for &end in polygon {
-        let segment = (end.0 - start.0, end.1 - start.1);
-        let length_squared = segment.0 * segment.0 + segment.1 * segment.1;
-        let projection = if length_squared > 0.0 {
-            ((point.0 - start.0) * segment.0 + (point.1 - start.1) * segment.1) / length_squared
-        } else {
-            0.0
-        }
-        .clamp(0.0, 1.0);
-        let closest = (
-            start.0 + segment.0 * projection,
-            start.1 + segment.1 * projection,
-        );
-        let dx = point.0 - closest.0;
-        let dy = point.1 - closest.1;
-        minimum = minimum.min(dx * dx + dy * dy);
+        minimum = minimum.min(segment_distance_squared(point, start, end));
         start = end;
     }
     minimum
+}
+
+fn segment_distance_squared(point: (f32, f32), start: (f32, f32), end: (f32, f32)) -> f32 {
+    let segment = (end.0 - start.0, end.1 - start.1);
+    let length_squared = segment.0 * segment.0 + segment.1 * segment.1;
+    let projection = if length_squared > 0.0 {
+        ((point.0 - start.0) * segment.0 + (point.1 - start.1) * segment.1) / length_squared
+    } else {
+        0.0
+    }
+    .clamp(0.0, 1.0);
+    let closest = (
+        start.0 + segment.0 * projection,
+        start.1 + segment.1 * projection,
+    );
+    let dx = point.0 - closest.0;
+    let dy = point.1 - closest.1;
+    dx * dx + dy * dy
+}
+
+/// The pixel centres of a region's bounds that lie inside its polygon, by the
+/// even-odd rule of `point_in_polygon`. Each row's outline crossings are found
+/// once instead of once per pixel, which gives the same answer per pixel at a
+/// fraction of the cost on traced outlines with hundreds of points.
+struct PolygonInterior {
+    bounds: [u32; 4],
+    inside: Vec<bool>,
+}
+
+impl PolygonInterior {
+    fn contains(&self, x: u32, y: u32) -> bool {
+        let [left, top, right, _] = self.bounds;
+        self.inside[(y - top) as usize * (right - left) as usize + (x - left) as usize]
+    }
+}
+
+fn polygon_interior(region: &FlatFillRegion) -> PolygonInterior {
+    let [left, top, right, bottom] = region.bounds;
+    let width = (right - left) as usize;
+    let mut inside = vec![false; width * (bottom - top) as usize];
+    let mut crossings = Vec::new();
+    for y in top..bottom {
+        let row_y = y as f32 + 0.5;
+        crossings.clear();
+        let mut previous = region.polygon[region.polygon.len() - 1];
+        for &current in &region.polygon {
+            if (current.1 > row_y) != (previous.1 > row_y) {
+                crossings.push(
+                    (previous.0 - current.0) * (row_y - current.1) / (previous.1 - current.1)
+                        + current.0,
+                );
+            }
+            previous = current;
+        }
+        crossings.sort_by(f32::total_cmp);
+        let row = &mut inside[(y - top) as usize * width..][..width];
+        // Crossings at or left of the pixel centre; the ones right of it decide.
+        let mut passed = 0;
+        for (x, cell) in (left..right).zip(row) {
+            let column_x = x as f32 + 0.5;
+            while passed < crossings.len() && crossings[passed] <= column_x {
+                passed += 1;
+            }
+            *cell = (crossings.len() - passed) % 2 == 1;
+        }
+    }
+    PolygonInterior {
+        bounds: region.bounds,
+        inside,
+    }
+}
+
+/// An outline's segments bucketed on a coarse grid, so a test of whether a
+/// point lies within some distance of the outline measures only the segments
+/// near it. A segment farther than `reach` from a cell is never listed for it,
+/// and the distances that are measured are those of the full scan.
+struct OutlineIndex<'a> {
+    polygon: &'a [(f32, f32)],
+    origin: (f32, f32),
+    columns: usize,
+    rows: usize,
+    cells: Vec<Vec<u32>>,
+}
+
+const OUTLINE_CELL: f32 = 16.0;
+
+impl<'a> OutlineIndex<'a> {
+    fn new(polygon: &'a [(f32, f32)], reach: f32) -> Self {
+        // One extra pixel keeps rounding at the margin on the listed side.
+        let reach = reach + 1.0;
+        let (mut left, mut top) = (f32::INFINITY, f32::INFINITY);
+        let (mut right, mut bottom) = (f32::NEG_INFINITY, f32::NEG_INFINITY);
+        for &(x, y) in polygon {
+            left = left.min(x);
+            top = top.min(y);
+            right = right.max(x);
+            bottom = bottom.max(y);
+        }
+        let origin = (left - reach, top - reach);
+        let columns = ((right + reach - origin.0) / OUTLINE_CELL).floor() as usize + 1;
+        let rows = ((bottom + reach - origin.1) / OUTLINE_CELL).floor() as usize + 1;
+        let mut cells = vec![Vec::new(); columns * rows];
+        let cell = |value: f32, start: f32, count: usize| {
+            (((value - start) / OUTLINE_CELL).floor().max(0.0) as usize).min(count - 1)
+        };
+        let mut start = polygon[polygon.len() - 1];
+        for (index, &end) in polygon.iter().enumerate() {
+            let (first_column, last_column) = (
+                cell(start.0.min(end.0) - reach, origin.0, columns),
+                cell(start.0.max(end.0) + reach, origin.0, columns),
+            );
+            let (first_row, last_row) = (
+                cell(start.1.min(end.1) - reach, origin.1, rows),
+                cell(start.1.max(end.1) + reach, origin.1, rows),
+            );
+            for row in first_row..=last_row {
+                for column in first_column..=last_column {
+                    cells[row * columns + column].push(index as u32);
+                }
+            }
+            start = end;
+        }
+        Self {
+            polygon,
+            origin,
+            columns,
+            rows,
+            cells,
+        }
+    }
+
+    /// Whether the outline comes closer to `point` than the square root of
+    /// `limit_squared`, which must not exceed the reach the index was built for.
+    fn within(&self, point: (f32, f32), limit_squared: f32) -> bool {
+        let column = ((point.0 - self.origin.0) / OUTLINE_CELL).floor();
+        let row = ((point.1 - self.origin.1) / OUTLINE_CELL).floor();
+        if column < 0.0 || row < 0.0 {
+            return false;
+        }
+        let (column, row) = (column as usize, row as usize);
+        if column >= self.columns || row >= self.rows {
+            return false;
+        }
+        let count = self.polygon.len();
+        self.cells[row * self.columns + column]
+            .iter()
+            .any(|&index| {
+                let index = index as usize;
+                let start = self.polygon[(index + count - 1) % count];
+                segment_distance_squared(point, start, self.polygon[index]) < limit_squared
+            })
+    }
 }
 
 fn median(values: &mut [u8]) -> u8 {
@@ -1634,6 +1773,240 @@ fn composite_generated(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Times balloon fill on every page of a real project and prints a digest
+    /// of each committed layer's pixels, so a change can be checked to leave
+    /// the output identical. Runs on a temporary copy of the project:
+    ///
+    /// `KOHARU_BENCH_PROJECT=<project.khrproj> cargo test --release -p koharu-pipeline balloon_fill_benchmark -- --ignored --nocapture`
+    /// The row scan and the outline index give the per-pixel answers of the
+    /// full scans they replace, on outlines like traced balloons: many points,
+    /// fractional coordinates, repeated points and flat runs.
+    #[test]
+    fn region_scans_match_the_per_pixel_tests() {
+        let mut seed = 0x2545_f491_4f6c_dd1d_u64;
+        let mut random = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed >> 11) as f32 / (1u64 << 53) as f32
+        };
+        for shape in 0..40 {
+            let points = [3, 4, 7, 24, 120, 400][shape % 6];
+            let center = (60.0 + random() * 20.0, 50.0 + random() * 20.0);
+            let mut polygon = (0..points)
+                .map(|step| {
+                    let angle = step as f32 / points as f32 * std::f32::consts::TAU;
+                    let radius = 15.0 + random() * 30.0 * if shape % 2 == 0 { 1.0 } else { 0.2 };
+                    let point = (
+                        center.0 + radius * angle.cos(),
+                        center.1 + radius * angle.sin(),
+                    );
+                    if shape % 3 == 0 {
+                        (point.0.round(), point.1.round())
+                    } else {
+                        point
+                    }
+                })
+                .collect::<Vec<_>>();
+            if shape % 5 == 0 {
+                let repeated = polygon[1];
+                polygon.insert(1, repeated);
+            }
+            let (width, height) = (140, 120);
+            let mut left_top = (f32::INFINITY, f32::INFINITY);
+            let mut right_bottom = (f32::NEG_INFINITY, f32::NEG_INFINITY);
+            for &(x, y) in &polygon {
+                left_top = (left_top.0.min(x), left_top.1.min(y));
+                right_bottom = (right_bottom.0.max(x), right_bottom.1.max(y));
+            }
+            let region = FlatFillRegion {
+                bounds: [
+                    left_top.0.floor().clamp(0.0, width as f32) as u32,
+                    left_top.1.floor().clamp(0.0, height as f32) as u32,
+                    right_bottom.0.ceil().clamp(0.0, width as f32) as u32,
+                    right_bottom.1.ceil().clamp(0.0, height as f32) as u32,
+                ],
+                polygon,
+            };
+            let inside = polygon_interior(&region);
+            let [left, top, right, bottom] = region.bounds;
+            for y in top..bottom {
+                for x in left..right {
+                    let point = (x as f32 + 0.5, y as f32 + 0.5);
+                    assert_eq!(
+                        inside.contains(x, y),
+                        point_in_polygon(point, &region.polygon),
+                        "shape {shape} at {x},{y}"
+                    );
+                }
+            }
+            for radius in [FLAT_FILL_EDGE_MARGIN, 4.0, 4.3, 8.0] {
+                let outline = OutlineIndex::new(&region.polygon, radius);
+                for y in 0..height {
+                    for x in 0..width {
+                        let point = (x as f32 + 0.5, y as f32 + 0.5);
+                        assert_eq!(
+                            outline.within(point, radius * radius),
+                            polygon_edge_distance_squared(point, &region.polygon) < radius * radius,
+                            "shape {shape} radius {radius} at {x},{y}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "needs a real project in KOHARU_BENCH_PROJECT"]
+    async fn cleaning_benchmark() {
+        // KOHARU_BENCH_MODEL picks `balloon-fill` (default) or `lama`;
+        // KOHARU_BENCH_THREADS sets libtorch's thread count; with
+        // KOHARU_BENCH_OUT each page's cleanup layer is saved there, and with
+        // KOHARU_BENCH_REFERENCE it is compared to an earlier run's.
+
+        use std::{
+            hash::{DefaultHasher, Hash as _, Hasher as _},
+            time::Instant,
+        };
+
+        fn copy_dir(from: &std::path::Path, to: &std::path::Path) {
+            std::fs::create_dir_all(to).unwrap();
+            for entry in std::fs::read_dir(from).unwrap() {
+                let entry = entry.unwrap();
+                let target = to.join(entry.file_name());
+                if entry.file_type().unwrap().is_dir() {
+                    copy_dir(&entry.path(), &target);
+                } else if entry.file_name() != "project.lock" {
+                    std::fs::copy(entry.path(), target).unwrap();
+                }
+            }
+        }
+
+        let source = std::env::var("KOHARU_BENCH_PROJECT").expect("KOHARU_BENCH_PROJECT");
+        let copy = std::env::temp_dir().join(format!("koharu-fill-bench-{}", std::process::id()));
+        copy_dir(std::path::Path::new(&source), &copy);
+        let mut session = koharu_scene::Session::open(&copy).await.unwrap();
+        let pages = session
+            .snapshot()
+            .pages()
+            .map(|page| page.id())
+            .collect::<Vec<_>>();
+        koharu_ml::init().await.unwrap();
+        let model_name = std::env::var("KOHARU_BENCH_MODEL").unwrap_or("balloon-fill".into());
+        let model = match model_name.as_str() {
+            "lama" => Model::load(koharu_ml::Device::cpu(), &InpaintingModel::LaMa {})
+                .await
+                .unwrap(),
+            _ => Model::BalloonFill,
+        };
+        if let Ok(threads) = std::env::var("KOHARU_BENCH_THREADS") {
+            koharu_torch::set_num_threads(threads.parse().unwrap());
+        }
+        println!(
+            "{model_name}, {} libtorch threads",
+            koharu_torch::get_num_threads()
+        );
+        let output = std::env::var("KOHARU_BENCH_OUT")
+            .ok()
+            .map(std::path::PathBuf::from);
+        if let Some(output) = &output {
+            std::fs::create_dir_all(output).unwrap();
+        }
+        let reference = std::env::var("KOHARU_BENCH_REFERENCE")
+            .ok()
+            .map(std::path::PathBuf::from);
+        let (mut changed_total, mut worst_total) = (0_u64, 0_u8);
+        let images = Arc::new(crate::ImageCache::default());
+        let (mut prepare_total, mut run_total, mut digest) = (0.0, 0.0, DefaultHasher::new());
+        for (index, &page) in pages.iter().enumerate() {
+            // Each page's commit moves the head, so every page reads the latest.
+            let base = session.snapshot();
+            let input =
+                || StageInput::new(base.clone(), page, None, None, Arc::clone(&images), None);
+            // Warms the image cache, so both timings below leave decoding out.
+            let started = Instant::now();
+            prepare(&input(), false, false).await.unwrap();
+            let first = started.elapsed().as_secs_f64() * 1000.0;
+            let started = Instant::now();
+            let prepared = prepare(&input(), false, false).await.unwrap();
+            let prepare_ms = started.elapsed().as_secs_f64() * 1000.0;
+            let started = Instant::now();
+            let tiles = inpaint_tiles(&prepared.unfilled_mask).1;
+            let tile_pixels = tiles.iter().map(|tile| bounds_area(tile.crop)).sum::<u64>();
+            let patch = model.run(input()).await.unwrap();
+            let run_ms = started.elapsed().as_secs_f64() * 1000.0;
+            prepare_total += prepare_ms;
+            run_total += run_ms;
+            let committed = session.commit(patch).await.unwrap().snapshot;
+            let mut page_digest = DefaultHasher::new();
+            prepared.flat_fill.len().hash(&mut page_digest);
+            for entity in committed.descendants(page).unwrap() {
+                let Some(layer) = committed.component::<RasterLayer>(entity.id()).unwrap() else {
+                    continue;
+                };
+                if layer.kind != RasterLayerKind::Cleanup {
+                    continue;
+                }
+                let asset = committed
+                    .asset(entity.id(), &AssetRole::new("source").unwrap())
+                    .unwrap()
+                    .unwrap();
+                let bytes = committed.read_blob(asset.blob).await.unwrap();
+                let layer = image::load_from_memory(&bytes).unwrap().to_rgba8();
+                layer.as_raw().hash(&mut page_digest);
+                // Earlier cleanup layers, such as a cloud run's, are only hashed.
+                let earlier = base
+                    .asset(entity.id(), &AssetRole::new("source").unwrap())
+                    .ok()
+                    .flatten();
+                if earlier.is_some_and(|earlier| earlier.blob == asset.blob) {
+                    continue;
+                }
+                let name = format!("page-{:02}.png", index + 1);
+                if let Some(output) = &output {
+                    layer.save(output.join(&name)).unwrap();
+                }
+                if let Some(reference) = &reference {
+                    let earlier = image::open(reference.join(&name)).unwrap().to_rgba8();
+                    let (mut changed, mut worst) = (0_u64, 0_u8);
+                    for (now, then) in layer.as_raw().iter().zip(earlier.as_raw()) {
+                        let difference = now.abs_diff(*then);
+                        changed += u64::from(difference > 2);
+                        worst = worst.max(difference);
+                    }
+                    println!(
+                        "  vs reference: {changed} channel values off by more than 2, worst {worst}"
+                    );
+                    changed_total += changed;
+                    worst_total = worst_total.max(worst);
+                }
+            }
+            let page_digest = page_digest.finish();
+            page_digest.hash(&mut digest);
+            println!(
+                "page {:>2}: first prepare {first:>7.1} ms, prepare {prepare_ms:>7.1} ms, \
+                 {model_name} {run_ms:>7.1} ms, {} filled pixels, {} tiles of {:.2} Mpx, \
+                 digest {page_digest:016x}",
+                index + 1,
+                prepared.flat_fill.len(),
+                tiles.len(),
+                tile_pixels as f64 / 1e6,
+            );
+        }
+        println!(
+            "{} pages: prepare {prepare_total:.0} ms, {model_name} {run_total:.0} ms, digest {:016x}",
+            pages.len(),
+            digest.finish()
+        );
+        if reference.is_some() {
+            println!(
+                "vs reference: {changed_total} channel values off by more than 2, worst {worst_total}"
+            );
+        }
+        drop(session);
+        let _ = std::fs::remove_dir_all(&copy);
+    }
 
     #[tokio::test]
     async fn transient_inpainting_mask_replaces_persistent_page_masks() {
