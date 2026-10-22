@@ -46,7 +46,7 @@ export interface CanvasBrush {
   color: string
 }
 export type InspectorSection = 'copy' | 'type' | 'layers'
-export type ShortcutAction = CanvasTool | 'fit'
+export type ShortcutAction = CanvasTool | 'fit' | 'cleanup_done'
 export type Shortcuts = Record<ShortcutAction, string>
 export type PipelineScope = 'page' | 'selected-pages' | 'project'
 export const pipelineStages: readonly Stage[] = [
@@ -126,6 +126,7 @@ export const defaultShortcuts: Shortcuts = {
   restore: 'r',
   pan: 'h',
   fit: 'f',
+  cleanup_done: 'g',
 }
 
 export const useKoharuStore = create<KoharuStore>()((set) => ({

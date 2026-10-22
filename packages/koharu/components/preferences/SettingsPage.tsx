@@ -326,6 +326,7 @@ function ShortcutPreferences() {
     'remove',
     'pan',
     'fit',
+    'cleanup_done',
   ]
   return (
     <PreferencePage
@@ -368,4 +369,5 @@ const shortcutKeys: Record<ShortcutAction, string> = {
   restore: 'tools.restore',
   pan: 'tools.pan',
   fit: 'canvas.fit',
+  cleanup_done: 'canvas.cleanupDone',
 }

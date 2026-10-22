@@ -12,6 +12,7 @@ import { StatusBar } from '@/components/editor/StatusBar'
 import { ToolBar } from '@/components/editor/ToolBar'
 import { useCanvas } from '@/components/editor/useCanvas'
 import { call } from '@/lib/backend'
+import { toggleCleanupDone } from '@/lib/cleanup'
 import { expandLayerSelection } from '@/lib/document'
 import {
   controlFrame,
@@ -690,6 +691,12 @@ export function CanvasWorkspace() {
         event.preventDefault()
         event.stopPropagation()
         requestCanvasFit()
+        return
+      }
+      if (toolShortcut && key === state.shortcuts.cleanup_done) {
+        event.preventDefault()
+        event.stopPropagation()
+        toggleCleanupDone()
         return
       }
       if (!toolShortcut) return
