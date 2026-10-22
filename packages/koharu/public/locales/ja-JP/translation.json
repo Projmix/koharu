@@ -711,7 +711,9 @@
     "title": "Koharu を準備しています"
   },
   "status": {
-    "zoom": "ズーム"
+    "zoom": "ズーム",
+    "cleanupOpacity": "クリーンアップ",
+    "cleanupOpacityHint": "画面上のクリーンアップレイヤーの不透明度。何を消したかを確認するためのもので、レイヤーと書き出しは変わりません。"
   },
   "tools": {
     "brushSize": "ブラシサイズ",

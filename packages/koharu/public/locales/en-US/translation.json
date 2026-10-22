@@ -711,7 +711,9 @@
     "title": "Preparing Koharu"
   },
   "status": {
-    "zoom": "Zoom"
+    "zoom": "Zoom",
+    "cleanupOpacity": "Cleanup",
+    "cleanupOpacityHint": "Opacity of the cleanup layers on screen, to see what was cleaned. Does not change the layers or the export."
   },
   "tools": {
     "brushSize": "Brush size",

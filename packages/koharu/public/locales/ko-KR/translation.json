@@ -711,7 +711,9 @@
     "title": "Koharu 준비 중"
   },
   "status": {
-    "zoom": "확대/축소"
+    "zoom": "확대/축소",
+    "cleanupOpacity": "정리",
+    "cleanupOpacityHint": "화면에 보이는 정리 레이어의 불투명도입니다. 무엇을 지웠는지 확인할 때 쓰며 레이어와 내보내기는 바뀌지 않습니다."
   },
   "tools": {
     "brushSize": "브러시 크기",

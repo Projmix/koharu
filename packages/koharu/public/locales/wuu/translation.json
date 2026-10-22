@@ -711,7 +711,9 @@
     "title": "来勒准备 Koharu"
   },
   "status": {
-    "zoom": "缩放"
+    "zoom": "缩放",
+    "cleanupOpacity": "清理",
+    "cleanupOpacityHint": "屏幕上清理图层的不透明度，用于查看清理了什么。不会更改图层或导出。"
   },
   "tools": {
     "brushSize": "笔刷大小",

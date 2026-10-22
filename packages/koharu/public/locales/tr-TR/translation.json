@@ -711,7 +711,9 @@
     "title": "Koharu hazırlanıyor"
   },
   "status": {
-    "zoom": "Yakınlaştırma"
+    "zoom": "Yakınlaştırma",
+    "cleanupOpacity": "Temizlik",
+    "cleanupOpacityHint": "Temizlik katmanlarının ekrandaki opaklığı; neyin temizlendiğini görmek için. Katmanları veya dışa aktarmayı değiştirmez."
   },
   "tools": {
     "brushSize": "Fırça boyutu",

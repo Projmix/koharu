@@ -711,7 +711,9 @@
     "title": "正在準備 Koharu"
   },
   "status": {
-    "zoom": "縮放"
+    "zoom": "縮放",
+    "cleanupOpacity": "清理",
+    "cleanupOpacityHint": "畫面上清理圖層的不透明度，用來查看清理了什麼。不會變更圖層或匯出。"
   },
   "tools": {
     "brushSize": "筆刷大小",
