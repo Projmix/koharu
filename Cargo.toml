@@ -206,3 +206,42 @@ opt-level = 3
 
 [profile.dev.package.libwebp-sys]
 opt-level = 3
+
+# Image codecs, font outlines and shaping, and scene encoding run on every
+# page switch, natively and in the canvas, so `bun dev` builds them optimized.
+
+[profile.dev.package.zune-jpeg]
+opt-level = 3
+
+[profile.dev.package.zune-core]
+opt-level = 3
+
+[profile.dev.package.png]
+opt-level = 3
+
+[profile.dev.package.fdeflate]
+opt-level = 3
+
+[profile.dev.package.miniz_oxide]
+opt-level = 3
+
+[profile.dev.package.crc32fast]
+opt-level = 3
+
+[profile.dev.package.simd-adler32]
+opt-level = 3
+
+[profile.dev.package.skrifa]
+opt-level = 3
+
+[profile.dev.package.read-fonts]
+opt-level = 3
+
+[profile.dev.package.harfrust]
+opt-level = 3
+
+[profile.dev.package.vello_encoding]
+opt-level = 3
+
+[profile.dev.package.kurbo]
+opt-level = 3
