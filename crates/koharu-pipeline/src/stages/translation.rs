@@ -25,6 +25,8 @@ const PRODUCER: &str = "dev.koharu.pipeline.translation";
 mod manual;
 mod review;
 
+pub use manual::Typeset;
+
 pub(super) struct Processor {
     config: TranslationConfig,
     translator: Translator,
@@ -1039,7 +1041,10 @@ mod tests {
         config.chapter.model.model = None;
         let chapter = ChapterTranslation::from_snapshot(session.snapshot(), &config).unwrap();
 
-        let export = chapter.manual_export().await.unwrap();
+        let export = chapter
+            .manual_export(manual::Typeset::default())
+            .await
+            .unwrap();
         assert!(export.prompt.contains("translation.json"));
         let segment = &export.document["pages"][0]["units"][0]["segments"][0];
         assert_eq!(segment["source_text"], "source");
@@ -1234,7 +1239,10 @@ mod tests {
         let chapter =
             ChapterTranslation::from_snapshot(session.snapshot(), &TranslationConfig::default())
                 .unwrap();
-        let export = chapter.manual_export().await.unwrap();
+        let export = chapter
+            .manual_export(manual::Typeset::default())
+            .await
+            .unwrap();
         let segments = export.document["pages"][0]["units"]
             .as_array()
             .unwrap()
@@ -1493,6 +1501,151 @@ mod tests {
                     None
                 ),
             ]
+        );
+    }
+
+    #[tokio::test]
+    async fn manual_import_proofreads_and_typesets_translated_layers() {
+        let mut session = koharu_scene::Session::memory().await.unwrap();
+        let mut edit = session.snapshot().edit();
+        let page = edit
+            .add_page(PageDraft::new("page", 120.0, 180.0), At::End)
+            .unwrap();
+        let (content, _, layer) = add_text(&mut edit, page, "うるさい", (80.0, 10.0, 20.0, 30.0));
+        let (other, _, other_layer) = add_text(&mut edit, page, "ドン", (10.0, 10.0, 20.0, 30.0));
+        for (entity, text) in [(content, "Тише"), (other, "БАМ")] {
+            edit.set(
+                entity,
+                &Translation {
+                    text: Authored::user(text.to_owned()),
+                    language: Some(LanguageTag::new("ru-RU").unwrap()),
+                },
+            )
+            .unwrap();
+        }
+        session.commit(edit.finish().unwrap()).await.unwrap();
+        let config = TranslationConfig::default();
+        let chapter = ChapterTranslation::from_snapshot(session.snapshot(), &config).unwrap();
+
+        let export = chapter
+            .manual_export(manual::Typeset::default())
+            .await
+            .unwrap();
+        assert!(export.prompt.contains("Proofreading and typesetting"));
+        let layers = export.document["layers"].as_array().unwrap();
+        assert_eq!(layers.len(), 2);
+        let exported = layers
+            .iter()
+            .find(|entry| entry["id"] == layer.to_string())
+            .unwrap();
+        assert_eq!(exported["translated_text"], "Тише");
+        assert_eq!(exported["typography"]["auto_fit"], true);
+
+        let response = serde_json::json!({
+            "project_id": session.project_id().to_string(),
+            "target_language": config.target_language,
+            "translations": [],
+            "layers": [{
+                "id": layer.to_string(),
+                "translated_text": "Заткнись",
+                "box": [70, 5, 40, 50],
+                "typography": {
+                    "preferred_font": "NM Shonen 2",
+                    "font_weight": null,
+                    "font_style": null,
+                    "size": 30.0,
+                    "auto_fit": false,
+                    "color": [255, 255, 255, 255],
+                    "stroke_color": [0, 0, 0, 255],
+                    "stroke_width": 3.0,
+                    "alignment": "Center",
+                    "writing_mode": null
+                }
+            }]
+        });
+        for error in [
+            "unknown",
+            "duplicate",
+            "unchanged",
+            "empty",
+            "box",
+            "typography",
+            "field",
+        ] {
+            let mut invalid = response.clone();
+            let change = &mut invalid["layers"][0];
+            match error {
+                "unknown" => change["id"] = serde_json::json!(content.to_string()),
+                "duplicate" => {
+                    let copy = change.clone();
+                    invalid["layers"].as_array_mut().unwrap().push(copy);
+                }
+                "unchanged" => *change = serde_json::json!({ "id": layer.to_string() }),
+                "empty" => change["translated_text"] = serde_json::json!(" "),
+                "box" => change["box"] = serde_json::json!([10, 10, 0, 10]),
+                "typography" => change["typography"]["size"] = serde_json::json!(null),
+                "field" => change["angle"] = serde_json::json!(15),
+                _ => unreachable!(),
+            }
+            assert!(
+                chapter
+                    .patch_from_response(&processor().translator, &invalid.to_string())
+                    .await
+                    .is_err(),
+                "{error}"
+            );
+        }
+
+        let patch = chapter
+            .patch_from_response(&processor().translator, &response.to_string())
+            .await
+            .unwrap();
+        session.commit(patch).await.unwrap();
+        let snapshot = session.snapshot();
+        let translation = snapshot.component::<Translation>(content).unwrap().unwrap();
+        assert_eq!(translation.text.value, "Заткнись");
+        assert!(matches!(translation.text.origin, Origin::User));
+        let typography = snapshot
+            .component::<koharu_scene::Typography>(layer)
+            .unwrap()
+            .unwrap();
+        assert!(matches!(typography.origin, Origin::User));
+        assert_eq!(typography.preferred_font.as_deref(), Some("NM Shonen 2"));
+        assert_eq!(typography.size, Some(30.0));
+        assert!(!typography.auto_fit);
+        assert_eq!(typography.color, Some([255, 255, 255, 255]));
+        assert_eq!(typography.stroke_color, Some([0, 0, 0, 255]));
+        assert_eq!(typography.stroke_width, Some(3.0));
+        assert_eq!(
+            typography.alignment,
+            Some(koharu_scene::TextAlignment::Center)
+        );
+        assert_eq!(
+            snapshot.component::<Geometry>(layer).unwrap(),
+            Some(Geometry::rectangle(70.0, 5.0, 40.0, 50.0))
+        );
+        assert!(matches!(
+            snapshot
+                .component::<TextLayout>(layer)
+                .unwrap()
+                .unwrap()
+                .origin,
+            Origin::User
+        ));
+        assert_eq!(
+            snapshot
+                .component::<Translation>(other)
+                .unwrap()
+                .unwrap()
+                .text
+                .value,
+            "БАМ"
+        );
+        assert!(
+            snapshot
+                .component::<koharu_scene::Typography>(other_layer)
+                .unwrap()
+                .is_none()
         );
     }
 

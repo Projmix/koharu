@@ -1,21 +1,26 @@
 //! The manual chapter exchange: an external agent reads every page image with
 //! its numbered blocks, corrects the OCR, translates, adds the lettering
-//! detection missed, and returns one file that imports as one undo step.
+//! detection missed, proofreads and typesets what is already translated, and
+//! returns one file that imports as one undo step.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use anyhow::{Context as _, Result, ensure};
 use image::{DynamicImage, Rgb, RgbImage};
+use koharu_renderer::{Frame, LayerKind, RenderDiagnostic, TypesettingConfig};
 use koharu_scene::{
-    At, Authored, BubbleRegion, EntityId, FitsTo, FlowsIn, Geometry, Inside, LanguageTag, Origin,
-    RecognizedFrom, Region, RegionSpec, RemovePolicy, SourceText, TextLayout, TextLayoutKind,
-    TextRegion, TextRole, Translation, Typography,
+    At, Authored, BubbleRegion, EntityId, FitsTo, FlowsIn, FontStyle, Geometry, Inside,
+    LanguageTag, Origin, RecognizedFrom, Region, RegionSpec, RemovePolicy, SourceText,
+    TextAlignment, TextLayout, TextLayoutKind, TextRegion, TextRole, Translation,
+    TranslationReview, Typography, WritingMode,
 };
 use koharu_translator::{Language, Translator};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::{ChapterTranslation, PRODUCER, write_translations};
+use super::{
+    ChapterTranslation, PRODUCER, layout_containers, reading_permutation, write_translations,
+};
 use crate::{
     images::ImageCache,
     stages::{
@@ -24,6 +29,14 @@ use crate::{
         ocr::{nested_geometry, polygon_area},
     },
 };
+
+/// The chapter as the export render draws it now. A page missing here still
+/// lists its layers, without what they resolved to and without typeset images.
+#[derive(Default)]
+pub struct Typeset {
+    pub fonts: TypesettingConfig,
+    pub pages: HashMap<EntityId, (Frame, RgbImage)>,
+}
 
 pub struct ManualTranslationExport {
     pub prompt: String,
@@ -40,6 +53,8 @@ struct Response {
     translations: Vec<TranslatedSegment>,
     #[serde(default)]
     added: Vec<AddedBlock>,
+    #[serde(default)]
+    layers: Vec<LayerEdit>,
 }
 
 #[derive(Deserialize)]
@@ -61,6 +76,59 @@ struct AddedBlock {
     kind: AddedKind,
     source_text: String,
     translated_text: String,
+}
+
+/// A change to a layer that already has a translation. Each field left out
+/// stays as it is.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LayerEdit {
+    id: EntityId,
+    #[serde(default)]
+    translated_text: Option<String>,
+    /// `[x, y, width, height]` in page pixels: the area the text fits into.
+    #[serde(default, rename = "box")]
+    bounds: Option<[f64; 4]>,
+    #[serde(default)]
+    typography: Option<LayerTypography>,
+}
+
+/// `Typography` without its origin, replaced whole, as the app's typography
+/// panel does.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LayerTypography {
+    #[serde(default)]
+    preferred_font: Option<String>,
+    #[serde(default)]
+    font_weight: Option<u16>,
+    #[serde(default)]
+    font_style: Option<FontStyle>,
+    #[serde(default)]
+    size: Option<f32>,
+    auto_fit: bool,
+    #[serde(default)]
+    color: Option<[u8; 4]>,
+    #[serde(default)]
+    stroke_color: Option<[u8; 4]>,
+    #[serde(default)]
+    stroke_width: Option<f32>,
+    #[serde(default)]
+    alignment: Option<TextAlignment>,
+    #[serde(default)]
+    writing_mode: Option<WritingMode>,
+}
+
+/// A translated text layer the agent may proofread and typeset: every visible
+/// layer with a translation that is not a block of this request.
+struct ReviewLayer {
+    page: EntityId,
+    page_index: usize,
+    number: usize,
+    layer: EntityId,
+    content: EntityId,
+    /// Extents of the area the text fits into, from the render when there is one.
+    bounds: Option<[f64; 4]>,
 }
 
 #[derive(Clone, Copy, Deserialize)]
@@ -96,11 +164,25 @@ const WORKFLOW: &str = "\n\nManual file exchange (an agent with file access work
 - added holds only blocks the outlines miss; leave it empty when nothing is missing.\n\
 - Do not return explanations, Markdown fences, API settings or the example placeholders.\n\n";
 
+const TYPESETTING: &str = "Proofreading and typesetting (chapter.json lists layers):\n\
+- layers lists every text layer that already has a translation, page by page in reading order: its id, page_index, number (its number on pages/NNN-layers.jpg), role and speech_kind, source_text, translated_text, in_balloon, box [x, y, width, height] in page pixels (the area its text is fitted into), typography (what is set on the layer) and rendered (what the export drew: the fonts, font_size in pixels, text_box around the drawn lettering, and warning: overflow when the text does not fit its box, below_readable_size, or low_contrast when it barely stands out from the art under it). fonts names the font each kind of text gets and the fallback families.\n\
+- page_images lists pages/NNN-typeset.jpg, the page exactly as it exports now, and pages/NNN-layers.jpg, the same with each layer's box outlined in green with its number. Compare them with pages/NNN.jpg, the original.\n\
+- Proofread every layer against the original lettering and the art, in context of the whole chapter. Fix mistranslations, lines that contradict the scene or the lines around them, wrong gender agreement, inconsistent names and terms, rudeness or profanity the source does not have, and explicit, sexual or profane wording that the source has but the translation lost, softened or left out. Keep the register of the source.\n\
+- Then typeset every layer so the page reads like professionally lettered manga:\n\
+  - Text in a balloon is centred, fills most of the balloon's inside without touching its outline, is coloured like the original lettering (dark on a light balloon, light on a dark one) and has no outline. Similar balloons on a page get similar sizes.\n\
+  - Text on art (narration, thoughts, signs outside balloons) stays readable: the original lettering's colour with an outline in a contrasting colour, stroke_width about a tenth of the font size.\n\
+  - A sound effect uses the sound-effect font, is large like the original, takes the original's colour with a contrasting outline, and its box covers the area of the original sound effect.\n\
+  - Clear every warning: a larger box inside the balloon or the free space, a smaller size, or a shorter translation with the same meaning.\n\
+  - Text never covers a face or important art, crosses a panel border or spills out of its balloon.\n\
+- To change a layer, add an entry to layers in translation.json with its id and only what changes: translated_text, box, typography. typography replaces the layer's whole typography, so copy the exported object and edit it. preferred_font is a family from fonts, or null for the font of the text's kind; font_weight is 100 to 900 or null; font_style is normal, italic, oblique or null; with auto_fit true the text takes the largest size that fits its box, up to 2.5% of the page height, and size is ignored; with auto_fit false it is drawn at exactly size pixels, so make sure it fits (the drawn text_box grows roughly in proportion to the size); color and stroke_color are [r, g, b, a] from 0 to 255; stroke_width is in pixels, null or 0 for no outline; alignment is Start, Center, End, Justify or null; writing_mode is Horizontal, Vertical or null. A box replaces the area the text is fitted into, a balloon's included. Rotation cannot be changed.\n\
+- Leave out a layer that needs no change. Save each page's layer changes in its work/page-NNN.json as well, and before writing translation.json compare the sizes of similar balloons and the sound-effect style across the chapter.\n\n";
+
 impl ChapterTranslation {
-    pub async fn manual_export(&self) -> Result<ManualTranslationExport> {
+    pub async fn manual_export(&self, mut typeset: Typeset) -> Result<ManualTranslationExport> {
+        let layers = self.review_layers(&typeset.pages)?;
         ensure!(
-            !self.targets.is_empty(),
-            "chapter translation found no untranslated OCR text"
+            !self.targets.is_empty() || !layers.is_empty(),
+            "chapter translation found neither untranslated OCR text nor a translated layer"
         );
         let (mut prompt, mut document) = koharu_translator::translation_material(&self.request)?;
         let project_id = self.snapshot.project_id().to_string();
@@ -139,6 +221,23 @@ impl ChapterTranslation {
             }
         }
 
+        if !layers.is_empty() {
+            document["layers"] = layers
+                .iter()
+                .map(|layer| {
+                    self.layer_value(
+                        layer,
+                        typeset.pages.get(&layer.page).map(|(frame, _)| frame),
+                    )
+                })
+                .collect::<Result<Vec<_>>>()?
+                .into();
+            document["fonts"] = json!({
+                "by_kind": typeset.fonts.kind_fonts,
+                "fallback": typeset.fonts.font_families,
+            });
+        }
+
         let images = ImageCache::default();
         let mut page_images = Vec::new();
         let mut files = Vec::new();
@@ -148,31 +247,56 @@ impl ChapterTranslation {
                 continue;
             };
             let outlines = self.outlines(page, number)?;
-            let (plain, boxed) = tokio_rayon::spawn(move || -> Result<(Vec<u8>, Vec<u8>)> {
+            let rendered = typeset.pages.remove(&page).map(|(_, image)| image);
+            let layer_outlines = layers
+                .iter()
+                .filter(|layer| layer.page == page)
+                .filter_map(|layer| Some((layer.bounds?, layer.number)))
+                .collect::<Vec<_>>();
+            let encoded = tokio_rayon::spawn(move || -> Result<Vec<Vec<u8>>> {
                 let plain = image.to_rgb8();
                 let mut boxed = plain.clone();
                 for (bounds, label) in &outlines {
-                    draw_outline(&mut boxed, *bounds, *label);
+                    let colour = if label.is_some() {
+                        NUMBERED
+                    } else {
+                        TRANSLATED
+                    };
+                    draw_outline(&mut boxed, *bounds, *label, colour);
                 }
-                Ok((jpeg(plain)?, jpeg(boxed)?))
+                let mut encoded = vec![jpeg(plain)?, jpeg(boxed)?];
+                if let Some(rendered) = rendered {
+                    let mut outlined = rendered.clone();
+                    for (bounds, label) in &layer_outlines {
+                        draw_outline(&mut outlined, *bounds, Some(*label), LAYER);
+                    }
+                    encoded.push(jpeg(rendered)?);
+                    encoded.push(jpeg(outlined)?);
+                }
+                Ok(encoded)
             })
             .await?;
             let value = self.snapshot.page(page)?.page()?;
-            let image = format!("pages/{number:03}.jpg");
-            let boxes_image = format!("pages/{number:03}-boxes.jpg");
-            page_images.push(json!({
+            let mut entry = json!({
                 "page_index": number,
-                "image": image,
-                "boxes_image": boxes_image,
+                "image": format!("pages/{number:03}.jpg"),
+                "boxes_image": format!("pages/{number:03}-boxes.jpg"),
                 "width": value.width.round(),
                 "height": value.height.round(),
-            }));
-            files.push((image, plain));
-            files.push((boxes_image, boxed));
+            });
+            if encoded.len() == 4 {
+                entry["typeset_image"] = json!(format!("pages/{number:03}-typeset.jpg"));
+                entry["layers_image"] = json!(format!("pages/{number:03}-layers.jpg"));
+            }
+            let names = ["image", "boxes_image", "typeset_image", "layers_image"];
+            for (name, bytes) in names.into_iter().zip(encoded) {
+                files.push((entry[name].as_str().unwrap().to_owned(), bytes));
+            }
+            page_images.push(entry);
         }
         document["page_images"] = json!(page_images);
 
-        let example = json!({
+        let mut example = json!({
             "project_id": project_id,
             "target_language": self.target_language,
             "translations": [{
@@ -189,12 +313,181 @@ impl ChapterTranslation {
             }]
         });
         prompt.push_str(WORKFLOW);
+        if !layers.is_empty() {
+            example["layers"] = json!([{
+                "id": "COPY THE EXACT LAYER ID",
+                "translated_text": "CORRECTED TRANSLATION, ONLY IF IT CHANGES",
+                "box": [0, 0, 0, 0],
+                "typography": {
+                    "preferred_font": null,
+                    "font_weight": null,
+                    "font_style": null,
+                    "size": 28.0,
+                    "auto_fit": false,
+                    "color": [0, 0, 0, 255],
+                    "stroke_color": null,
+                    "stroke_width": null,
+                    "alignment": "Center",
+                    "writing_mode": null
+                }
+            }]);
+            prompt.push_str(TYPESETTING);
+        }
         prompt.push_str(&serde_json::to_string_pretty(&example)?);
         Ok(ManualTranslationExport {
             prompt,
             document,
             images: files,
         })
+    }
+
+    /// The translated layers outside this request, page by page in reading
+    /// order, numbered on their page.
+    fn review_layers(
+        &self,
+        pages: &HashMap<EntityId, (Frame, RgbImage)>,
+    ) -> Result<Vec<ReviewLayer>> {
+        let requested: HashSet<EntityId> = self.targets.iter().map(|target| target.layer).collect();
+        let mut layers = Vec::new();
+        for (index, page) in self.snapshot.pages().map(|page| page.id()).enumerate() {
+            let Some(group) = self.snapshot.page(page)?.text_group()? else {
+                continue;
+            };
+            let frame = pages.get(&page).map(|(frame, _)| frame);
+            let mut entries = Vec::new();
+            for layer in group.text_layers()? {
+                if requested.contains(&layer.id())
+                    || layer
+                        .visibility()?
+                        .is_some_and(|visibility| !visibility.visible || visibility.opacity <= 0.0)
+                {
+                    continue;
+                }
+                let content = layer.content()?;
+                if content
+                    .translation()?
+                    .is_none_or(|translation| translation.text.value.trim().is_empty())
+                {
+                    continue;
+                }
+                let bounds = match frame.and_then(|frame| frame.layer(layer.id())) {
+                    Some(rendered) => crate::scope::geometry_extents(rendered.geometry()),
+                    None => layer
+                        .frame()?
+                        .as_ref()
+                        .and_then(crate::scope::geometry_extents),
+                };
+                entries.push((layer.id(), content.id(), bounds));
+            }
+            let order = reading_permutation(
+                &entries.iter().map(|entry| entry.2).collect::<Vec<_>>(),
+                layout_containers(&self.snapshot, page)?
+                    .into_iter()
+                    .map(|(_, item)| item)
+                    .collect(),
+                self.source_language,
+            );
+            for (number, position) in order.into_iter().enumerate() {
+                let (layer, content, bounds) = entries[position];
+                layers.push(ReviewLayer {
+                    page,
+                    page_index: index + 1,
+                    number: number + 1,
+                    layer,
+                    content,
+                    bounds: bounds.map(rounded_box),
+                });
+            }
+        }
+        Ok(layers)
+    }
+
+    /// A review layer as the agent reads it: its text, what is set on it in
+    /// the shape the import takes back, and what the render drew.
+    fn layer_value(&self, entry: &ReviewLayer, frame: Option<&Frame>) -> Result<Value> {
+        let layer = self.snapshot.text_layer(entry.layer)?;
+        let content = layer.content()?;
+        let rendered =
+            frame
+                .and_then(|frame| frame.layer(entry.layer))
+                .and_then(|layer| match layer.kind() {
+                    LayerKind::Text(metadata) => Some(metadata),
+                    LayerKind::Image(_) => None,
+                });
+        let typography = layer.typography()?;
+        // A detected outline is drawn capped to the size, and a detected
+        // vertical mode applies only to CJK text; report what is drawn so a
+        // copied typography keeps the look once it becomes the user's.
+        let detected = typography
+            .as_ref()
+            .and_then(|typography| match &typography.origin {
+                Origin::Generated(_) => rendered,
+                _ => None,
+            });
+        let stroke_width = typography.as_ref().and_then(|typography| {
+            let width = typography.stroke_width?;
+            Some(match detected {
+                Some(rendered) => koharu_renderer::measured_stroke_width(width, rendered.font_size),
+                None => width,
+            })
+        });
+        let writing_mode = match detected {
+            Some(rendered) if rendered.writing_mode.is_vertical() => Some(WritingMode::Vertical),
+            Some(_) => Some(WritingMode::Horizontal),
+            None => typography
+                .as_ref()
+                .and_then(|typography| typography.writing_mode),
+        };
+        let typography = match typography {
+            Some(typography) => json!({
+                "preferred_font": typography.preferred_font,
+                "font_weight": typography.font_weight,
+                "font_style": typography.font_style,
+                "size": typography.size,
+                "auto_fit": typography.auto_fit,
+                "color": typography.color,
+                "stroke_color": typography.stroke_color,
+                "stroke_width": stroke_width,
+                "alignment": typography.alignment,
+                "writing_mode": writing_mode,
+            }),
+            None => json!({
+                "preferred_font": null,
+                "font_weight": null,
+                "font_style": null,
+                "size": null,
+                "auto_fit": true,
+                "color": null,
+                "stroke_color": null,
+                "stroke_width": null,
+                "alignment": null,
+                "writing_mode": null,
+            }),
+        };
+        let rendered = rendered.map(|rendered| {
+            let bounds = rendered.rendered_bounds;
+            let text_box = [bounds.x, bounds.y, bounds.width, bounds.height]
+                .map(|value| f64::from(value).round());
+            json!({
+                "fonts": rendered.post_script_fonts,
+                "font_size": (f64::from(rendered.font_size) * 10.0).round() / 10.0,
+                "text_box": text_box,
+                "warning": frame.and_then(|frame| fit_warning(frame.diagnostics(), entry.layer)),
+            })
+        });
+        Ok(json!({
+            "id": entry.layer.to_string(),
+            "page_index": entry.page_index,
+            "number": entry.number,
+            "role": content.role()?.map(|role| role.role),
+            "speech_kind": content.speech_markup()?.map(|markup| markup.kind),
+            "source_text": content.source()?.map(|source| source.text.value),
+            "translated_text": content.translation()?.map(|translation| translation.text.value),
+            "in_balloon": layer.balloon_target()?.is_some(),
+            "box": entry.bounds,
+            "typography": typography,
+            "rendered": rendered,
+        }))
     }
 
     /// Every text region of `page` as an outline: the request's blocks with
@@ -319,6 +612,48 @@ impl ChapterTranslation {
                 !block.source_text.trim().is_empty() && !block.translated_text.trim().is_empty(),
                 "added block {} needs source_text and translated_text",
                 index + 1
+            );
+        }
+        let reviewable: HashMap<EntityId, ReviewLayer> = self
+            .review_layers(&HashMap::new())?
+            .into_iter()
+            .map(|layer| (layer.layer, layer))
+            .collect();
+        let mut edited = HashSet::new();
+        for change in &response.layers {
+            ensure!(
+                reviewable.contains_key(&change.id),
+                "manual translation changes layer {}, which is not a translated layer of this chapter",
+                change.id
+            );
+            ensure!(
+                edited.insert(change.id),
+                "manual translation changes layer {} twice",
+                change.id
+            );
+            ensure!(
+                change.translated_text.is_some()
+                    || change.bounds.is_some()
+                    || change.typography.is_some(),
+                "manual translation lists layer {} without a change",
+                change.id
+            );
+            ensure!(
+                change
+                    .translated_text
+                    .as_ref()
+                    .is_none_or(|text| !text.trim().is_empty()),
+                "manual translation empties the text of layer {}",
+                change.id
+            );
+            ensure!(
+                change
+                    .bounds
+                    .is_none_or(|bounds| bounds.iter().all(|value| value.is_finite())
+                        && bounds[2] > 0.0
+                        && bounds[3] > 0.0),
+                "layer {} needs a box with a positive width and height",
+                change.id
             );
         }
 
@@ -450,6 +785,83 @@ impl ChapterTranslation {
                 edit.relate::<FitsTo>(layer, region)?;
             }
         }
+        // A layer change is the user's own edit, as the text, frame and
+        // typography panels make it.
+        for change in response.layers {
+            let entry = &reviewable[&change.id];
+            edit.promote_entity_to_user(entry.layer)?;
+            edit.promote_entity_to_user(entry.content)?;
+            if let Some(text) = change.translated_text {
+                let language = match self.snapshot.component::<Translation>(entry.content)? {
+                    Some(Translation {
+                        language: Some(language),
+                        ..
+                    }) => language,
+                    _ => target_language.clone(),
+                };
+                // Writing the translation is the review's answer, as in the app.
+                if self
+                    .snapshot
+                    .component::<TranslationReview>(entry.content)?
+                    .is_some()
+                {
+                    edit.remove::<TranslationReview>(entry.content)?;
+                }
+                edit.set(
+                    entry.content,
+                    &Translation {
+                        text: Authored::user(text),
+                        language: Some(language),
+                    },
+                )?;
+            }
+            if let Some([x, y, width, height]) = change.bounds {
+                let value = self.snapshot.page(entry.page)?.page()?;
+                let (left, top) = (x.clamp(0.0, value.width), y.clamp(0.0, value.height));
+                let (right, bottom) = (
+                    (x + width).clamp(0.0, value.width),
+                    (y + height).clamp(0.0, value.height),
+                );
+                ensure!(
+                    right > left && bottom > top,
+                    "the box of layer {} lies outside its page",
+                    change.id
+                );
+                let mut layout = self
+                    .snapshot
+                    .component::<TextLayout>(entry.layer)?
+                    .with_context(|| format!("layer {} has no text layout", change.id))?;
+                layout.origin = Origin::User;
+                layout.angle_degrees = None;
+                edit.set(entry.layer, &layout)?;
+                edit.set(
+                    entry.layer,
+                    &Geometry::rectangle(left, top, right - left, bottom - top),
+                )?;
+            }
+            if let Some(typography) = change.typography {
+                edit.set(
+                    entry.layer,
+                    &Typography {
+                        origin: Origin::User,
+                        preferred_font: typography
+                            .preferred_font
+                            .filter(|font| !font.trim().is_empty()),
+                        font_weight: typography.font_weight,
+                        font_style: typography.font_style,
+                        size: typography.size,
+                        auto_fit: typography.auto_fit,
+                        color: typography.color,
+                        stroke_color: typography.stroke_color,
+                        stroke_width: typography.stroke_width,
+                        alignment: typography.alignment,
+                        writing_mode: typography.writing_mode,
+                        extensions: Default::default(),
+                    },
+                )
+                .with_context(|| format!("layer {} has invalid typography", change.id))?;
+            }
+        }
         // Last, so an added block placed next to one of these layers has
         // its anchor while it is inserted.
         for target in empty {
@@ -529,6 +941,7 @@ fn jpeg(image: RgbImage) -> Result<Vec<u8>> {
 
 const NUMBERED: Rgb<u8> = Rgb([230, 30, 30]);
 const TRANSLATED: Rgb<u8> = Rgb([40, 90, 230]);
+const LAYER: Rgb<u8> = Rgb([20, 160, 60]);
 
 /// A 3x5 bitmap of each digit, one row per entry, high bit on the left.
 const DIGITS: [[u8; 5]; 10] = [
@@ -544,14 +957,35 @@ const DIGITS: [[u8; 5]; 10] = [
     [0b111, 0b101, 0b111, 0b001, 0b111],
 ];
 
+/// The strongest fit warning the render gave `layer`, ranked as the chapter
+/// check ranks them.
+fn fit_warning(diagnostics: &[RenderDiagnostic], layer: EntityId) -> Option<&'static str> {
+    diagnostics
+        .iter()
+        .filter_map(|diagnostic| match diagnostic {
+            RenderDiagnostic::TextOverflow { entity, .. } if *entity == layer => {
+                Some((2, "overflow"))
+            }
+            RenderDiagnostic::TextLowContrast { entity, .. } if *entity == layer => {
+                Some((1, "low_contrast"))
+            }
+            RenderDiagnostic::TextBelowReadableSize { entity, .. } if *entity == layer => {
+                Some((0, "below_readable_size"))
+            }
+            _ => None,
+        })
+        .max_by_key(|(rank, _)| *rank)
+        .map(|(_, warning)| warning)
+}
+
 /// The block's outline, and its number on a filled tag above its top-left
 /// corner (inside the page when the block touches the top edge).
-fn draw_outline(image: &mut RgbImage, [x, y, width, height]: [f64; 4], label: Option<usize>) {
-    let colour = if label.is_some() {
-        NUMBERED
-    } else {
-        TRANSLATED
-    };
+fn draw_outline(
+    image: &mut RgbImage,
+    [x, y, width, height]: [f64; 4],
+    label: Option<usize>,
+    colour: Rgb<u8>,
+) {
     let (image_width, image_height) = (image.width() as i64, image.height() as i64);
     let thickness = (image_width / 400).max(2);
     let (left, top) = (x as i64, y as i64);

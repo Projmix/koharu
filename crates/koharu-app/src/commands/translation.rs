@@ -1,8 +1,13 @@
 use std::io::{Cursor, Write};
 
 use anyhow::{Context as _, Result};
+use futures::future::try_join_all;
 use koharu_desktop::Desktop;
-use koharu_pipeline::{ChapterTranslation, PipelineConfig};
+use koharu_pipeline::{ChapterTranslation, PipelineConfig, Typeset};
+use koharu_rasterizer::RasterOptions;
+use koharu_renderer::TypesettingConfig;
+use koharu_scene::Snapshot;
+use rayon::prelude::*;
 use serde_json::Value;
 use tauri::{AppHandle, Manager as _, State};
 use tauri_runtime_cef::CefRuntime;
@@ -27,12 +32,42 @@ fn archive(prompt: &str, document: &Value, images: &[(String, Vec<u8>)]) -> Resu
     Ok(zip.finish()?.into_inner())
 }
 
+/// Every page drawn as the export draws it, for proofreading and typesetting.
+async fn typeset(desktop: &Desktop, snapshot: &Snapshot) -> Result<Typeset> {
+    let renderer = desktop.renderer();
+    let rasterizer = desktop.rasterizer().await?;
+    let frames = try_join_all(
+        snapshot
+            .pages()
+            .map(|page| renderer.render(snapshot, page.id())),
+    )
+    .await?;
+    let pages = tokio_rayon::spawn(move || {
+        frames
+            .into_par_iter()
+            .map(|frame| -> Result<_> {
+                let image = rasterizer
+                    .rasterize(&frame.raster_frame()?, RasterOptions::default())?
+                    .image;
+                let image = image::DynamicImage::ImageRgba8(image).to_rgb8();
+                Ok((frame.page(), (frame, image)))
+            })
+            .collect::<Result<_>>()
+    })
+    .await?;
+    Ok(Typeset {
+        fonts: TypesettingConfig::load()?.read()?.clone(),
+        pages,
+    })
+}
+
 #[tauri::command]
 #[specta::specta]
 pub(crate) async fn export_chapter_translation(
     window: tauri::WebviewWindow<CefRuntime>,
     project: State<'_, CurrentProject>,
     processing: State<'_, Processing>,
+    desktop: State<'_, Desktop>,
 ) -> std::result::Result<bool, Error> {
     if !processing.stops.lock().is_empty() {
         return Err(anyhow::anyhow!(
@@ -45,8 +80,9 @@ pub(crate) async fn export_chapter_translation(
         project.as_ref().context("no project is open")?.snapshot()
     };
     let config = PipelineConfig::load()?.read()?.clone();
+    let typeset = typeset(&desktop, &snapshot).await?;
     let export = ChapterTranslation::from_snapshot(snapshot, &config.translation)?
-        .manual_export()
+        .manual_export(typeset)
         .await?;
     let bytes = archive(&export.prompt, &export.document, &export.images)?;
     let Some(file) = rfd::AsyncFileDialog::new()

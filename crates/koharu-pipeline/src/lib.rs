@@ -35,7 +35,7 @@ pub use scope::{Bounds, Scope};
 pub use stage::{Stage, StageProgress, StageTarget};
 pub use stages::{
     ChapterTranslation, Flux2KleinConfig, ImageEditConfig, InpaintingApplyMode,
-    KoharuLayoutRFDetrSeg2XLConfig, RoremMixedConfig, cleaning_unverified, ocr_unverified,
+    KoharuLayoutRFDetrSeg2XLConfig, RoremMixedConfig, Typeset, cleaning_unverified, ocr_unverified,
     open_unboxed_text, text_layer_placement,
 };
 

@@ -64,6 +64,18 @@ Known gaps after the rebuild:
   An entry with both texts empty marks an outline with no lettering (art,
   hair, a censor bar); the import removes that block as deleting it in the
   app would, so cleanup leaves the art under it alone.
+  The same exchange carries the final proofreading and typesetting pass:
+  `layers` lists every visible layer that already has a translation and is
+  not a block of the request, in reading order, with its text, the area its
+  text fits into, its `Typography` in the shape the import takes back, and
+  what the export render drew (fonts, size, text box, fit warning); `fonts`
+  holds the typesetting config's per-kind fonts. Each page also comes as it
+  exports now (`NNN-typeset.jpg`) and with each layer's area outlined and
+  numbered (`NNN-layers.jpg`). An agent returns only the layers it changes,
+  each with a corrected `translated_text`, a new `box` and/or a whole new
+  `typography`; the import writes them as the user's edits (as the text,
+  frame and typography panels do) in the same undo step. A chapter with
+  nothing left to translate exports for this pass alone.
 - Named project versions (`save_project_version` and friends).
 - OCR method `local`, `api` or hybrid `local-api`. The hybrid method uses an
   internal `OcrPass { Local, Final }`: the scheduler runs the local pass on
