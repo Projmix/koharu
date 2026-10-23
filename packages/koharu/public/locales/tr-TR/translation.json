@@ -332,7 +332,12 @@
     "sourceLabel": "{{name}} kaynak metni",
     "textName": "Metin {{index}}",
     "title": "Katmanlar",
-    "translationLabel": "{{name}} çevirisi"
+    "translationLabel": "{{name}} çevirisi",
+    "duplicate": "{{name}} katmanını çoğalt",
+    "mergeDown": "{{name}} katmanını aşağı birleştir",
+    "revealMask": "Gösterme maskesi",
+    "revealMaskHint": "Katmanın tamamını gizler ve yalnızca Silgi ile geçtiğiniz yerde gösterir; Fırça yeniden gizler.",
+    "tint": "Kırmızı ton"
   },
   "menu": {
     "about": "Hakkında",
@@ -360,7 +365,10 @@
     "undo": "Geri Al",
     "view": "Görünüm",
     "pagesPanel": "Sayfalar paneli",
-    "inspectorPanel": "Yan panel"
+    "inspectorPanel": "Yan panel",
+    "duplicateLayer": "Katmanı çoğalt",
+    "mergeLayers": "Katmanları birleştir",
+    "mergeDown": "Aşağı birleştir"
   },
   "versions": {
     "delete": "Sil",

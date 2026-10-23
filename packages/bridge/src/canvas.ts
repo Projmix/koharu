@@ -25,6 +25,7 @@ export interface Canvas {
   cacheFrame(token: number, page: string): boolean
   clear(): void
   previewOpacity(element: string, opacity: number | null): void
+  setTintedLayers(layers: string[]): void
   beginTransform(elements: TransformFrame[]): void
   updateTransform(elements: TransformFrame[]): void
   finishTransform(): void
@@ -58,6 +59,7 @@ interface CanvasHandle {
   cacheFrame(token: number): boolean
   clear(): void
   previewOpacity(element: string, opacity: number | null): void
+  setTintedLayers(layers: string[]): void
   beginTransform(elements: CanvasTransformFrame[]): void
   updateTransform(sequence: number, elements: CanvasTransformFrame[]): void
   finishTransform(): unknown
@@ -140,6 +142,7 @@ export async function createCanvas(
       cachedManifests.clear()
     },
     previewOpacity: (element, opacity) => canvas.previewOpacity(element, opacity),
+    setTintedLayers: (layers) => canvas.setTintedLayers(layers),
     beginTransform: (elements) => {
       transformSequence = 0
       canvas.beginTransform(canvasTransformFrames(elements))

@@ -128,6 +128,8 @@ pub enum Layer {
         image: Option<String>,
         name: String,
         kind: RasterLayerKind,
+        /// The layer shows only where its reveal mask is painted.
+        masked: bool,
     },
     Image {
         id: EntityId,
@@ -2007,26 +2009,48 @@ impl Project {
         if image.dimensions() != (width, height) {
             bail!("raster layer dimensions must match the page");
         }
-        let clone_source = match mode {
-            RasterStrokeMode::Clone { .. } => Some(Self::composited_page(&snapshot, page).await?),
-            _ => None,
+        let reveal = match layer {
+            Some(layer) => Self::reveal_mask(&snapshot, layer).await?,
+            None => None,
         };
-        if clone_source
-            .as_ref()
-            .is_some_and(|source| source.dimensions() != (width, height))
-        {
-            bail!("the page image dimensions must match the page");
+        let mut mask_bytes = None;
+        if let Some((mut mask, unmasked)) = reveal {
+            // On a layer with a reveal mask the Eraser reveals the layer and
+            // the Brush hides it again, like painting white or black on a
+            // Photoshop layer mask; the layer's own pixels stay as they are.
+            let mask_mode = match mode {
+                RasterStrokeMode::Erase => RasterStrokeMode::Paint,
+                RasterStrokeMode::Paint => RasterStrokeMode::Erase,
+                RasterStrokeMode::Clone { .. } => {
+                    bail!("the Clone Stamp cannot paint into a layer with a reveal mask")
+                }
+            };
+            rasterize_stroke(&mut mask, mask_mode, [255; 4], diameter, &points, None);
+            image = masked_pixels(&unmasked, &mask);
+            mask_bytes = Some(mask_png(&mask)?);
+        } else {
+            let clone_source = match mode {
+                RasterStrokeMode::Clone { .. } => {
+                    Some(Self::composited_page(&snapshot, page).await?)
+                }
+                _ => None,
+            };
+            if clone_source
+                .as_ref()
+                .is_some_and(|source| source.dimensions() != (width, height))
+            {
+                bail!("the page image dimensions must match the page");
+            }
+            rasterize_stroke(
+                &mut image,
+                mode,
+                color,
+                diameter,
+                &points,
+                clone_source.as_ref(),
+            );
         }
-        rasterize_stroke(
-            &mut image,
-            mode,
-            color,
-            diameter,
-            &points,
-            clone_source.as_ref(),
-        );
-        let mut bytes = Cursor::new(Vec::new());
-        DynamicImage::ImageRgba8(image).write_to(&mut bytes, ImageFormat::Png)?;
+        let bytes = Cursor::new(png(DynamicImage::ImageRgba8(image))?);
         let source = AssetRole::new("source")?;
         let name = format!(
             "Paint {}",
@@ -2071,24 +2095,265 @@ impl Project {
                 committed_layer = Some(layer);
                 layer
             };
-            edit.set_asset(
-                layer,
-                &source,
-                AssetInput::new(
-                    bytes.into_inner(),
-                    "image/png",
-                    AssetMetadata {
-                        width: Some(width),
-                        height: Some(height),
-                        attributes: Default::default(),
-                    },
-                ),
-            )
+            if let Some(mask) = mask_bytes.take() {
+                edit.set_asset(
+                    layer,
+                    &AssetRole::new(MASK_ROLE)?,
+                    page_png(mask, width, height),
+                )?;
+            }
+            edit.set_asset(layer, &source, page_png(bytes.into_inner(), width, height))
         })?;
         Ok((
             self.commit(patch).await?,
             committed_layer.expect("raster layer was selected or added while building the patch"),
         ))
+    }
+
+    /// A raster layer's reveal mask and its pixels before the mask, when it
+    /// has one. The mask is held as the alpha of an RGBA image so strokes
+    /// rasterize into it.
+    async fn reveal_mask(
+        snapshot: &Snapshot,
+        layer: EntityId,
+    ) -> Result<Option<(RgbaImage, RgbaImage)>> {
+        let (Some(mask), Some(unmasked)) = (
+            snapshot.asset(layer, &AssetRole::new(MASK_ROLE)?)?,
+            snapshot.asset(layer, &AssetRole::new(UNMASKED_ROLE)?)?,
+        ) else {
+            return Ok(None);
+        };
+        let luma = image::load_from_memory(&snapshot.read_blob(mask.blob).await?)?.to_luma8();
+        let mask = RgbaImage::from_fn(luma.width(), luma.height(), |x, y| {
+            image::Rgba([255, 255, 255, luma.get_pixel(x, y)[0]])
+        });
+        let unmasked =
+            image::load_from_memory(&snapshot.read_blob(unmasked.blob).await?)?.to_rgba8();
+        if mask.dimensions() != unmasked.dimensions() {
+            bail!("a reveal mask must match its layer");
+        }
+        Ok(Some((mask, unmasked)))
+    }
+
+    fn containing_page(snapshot: &Snapshot, entity: EntityId) -> Result<EntityId> {
+        let mut current = entity;
+        while snapshot.page(current).is_err() {
+            current = snapshot
+                .parent(current)?
+                .context("the layer is not on a page")?;
+        }
+        Ok(current)
+    }
+
+    /// The paint or cleanup layer `layer`, refusing scan enhancement: it
+    /// replaces the page source rather than covering part of it.
+    fn editable_raster(snapshot: &Snapshot, layer: EntityId) -> Result<SceneRasterLayer> {
+        let raster = snapshot
+            .component::<SceneRasterLayer>(layer)?
+            .context("the layer is not a paint or cleanup layer")?;
+        if raster.kind == RasterLayerKind::Enhancement {
+            bail!("scan enhancement cannot be masked, merged or duplicated");
+        }
+        Ok(raster)
+    }
+
+    /// Adds a reveal mask that hides the whole layer, or removes the mask and
+    /// shows the layer whole again (Photoshop's Layer Mask > Hide All and
+    /// Delete). The masked pixels are what `source` holds, so every consumer
+    /// of the layer sees the layer as it shows.
+    pub(crate) async fn set_reveal_mask(&mut self, layer: EntityId, enabled: bool) -> Result<Commit> {
+        let snapshot = self.snapshot();
+        let mut raster = Self::editable_raster(&snapshot, layer)?;
+        let page_value = snapshot.page(Self::containing_page(&snapshot, layer)?)?.page()?;
+        let (width, height) = (
+            page_value.width.round() as u32,
+            page_value.height.round() as u32,
+        );
+        let source_role = AssetRole::new("source")?;
+        let mask_role = AssetRole::new(MASK_ROLE)?;
+        let unmasked_role = AssetRole::new(UNMASKED_ROLE)?;
+        let reveal = Self::reveal_mask(&snapshot, layer).await?;
+        let assets = if enabled {
+            if reveal.is_some() {
+                bail!("the layer already has a reveal mask");
+            }
+            let unmasked = match snapshot.asset(layer, &source_role)? {
+                Some(asset) => snapshot.read_blob(asset.blob).await?.to_vec(),
+                None => png(DynamicImage::ImageRgba8(RgbaImage::new(width, height)))?,
+            };
+            let hidden = RgbaImage::new(width, height);
+            Some((
+                unmasked,
+                mask_png(&hidden)?,
+                png(DynamicImage::ImageRgba8(hidden))?,
+            ))
+        } else {
+            if reveal.is_none() {
+                bail!("the layer has no reveal mask");
+            }
+            None
+        };
+        let unmasked = match (&assets, snapshot.asset(layer, &unmasked_role)?) {
+            (None, Some(asset)) => Some(snapshot.read_blob(asset.blob).await?.to_vec()),
+            _ => None,
+        };
+        let patch = snapshot.patch(|edit| {
+            edit.promote_entity_to_user(layer)?;
+            raster.origin = Origin::User;
+            edit.set(layer, &raster)?;
+            match assets {
+                Some((unmasked, mask, source)) => {
+                    edit.set_asset(layer, &unmasked_role, page_png(unmasked, width, height))?;
+                    edit.set_asset(layer, &mask_role, page_png(mask, width, height))?;
+                    edit.set_asset(layer, &source_role, page_png(source, width, height))
+                }
+                None => {
+                    let unmasked = unmasked.expect("a reveal mask keeps its unmasked pixels");
+                    edit.set_asset(layer, &source_role, page_png(unmasked, width, height))?;
+                    edit.remove_asset(layer, &mask_role)?;
+                    edit.remove_asset(layer, &unmasked_role)
+                }
+            }
+        })?;
+        self.commit(patch).await
+    }
+
+    /// A copy of a paint or cleanup layer above it, with its pixels, reveal
+    /// mask and visibility (Photoshop's Duplicate Layer).
+    pub(crate) async fn duplicate_layer(&mut self, layer: EntityId) -> Result<(Commit, EntityId)> {
+        let snapshot = self.snapshot();
+        let raster = Self::editable_raster(&snapshot, layer)?;
+        let parent = snapshot
+            .parent(layer)?
+            .context("a raster layer always has a parent")?;
+        let visibility = snapshot.component::<SceneVisibility>(layer)?;
+        let mut assets = Vec::new();
+        for role in ["source", MASK_ROLE, UNMASKED_ROLE] {
+            let role = AssetRole::new(role)?;
+            if let Some(asset) = snapshot.asset(layer, &role)? {
+                let bytes = snapshot.read_blob(asset.blob).await?.to_vec();
+                assets.push((role, bytes, asset.media_type, asset.metadata));
+            }
+        }
+        let mut copy = None;
+        let patch = snapshot.patch(|edit| {
+            let entity = edit.add_entity(parent, At::After(layer))?;
+            edit.set(
+                entity,
+                &SceneRasterLayer {
+                    origin: Origin::User,
+                    name: format!("{} copy", raster.name),
+                    kind: raster.kind,
+                },
+            )?;
+            if let Some(visibility) = &visibility {
+                edit.set(
+                    entity,
+                    &SceneVisibility {
+                        origin: Origin::User,
+                        ..visibility.clone()
+                    },
+                )?;
+            }
+            for (role, bytes, media_type, metadata) in assets {
+                edit.set_asset(entity, &role, AssetInput::new(bytes, media_type, metadata))?;
+            }
+            copy = Some(entity);
+            Ok(())
+        })?;
+        Ok((
+            self.commit(patch).await?,
+            copy.expect("the copy was added while building the patch"),
+        ))
+    }
+
+    /// Merges paint and cleanup layers into the lowest of them as they show,
+    /// each at its opacity (Photoshop's Merge Layers). One layer merges down
+    /// into the raster layer right below it. Reveal masks are applied.
+    pub(crate) async fn merge_layers(&mut self, layers: Vec<EntityId>) -> Result<(Commit, EntityId)> {
+        let snapshot = self.snapshot();
+        let first = *layers.first().context("select the layers to merge")?;
+        let parent = snapshot
+            .parent(first)?
+            .context("a raster layer always has a parent")?;
+        let siblings = snapshot.children(parent)?.collect::<Vec<_>>();
+        let mut merged = layers.clone();
+        if let [layer] = layers.as_slice() {
+            let position = siblings
+                .iter()
+                .position(|candidate| candidate == layer)
+                .context("the layer is not on the page")?;
+            let below = position
+                .checked_sub(1)
+                .map(|index| siblings[index])
+                .filter(|below| {
+                    Self::editable_raster(&snapshot, *below).is_ok()
+                })
+                .context("there is no paint or cleanup layer right below to merge into")?;
+            merged.push(below);
+        }
+        if merged.iter().collect::<HashSet<_>>().len() != merged.len() {
+            bail!("a layer is selected twice");
+        }
+        for layer in &merged {
+            Self::editable_raster(&snapshot, *layer)?;
+            if snapshot.parent(*layer)? != Some(parent) {
+                bail!("merged layers must be in the same group");
+            }
+            if !Self::layer_visibility(&snapshot, *layer)?.visible {
+                bail!("show every layer before merging it");
+            }
+        }
+        // Children run bottom to top, so the first is the one merged into.
+        merged.sort_by_key(|layer| siblings.iter().position(|candidate| candidate == layer));
+        let target = merged[0];
+        let mut target_raster = Self::editable_raster(&snapshot, target)?;
+        let page_value = snapshot.page(Self::containing_page(&snapshot, target)?)?.page()?;
+        let (width, height) = (
+            page_value.width.round() as u32,
+            page_value.height.round() as u32,
+        );
+        let source_role = AssetRole::new("source")?;
+        let mut composite = RgbaImage::new(width, height);
+        for layer in &merged {
+            let Some(asset) = snapshot.asset(*layer, &source_role)? else {
+                continue;
+            };
+            let mut image =
+                image::load_from_memory(&snapshot.read_blob(asset.blob).await?)?.to_rgba8();
+            if image.dimensions() != (width, height) {
+                bail!("raster layer dimensions must match the page");
+            }
+            let opacity = Self::layer_visibility(&snapshot, *layer)?.opacity as f32;
+            if opacity < 1.0 {
+                for pixel in image.pixels_mut() {
+                    pixel[3] = (f32::from(pixel[3]) * opacity).round() as u8;
+                }
+            }
+            image::imageops::overlay(&mut composite, &image, 0, 0);
+        }
+        let bytes = png(DynamicImage::ImageRgba8(composite))?;
+        let patch = snapshot.patch(|edit| {
+            edit.promote_entity_to_user(target)?;
+            target_raster.origin = Origin::User;
+            edit.set(target, &target_raster)?;
+            edit.set(
+                target,
+                &SceneVisibility {
+                    origin: Origin::User,
+                    visible: true,
+                    opacity: 1.0,
+                },
+            )?;
+            edit.set_asset(target, &source_role, page_png(bytes, width, height))?;
+            edit.remove_asset(target, &AssetRole::new(MASK_ROLE)?)?;
+            edit.remove_asset(target, &AssetRole::new(UNMASKED_ROLE)?)?;
+            for layer in &merged[1..] {
+                edit.remove_entity(*layer, RemovePolicy::Cascade)?;
+            }
+            Ok(())
+        })?;
+        Ok((self.commit(patch).await?, target))
     }
 
     /// The page as it shows without text: the visible scan enhancement or the
@@ -2478,6 +2743,7 @@ impl Project {
                 image: Self::asset_id(snapshot, layer, "source")?,
                 name: raster.name,
                 kind: raster.kind,
+                masked: snapshot.asset(layer, &AssetRole::new(MASK_ROLE)?)?.is_some(),
             });
         }
         let geometry = snapshot
@@ -2773,6 +3039,46 @@ fn validate_project_name(name: &str) -> Result<String> {
         bail!("project name is reserved by Windows");
     }
     Ok(name.to_owned())
+}
+
+/// Asset roles of a raster layer with a reveal mask: the mask, and the
+/// layer's pixels before it. `source` holds the masked result.
+pub(crate) const MASK_ROLE: &str = "mask";
+pub(crate) const UNMASKED_ROLE: &str = "unmasked";
+
+fn png(image: DynamicImage) -> Result<Vec<u8>> {
+    let mut bytes = Cursor::new(Vec::new());
+    image.write_to(&mut bytes, ImageFormat::Png)?;
+    Ok(bytes.into_inner())
+}
+
+fn page_png(bytes: Vec<u8>, width: u32, height: u32) -> AssetInput {
+    AssetInput::new(
+        bytes,
+        "image/png",
+        AssetMetadata {
+            width: Some(width),
+            height: Some(height),
+            attributes: Default::default(),
+        },
+    )
+}
+
+/// A reveal mask, held as the alpha of `mask`, stored as a grey image.
+fn mask_png(mask: &RgbaImage) -> Result<Vec<u8>> {
+    png(DynamicImage::ImageLuma8(image::GrayImage::from_fn(
+        mask.width(),
+        mask.height(),
+        |x, y| image::Luma([mask.get_pixel(x, y)[3]]),
+    )))
+}
+
+fn masked_pixels(unmasked: &RgbaImage, mask: &RgbaImage) -> RgbaImage {
+    let mut image = unmasked.clone();
+    for (pixel, mask) in image.pixels_mut().zip(mask.pixels()) {
+        pixel[3] = ((u16::from(pixel[3]) * u16::from(mask[3]) + 127) / 255) as u8;
+    }
+    image
 }
 
 fn rasterize_stroke(
@@ -3448,6 +3754,100 @@ mod tests {
                 .value()
                 .target,
             content
+        );
+    }
+
+    #[tokio::test]
+    async fn reveal_mask_strokes_then_duplicate_and_merge_show_what_was_revealed() {
+        let mut session = Session::memory().await.unwrap();
+        let mut setup = session.snapshot().edit();
+        let page = setup
+            .add_page(PageDraft::new("page", 8.0, 8.0), At::End)
+            .unwrap();
+        session.commit(setup.finish().unwrap()).await.unwrap();
+        let mut project = Project::new(session, "test".to_owned());
+        let mut source = Cursor::new(Vec::new());
+        DynamicImage::ImageRgba8(RgbaImage::from_pixel(8, 8, image::Rgba([200, 10, 10, 255])))
+            .write_to(&mut source, ImageFormat::Png)
+            .unwrap();
+        let data_url = format!(
+            "data:image/png;base64,{}",
+            STANDARD.encode(source.into_inner())
+        );
+        let (commit, cleanup) = project.import_cleanup_image(page, data_url).await.unwrap();
+        project.record_commit(&commit);
+        let pixels = |project: &Project, layer: EntityId| {
+            let snapshot = project.snapshot();
+            async move {
+                let asset = snapshot
+                    .asset(layer, &AssetRole::new("source").unwrap())
+                    .unwrap()
+                    .unwrap();
+                image::load_from_memory(&snapshot.read_blob(asset.blob).await.unwrap())
+                    .unwrap()
+                    .to_rgba8()
+            }
+        };
+
+        let commit = project.set_reveal_mask(cleanup, true).await.unwrap();
+        project.record_commit(&commit);
+        assert!(pixels(&project, cleanup).await.pixels().all(|pixel| pixel[3] == 0));
+
+        // The Eraser reveals the layer's own pixels; the Brush hides them again.
+        let stroke = |mode, x| (mode, vec![ScenePoint { x, y: 4.5 }]);
+        for (mode, points) in [
+            stroke(RasterStrokeMode::Erase, 2.5),
+            stroke(RasterStrokeMode::Erase, 6.5),
+            stroke(RasterStrokeMode::Paint, 6.5),
+        ] {
+            let (commit, layer) = project
+                .apply_raster_stroke(page, Some(cleanup), mode, [0, 0, 255, 255], 2.0, points)
+                .await
+                .unwrap();
+            project.record_commit(&commit);
+            assert_eq!(layer, cleanup);
+        }
+        let masked = pixels(&project, cleanup).await;
+        assert_eq!(masked.get_pixel(2, 4).0, [200, 10, 10, 255]);
+        assert_eq!(masked.get_pixel(6, 4)[3], 0);
+        assert_eq!(masked.get_pixel(0, 0)[3], 0);
+
+        let (commit, copy) = project.duplicate_layer(cleanup).await.unwrap();
+        project.record_commit(&commit);
+        assert_eq!(pixels(&project, copy).await, masked);
+        let siblings = project.snapshot().children(page).unwrap().collect::<Vec<_>>();
+        assert_eq!(
+            siblings.iter().position(|layer| *layer == copy),
+            siblings.iter().position(|layer| *layer == cleanup).map(|index| index + 1),
+            "the copy goes right above its layer"
+        );
+
+        // Merging the copy down bakes the mask into one unmasked layer.
+        let (commit, merged) = project.merge_layers(vec![copy]).await.unwrap();
+        project.record_commit(&commit);
+        assert_eq!(merged, cleanup);
+        let snapshot = project.snapshot();
+        assert!(snapshot.entity(copy).is_err());
+        assert!(
+            snapshot
+                .asset(cleanup, &AssetRole::new(MASK_ROLE).unwrap())
+                .unwrap()
+                .is_none()
+        );
+        let flattened = pixels(&project, cleanup).await;
+        assert_eq!(flattened.get_pixel(2, 4).0, [200, 10, 10, 255]);
+        assert_eq!(flattened.get_pixel(6, 4)[3], 0);
+        assert_eq!(flattened.get_pixel(0, 0)[3], 0);
+
+        project.undo().await.unwrap();
+        project.undo().await.unwrap();
+        let commit = project.set_reveal_mask(cleanup, false).await.unwrap();
+        project.record_commit(&commit);
+        assert!(
+            pixels(&project, cleanup)
+                .await
+                .pixels()
+                .all(|pixel| pixel.0 == [200, 10, 10, 255])
         );
     }
 

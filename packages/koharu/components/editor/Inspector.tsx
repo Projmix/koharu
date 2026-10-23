@@ -6,11 +6,14 @@ import {
   AlignLeft,
   AlignRight,
   ArrowDown,
+  ArrowDownToLine,
   ArrowRightLeft,
   ArrowUp,
   Brush,
   ChevronDown,
   ChevronRight,
+  Copy,
+  Droplet,
   Eye,
   EyeOff,
   Folder,
@@ -59,6 +62,14 @@ import {
   useFonts,
   usePage,
 } from '@/lib/queries'
+import {
+  duplicateLayer,
+  isEditableRaster,
+  mergeLayers,
+  type RasterLayer,
+  setRevealMask,
+  toggleLayerTint,
+} from '@/lib/rasterLayers'
 import { useKoharuStore } from '@/lib/store'
 import { previewCanvasOpacity } from '@koharu/bridge/canvas'
 import {
@@ -1334,6 +1345,74 @@ function InlineText({
   )
 }
 
+/**
+ * Duplicate, Merge Down, the reveal mask and the view-only red tint of a
+ * paint or cleanup layer.
+ */
+function RasterLayerActions({ layer }: { layer: RasterLayer }) {
+  const { t } = useTranslation()
+  const name = localizedLayerName(layer, 0, t)
+  const tinted = useKoharuStore((state) => state.tintedLayers.includes(layer.id))
+  const iconAction = (label: string, icon: React.ReactNode, onClick: () => void) => (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            type='button'
+            variant='ghost'
+            size='icon-xs'
+            aria-label={label}
+            className='size-5 rounded-md text-muted-foreground hover:text-foreground'
+            onClick={onClick}
+          />
+        }
+      >
+        {icon}
+      </TooltipTrigger>
+      <TooltipContent side='left'>{label}</TooltipContent>
+    </Tooltip>
+  )
+  return (
+    <div className='flex min-w-0 flex-wrap items-center gap-1'>
+      {iconAction(t('layers.duplicate', { name }), <Copy className='size-3' />, () =>
+        duplicateLayer(layer.id),
+      )}
+      {iconAction(t('layers.mergeDown', { name }), <ArrowDownToLine className='size-3' />, () =>
+        mergeLayers([layer.id]),
+      )}
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              type='button'
+              size='xs'
+              variant={layer.masked ? 'secondary' : 'ghost'}
+              aria-pressed={layer.masked}
+              onClick={() => setRevealMask(layer.id, !layer.masked)}
+            />
+          }
+        >
+          <SquareDashed className='size-3' />
+          {t('layers.revealMask')}
+        </TooltipTrigger>
+        <TooltipContent side='left' className='max-w-56'>
+          {t('layers.revealMaskHint')}
+        </TooltipContent>
+      </Tooltip>
+      <Button
+        type='button'
+        size='xs'
+        variant={tinted ? 'secondary' : 'ghost'}
+        aria-pressed={tinted}
+        onClick={() => toggleLayerTint(layer.id)}
+      >
+        <Droplet className='size-3 text-red-500' />
+        {t('layers.tint')}
+      </Button>
+    </div>
+  )
+}
+
 function LayerEditor({ layer, onDelete }: { layer: Layer; onDelete?: () => void }) {
   const { t } = useTranslation()
   const translationInput = useRef<HTMLTextAreaElement>(null)
@@ -1419,6 +1498,7 @@ function LayerEditor({ layer, onDelete }: { layer: Layer; onDelete?: () => void 
           </Tooltip>
         )}
       </div>
+      {isEditableRaster(layer) && <RasterLayerActions layer={layer} />}
       {isTextLayer(layer) && (
         <>
           {layer.content.source_region && (

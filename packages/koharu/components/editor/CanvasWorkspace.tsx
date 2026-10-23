@@ -39,6 +39,7 @@ import {
   usePage,
   usePages,
 } from '@/lib/queries'
+import { runLayerShortcut } from '@/lib/rasterLayers'
 import {
   isBrushTool,
   maxBrushDiameter,
@@ -56,6 +57,7 @@ import {
 import {
   commands,
   type Frame,
+  type Layer,
   type Page,
   type Point,
   type TextClipboardPayload,
@@ -100,6 +102,8 @@ type Gesture =
     }
   | StrokeGesture
 
+type RasterLayer = Extract<Layer, { type: 'raster' }>
+
 interface StrokeGesture {
   kind: 'paint' | 'erase' | 'inpaint' | 'clone'
   pointer: number
@@ -110,6 +114,8 @@ interface StrokeGesture {
   color?: CanvasColor
   /** Page offset from a Clone Stamp stroke to the pixels it copies. */
   offset?: Point
+  /** An Eraser stroke that reveals a layer through its reveal mask. */
+  reveal?: boolean
 }
 
 interface CanvasView {
@@ -231,12 +237,15 @@ export function CanvasWorkspace() {
   const pageHeight = canvasSize[1] || page?.size.height
   const selectedRaster =
     selected.length === 1
-      ? page?.layers.find((layer) => layer.id === selected[0] && layer.type === 'raster')
+      ? page?.layers.find(
+          (layer): layer is RasterLayer => layer.id === selected[0] && layer.type === 'raster',
+        )
       : undefined
   const eraserRaster =
     selectedRaster ??
     page?.layers.find(
-      (layer) => layer.type === 'raster' && layer.kind === 'cleanup' && layer.visibility.visible,
+      (layer): layer is RasterLayer =>
+        layer.type === 'raster' && layer.kind === 'cleanup' && layer.visibility.visible,
     )
 
   const enqueue = useCallback(<Result,>(operation: () => Promise<Result>): Promise<Result> => {
@@ -462,6 +471,7 @@ export function CanvasWorkspace() {
     ) {
       strokeUpdates.clear()
       canvas?.cancelStroke()
+      setCloneStroke(null)
     }
     if (transformActive.current) {
       transformUpdates.clear()
@@ -597,6 +607,12 @@ export function CanvasWorkspace() {
     }
   }, [canvas, page, canvasState.status, canvasState.generation, canvasRevision, cleanupOpacity])
 
+  const tintedLayers = useKoharuStore((state) => state.tintedLayers)
+  useEffect(() => {
+    if (!canvas || canvasState.status !== 'ready') return
+    canvas.setTintedLayers(tintedLayers)
+  }, [canvas, canvasState.status, tintedLayers])
+
   useEffect(() => {
     if (pendingPage && pendingPage === canvasPage) useKoharuStore.setState({ pendingPage: null })
   }, [canvasPage, pendingPage])
@@ -698,6 +714,17 @@ export function CanvasWorkspace() {
         void enqueueHistory(historyKey === 'y' || event.shiftKey ? 'redo' : 'undo').catch(
           () => undefined,
         )
+        return
+      }
+      if (
+        command &&
+        !event.altKey &&
+        !event.shiftKey &&
+        (event.code === 'KeyJ' || event.code === 'KeyE') &&
+        runLayerShortcut(event.code === 'KeyJ' ? 'j' : 'e')
+      ) {
+        event.preventDefault()
+        event.stopPropagation()
         return
       }
       if (command && !event.altKey && event.key.toLowerCase() === 'a' && page) {
@@ -975,6 +1002,13 @@ export function CanvasWorkspace() {
           diameter: current.diameter,
           offset: current.offset!,
         })
+      } else if (current.reveal) {
+        setCloneStroke({
+          points: [...current.points],
+          diameter: current.diameter,
+          offset: { x: 0, y: 0 },
+          reveal: current.layer!,
+        })
       } else {
         strokeUpdates.schedule({ kind: current.kind, points })
       }
@@ -1035,7 +1069,7 @@ export function CanvasWorkspace() {
     ) {
       strokeUpdates.commit()
       try {
-        if (current.kind !== 'clone') canvas?.finishStroke()
+        if (current.kind !== 'clone' && !current.reveal) canvas?.finishStroke()
       } catch (error) {
         canvas?.cancelStroke()
         receiveError(errorMessage(error))
@@ -1231,13 +1265,24 @@ export function CanvasWorkspace() {
                 color,
               }
               try {
-                canvas.beginStroke({
-                  kind: 'paint',
-                  layer: selectedRaster?.id ?? null,
-                  point,
-                  diameter: brush.diameter,
-                  color,
-                })
+                // On a reveal mask the Brush hides the layer, so it previews
+                // as erasing that layer.
+                canvas.beginStroke(
+                  selectedRaster?.masked
+                    ? {
+                        kind: 'erase',
+                        layer: selectedRaster.id,
+                        point,
+                        diameter: brush.diameter,
+                      }
+                    : {
+                        kind: 'paint',
+                        layer: selectedRaster?.id ?? null,
+                        point,
+                        diameter: brush.diameter,
+                        color,
+                      },
+                )
               } catch (error) {
                 gesture.current = null
                 receiveError(errorMessage(error))
@@ -1255,6 +1300,18 @@ export function CanvasWorkspace() {
                 layer: eraserRaster.id,
                 points: [point],
                 diameter: brush.diameter,
+                reveal: eraserRaster.masked,
+              }
+              // On a reveal mask the Eraser reveals the layer; ClonePreview
+              // shows the revealed pixels until the committed frame does.
+              if (eraserRaster.masked) {
+                setCloneStroke({
+                  points: [point],
+                  diameter: brush.diameter,
+                  offset: { x: 0, y: 0 },
+                  reveal: eraserRaster.id,
+                })
+                return
               }
               try {
                 canvas.beginStroke({

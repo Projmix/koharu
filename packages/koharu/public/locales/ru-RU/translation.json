@@ -332,7 +332,12 @@
     "sourceLabel": "Исходный текст {{name}}",
     "textName": "Текст {{index}}",
     "title": "Слои",
-    "translationLabel": "Перевод {{name}}"
+    "translationLabel": "Перевод {{name}}",
+    "duplicate": "Дублировать {{name}}",
+    "mergeDown": "Объединить {{name}} с нижним",
+    "revealMask": "Обратная маска",
+    "revealMaskHint": "Скрыть весь слой и показывать его только там, где проведён Ластик; Кисть снова скрывает.",
+    "tint": "Красный оттенок"
   },
   "menu": {
     "about": "О программе",
@@ -360,7 +365,10 @@
     "undo": "Отменить",
     "view": "Вид",
     "pagesPanel": "Панель страниц",
-    "inspectorPanel": "Боковая панель"
+    "inspectorPanel": "Боковая панель",
+    "duplicateLayer": "Дублировать слой",
+    "mergeLayers": "Объединить слои",
+    "mergeDown": "Объединить с нижним"
   },
   "versions": {
     "delete": "Удалить",

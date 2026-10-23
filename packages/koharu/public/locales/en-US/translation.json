@@ -332,7 +332,12 @@
     "sourceLabel": "{{name}} source text",
     "textName": "Text {{index}}",
     "title": "Layers",
-    "translationLabel": "{{name}} translation"
+    "translationLabel": "{{name}} translation",
+    "duplicate": "Duplicate {{name}}",
+    "mergeDown": "Merge {{name}} down",
+    "revealMask": "Reveal mask",
+    "revealMaskHint": "Hide the whole layer and show it only where you use the Eraser; the Brush hides it again.",
+    "tint": "Tint red"
   },
   "menu": {
     "about": "About",
@@ -360,7 +365,10 @@
     "undo": "Undo",
     "view": "View",
     "pagesPanel": "Pages panel",
-    "inspectorPanel": "Side panel"
+    "inspectorPanel": "Side panel",
+    "duplicateLayer": "Duplicate layer",
+    "mergeLayers": "Merge layers",
+    "mergeDown": "Merge down"
   },
   "versions": {
     "delete": "Delete",

@@ -332,7 +332,12 @@
     "sourceLabel": "{{name}} 个原文",
     "textName": "文本 {{index}}",
     "title": "图层",
-    "translationLabel": "{{name}} 个译文"
+    "translationLabel": "{{name}} 个译文",
+    "duplicate": "复制 {{name}}",
+    "mergeDown": "拿 {{name}} 向下合并",
+    "revealMask": "显示蒙版",
+    "revealMaskHint": "隐藏整个图层，只拉橡皮擦擦过个地方显示；画笔再隐藏。",
+    "tint": "红色着色"
   },
   "menu": {
     "about": "关于",
@@ -360,7 +365,10 @@
     "undo": "撤销",
     "view": "视图",
     "pagesPanel": "页面面板",
-    "inspectorPanel": "侧边面板"
+    "inspectorPanel": "侧边面板",
+    "duplicateLayer": "复制图层",
+    "mergeLayers": "合并图层",
+    "mergeDown": "向下合并"
   },
   "versions": {
     "delete": "删除",

@@ -78,6 +78,12 @@ export const commands = {
 	setGeometry: (updates: GeometryUpdate[]) => __TAURI_INVOKE<null>("set_geometry", { updates: updates.map(i=>({...i,points:i.points==null?i.points:i.points.map(i=>i)})) }),
 	setVisibility: (layers: EntityId[], visible: boolean | null, opacity: number | null) => __TAURI_INVOKE<null>("set_visibility", { layers, visible, opacity: opacity==null?opacity:opacity }),
 	deleteLayers: (layers: EntityId[]) => __TAURI_INVOKE<null>("delete_layers", { layers }),
+	/**  Adds a reveal mask that hides the whole layer, or removes it. */
+	setRevealMask: (layer: EntityId, enabled: boolean) => __TAURI_INVOKE<null>("set_reveal_mask", { layer, enabled }),
+	/**  Copies a paint or cleanup layer above itself; returns the copy. */
+	duplicateLayer: (layer: EntityId) => __TAURI_INVOKE<EntityId>("duplicate_layer", { layer }),
+	/**  Merges paint and cleanup layers, or one layer down; returns the result. */
+	mergeLayers: (layers: EntityId[]) => __TAURI_INVOKE<EntityId>("merge_layers", { layers }),
 	moveLayer: (layer: EntityId, parent: EntityId, index: number) => __TAURI_INVOKE<Page>("move_layer", { layer, parent, index }).then((v) => (({...v,layers:v.layers.map(i=>i),regions:v.regions.map(i=>({...i,geometry:({...i.geometry,points:i.geometry.points.map(i=>i)})})),unboxed_text:v.unboxed_text.map(i=>i)}) as typeof v)),
 	reorderLayers: (parent: EntityId, order: EntityId[]) => __TAURI_INVOKE<Page>("reorder_layers", { parent, order }).then((v) => (({...v,layers:v.layers.map(i=>i),regions:v.regions.map(i=>({...i,geometry:({...i.geometry,points:i.geometry.points.map(i=>i)})})),unboxed_text:v.unboxed_text.map(i=>i)}) as typeof v)),
 	undo: () => __TAURI_INVOKE<null>("undo"),
@@ -131,6 +137,11 @@ export const commands = {
 	 *  Stamp copies from, for its live preview.
 	 */
 	getCloneSource: (page: EntityId) => __TAURI_INVOKE<ImageBytes>("get_clone_source", { page }),
+	/**
+	 *  A masked layer's pixels before its reveal mask, PNG encoded: what the
+	 *  Eraser reveals, for its live preview.
+	 */
+	getUnmaskedLayer: (layer: EntityId) => __TAURI_INVOKE<ImageBytes>("get_unmasked_layer", { layer }),
 	importCleanupImage: (dataUrl: string) => __TAURI_INVOKE<LayerCommit>("import_cleanup_image", { dataUrl }),
 	commitTransform: (expectedRevision: Revision, elements: TransformFrame[]) => __TAURI_INVOKE<number | null>("commit_transform", { expectedRevision, elements }).then((v) => (v==null?v:v as typeof v)),
 	commitInpaint: (expectedRevision: Revision, points: Point[], diameter: number) => __TAURI_INVOKE<string | null>("commit_inpaint", { expectedRevision, points: points.map(i=>i), diameter }),
@@ -485,7 +496,9 @@ export type LanguageChoice = {
 	name: string,
 };
 
-export type Layer = { type: "group"; id: EntityId; parent: EntityId | null; visibility: LayerVisibility; name: string; role: GroupRole | null } | { type: "text"; id: EntityId; parent: EntityId | null; geometry: Geometry | null; angle_degrees: number | null; visibility: LayerVisibility; content: TextContent; typography: Typography | null; layout: TextLayoutKind; automatic_region: EntityId | null } | { type: "raster"; id: EntityId; parent: EntityId | null; visibility: LayerVisibility; image: string | null; name: string; kind: RasterLayerKind } | { type: "image"; id: EntityId; parent: EntityId | null; geometry: Geometry; visibility: LayerVisibility; image: string } | { type: "artwork"; id: EntityId; parent: EntityId | null; geometry: Geometry; visibility: LayerVisibility; image: string };
+export type Layer = { type: "group"; id: EntityId; parent: EntityId | null; visibility: LayerVisibility; name: string; role: GroupRole | null } | { type: "text"; id: EntityId; parent: EntityId | null; geometry: Geometry | null; angle_degrees: number | null; visibility: LayerVisibility; content: TextContent; typography: Typography | null; layout: TextLayoutKind; automatic_region: EntityId | null } | { type: "raster"; id: EntityId; parent: EntityId | null; visibility: LayerVisibility; image: string | null; name: string; kind: RasterLayerKind; 
+/**  The layer shows only where its reveal mask is painted. */
+masked: boolean } | { type: "image"; id: EntityId; parent: EntityId | null; geometry: Geometry; visibility: LayerVisibility; image: string } | { type: "artwork"; id: EntityId; parent: EntityId | null; geometry: Geometry; visibility: LayerVisibility; image: string };
 
 export type LayerCommit = {
 	revision: Revision,

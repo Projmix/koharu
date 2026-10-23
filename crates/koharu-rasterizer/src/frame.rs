@@ -107,6 +107,7 @@ impl Frame {
                         transform: outer * layer.placement(),
                         opacity: presentation.opacity.clamp(0.0, 1.0),
                         erase: false,
+                        tint: false,
                     }));
                 }
             } else {

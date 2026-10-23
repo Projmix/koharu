@@ -108,6 +108,8 @@ interface KoharuStore {
   cloneOpacity: number
   /** Display-only opacity of the page's cleanup layers, for seeing what was cleaned. */
   cleanupOpacity: number
+  /** Raster layers the canvas tints red so their pixels stand out; display only. */
+  tintedLayers: EntityId[]
   shortcuts: Shortcuts
   selectPages: (pages: EntityId[]) => void
   showInspector: (section: InspectorSection) => void
@@ -175,6 +177,7 @@ export const useKoharuStore = create<KoharuStore>()((set) => ({
   compareOriginal: false,
   panels: { pages: true, inspector: true },
   cleanupOpacity: 1,
+  tintedLayers: [],
   cloneSource: null,
   cloneOpacity: 1,
   shortcuts: defaultShortcuts,

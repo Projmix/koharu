@@ -17,6 +17,7 @@ const canvas = vi.hoisted(() => ({
   activatePage: vi.fn(),
   clear: vi.fn(),
   previewOpacity: vi.fn(),
+  setTintedLayers: vi.fn(),
   beginTransform: vi.fn(),
   updateTransform: vi.fn(),
   finishTransform: vi.fn(),
@@ -71,6 +72,7 @@ const paintLayer: Layer = {
   image: 'paint-image',
   name: 'Paint 1',
   kind: 'paint',
+  masked: false,
 }
 
 const cleanupLayer: Layer = {
@@ -81,6 +83,7 @@ const cleanupLayer: Layer = {
   image: 'cleanup-image',
   name: 'Cleanup',
   kind: 'cleanup',
+  masked: false,
 }
 
 let nextAnimationFrame = 1

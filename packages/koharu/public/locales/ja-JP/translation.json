@@ -332,7 +332,12 @@
     "sourceLabel": "{{name}}の原文",
     "textName": "テキスト {{index}}",
     "title": "レイヤー",
-    "translationLabel": "{{name}}の翻訳"
+    "translationLabel": "{{name}}の翻訳",
+    "duplicate": "{{name}} を複製",
+    "mergeDown": "{{name}} を下に結合",
+    "revealMask": "表示マスク",
+    "revealMaskHint": "レイヤー全体を隠し、消しゴムでなぞった所だけ表示します。ブラシで再び隠します。",
+    "tint": "赤く着色"
   },
   "menu": {
     "about": "Koharuについて",
@@ -360,7 +365,10 @@
     "undo": "元に戻す",
     "view": "表示",
     "pagesPanel": "ページパネル",
-    "inspectorPanel": "サイドパネル"
+    "inspectorPanel": "サイドパネル",
+    "duplicateLayer": "レイヤーを複製",
+    "mergeLayers": "レイヤーを結合",
+    "mergeDown": "下のレイヤーと結合"
   },
   "versions": {
     "delete": "削除",

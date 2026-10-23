@@ -195,6 +195,7 @@ impl Rasterizer {
                         transform: transform * draw.transform,
                         opacity: draw.opacity,
                         erase: draw.erase,
+                        tint: draw.tint,
                     }),
                     CompositionCommand::Vector(scene) => {
                         let mut scaled = Scene::new();

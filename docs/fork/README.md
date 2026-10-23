@@ -114,6 +114,15 @@ Known gaps after the rebuild:
   seed ([cleaning-models.ru.md](cleaning-models.ru.md)).
 - Manual translation, chapter translation presets and unit policy, paste of
   text blocks, page duplication.
+- Paint and cleanup layers can be duplicated (Ctrl+J), merged down or
+  merged together as they show (Ctrl+E; masks and opacity are baked in,
+  hidden layers are refused), and given a reveal mask, Photoshop's Layer
+  Mask > Hide All: the layer then shows only where the Eraser passes, and
+  the Brush hides it again. The mask and the unmasked pixels are extra
+  assets (`mask`, `unmasked`); `source` holds the masked result, so render,
+  export, Clone Stamp and cleaning read the layer as it shows. Removing the
+  mask restores the whole layer. A red tint per layer is a canvas view
+  choice only; exports never carry it.
 - Fork updater against `Projmix/koharu` releases (`docs/fork-releases.md`).
 - Research notes in `docs/research/` and plans in `docs/superpowers/plans/`.
 - Scan enhancement stage before detection, run only when selected:

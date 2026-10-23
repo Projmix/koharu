@@ -332,7 +332,12 @@
     "sourceLabel": "Texto original de {{name}}",
     "textName": "Texto {{index}}",
     "title": "Capas",
-    "translationLabel": "Traducción de {{name}}"
+    "translationLabel": "Traducción de {{name}}",
+    "duplicate": "Duplicar {{name}}",
+    "mergeDown": "Combinar {{name}} hacia abajo",
+    "revealMask": "Máscara de revelado",
+    "revealMaskHint": "Oculta toda la capa y muéstrala solo donde uses el Borrador; el Pincel la vuelve a ocultar.",
+    "tint": "Tinte rojo"
   },
   "menu": {
     "about": "Acerca de",
@@ -360,7 +365,10 @@
     "undo": "Deshacer",
     "view": "Ver",
     "pagesPanel": "Panel de páginas",
-    "inspectorPanel": "Panel lateral"
+    "inspectorPanel": "Panel lateral",
+    "duplicateLayer": "Duplicar capa",
+    "mergeLayers": "Combinar capas",
+    "mergeDown": "Combinar hacia abajo"
   },
   "versions": {
     "delete": "Eliminar",

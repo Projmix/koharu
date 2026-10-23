@@ -332,7 +332,12 @@
     "sourceLabel": "{{name}} 원문",
     "textName": "텍스트 {{index}}",
     "title": "레이어",
-    "translationLabel": "{{name}} 번역"
+    "translationLabel": "{{name}} 번역",
+    "duplicate": "{{name}} 복제",
+    "mergeDown": "{{name}} 아래로 병합",
+    "revealMask": "표시 마스크",
+    "revealMaskHint": "레이어 전체를 숨기고 지우개로 칠한 곳에만 보이게 합니다. 브러시로 다시 숨깁니다.",
+    "tint": "빨간색 틴트"
   },
   "menu": {
     "about": "정보",
@@ -360,7 +365,10 @@
     "undo": "실행 취소",
     "view": "보기",
     "pagesPanel": "페이지 패널",
-    "inspectorPanel": "사이드 패널"
+    "inspectorPanel": "사이드 패널",
+    "duplicateLayer": "레이어 복제",
+    "mergeLayers": "레이어 병합",
+    "mergeDown": "아래 레이어와 병합"
   },
   "versions": {
     "delete": "삭제",

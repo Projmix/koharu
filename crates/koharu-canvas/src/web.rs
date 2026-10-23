@@ -472,6 +472,8 @@ struct CanvasState {
     camera: Camera,
     workspace_color: [u8; 4],
     opacity: HashMap<LayerId, f32>,
+    /// Raster layers the editor shows tinted red; a view choice, never exported.
+    tinted: HashSet<LayerId>,
     transform: Option<TransformEdit>,
     stroke: Option<StrokeEdit>,
     dirty: bool,
@@ -493,6 +495,7 @@ impl CanvasState {
             camera: Camera::default(),
             workspace_color: [245, 245, 245, 255],
             opacity: HashMap::new(),
+            tinted: HashSet::new(),
             transform: None,
             stroke: None,
             dirty: true,
@@ -846,6 +849,7 @@ impl CanvasState {
                         transform: camera * transform * layer.placement(),
                         opacity: presentation.opacity.clamp(0.0, 1.0),
                         erase: erase.and_then(|edit| edit.layer) == Some(layer.id()),
+                        tint: self.tinted.contains(&layer.id()),
                     }));
                 }
             } else {
@@ -1332,6 +1336,21 @@ impl WebCanvas {
         self.browser_mut()?.canvas.clear();
         self.shared.present()?;
         Ok(())
+    }
+
+    #[wasm_bindgen(js_name = setTintedLayers)]
+    pub fn set_tinted_layers(&self, layers: Vec<String>) -> Result<(), JsValue> {
+        let tinted = layers
+            .iter()
+            .map(|layer| parse_layer_id(layer))
+            .collect::<Result<HashSet<_>, _>>()?;
+        let mut browser = self.browser_mut()?;
+        if browser.canvas.tinted != tinted {
+            browser.canvas.tinted = tinted;
+            browser.canvas.dirty = true;
+        }
+        drop(browser);
+        self.request_render()
     }
 
     #[wasm_bindgen(js_name = previewOpacity)]

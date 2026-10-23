@@ -437,6 +437,70 @@ pub(crate) async fn delete_layers(
     Ok(())
 }
 
+/// Adds a reveal mask that hides the whole layer, or removes it.
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn set_reveal_mask(
+    layer: EntityId,
+    enabled: bool,
+    desktop: State<'_, Desktop>,
+    project: State<'_, CurrentProject>,
+    canvas_channel: State<'_, CanvasChannel>,
+) -> Result<(), Error> {
+    let (commit, page) = {
+        let mut project = project.project.lock().await;
+        let project = project.as_mut().context("no project is open")?;
+        let commit = project.set_reveal_mask(layer, enabled).await?;
+        project.record_commit(&commit);
+        (commit, project.active_page())
+    };
+    let canvas = synchronize_canvas(&desktop, &commit, page).await?;
+    canvas_channel.channel.publish(canvas);
+    Ok(())
+}
+
+/// Copies a paint or cleanup layer above itself; returns the copy.
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn duplicate_layer(
+    layer: EntityId,
+    desktop: State<'_, Desktop>,
+    project: State<'_, CurrentProject>,
+    canvas_channel: State<'_, CanvasChannel>,
+) -> Result<EntityId, Error> {
+    let (commit, page, copy) = {
+        let mut project = project.project.lock().await;
+        let project = project.as_mut().context("no project is open")?;
+        let (commit, copy) = project.duplicate_layer(layer).await?;
+        project.record_commit(&commit);
+        (commit, project.active_page(), copy)
+    };
+    let canvas = synchronize_canvas(&desktop, &commit, page).await?;
+    canvas_channel.channel.publish(canvas);
+    Ok(copy)
+}
+
+/// Merges paint and cleanup layers, or one layer down; returns the result.
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn merge_layers(
+    layers: Vec<EntityId>,
+    desktop: State<'_, Desktop>,
+    project: State<'_, CurrentProject>,
+    canvas_channel: State<'_, CanvasChannel>,
+) -> Result<EntityId, Error> {
+    let (commit, page, merged) = {
+        let mut project = project.project.lock().await;
+        let project = project.as_mut().context("no project is open")?;
+        let (commit, merged) = project.merge_layers(layers).await?;
+        project.record_commit(&commit);
+        (commit, project.active_page(), merged)
+    };
+    let canvas = synchronize_canvas(&desktop, &commit, page).await?;
+    canvas_channel.channel.publish(canvas);
+    Ok(merged)
+}
+
 #[tauri::command]
 #[specta::specta]
 pub(crate) async fn move_layer(

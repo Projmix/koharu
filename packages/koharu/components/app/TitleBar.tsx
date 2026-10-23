@@ -25,6 +25,12 @@ import {
   usePages,
   useProject,
 } from '@/lib/queries'
+import {
+  duplicableSelection,
+  duplicateLayer,
+  mergeableSelection,
+  mergeLayers,
+} from '@/lib/rasterLayers'
 import { useKoharuStore } from '@/lib/store'
 import {
   commands,
@@ -227,6 +233,27 @@ export function TitleBar() {
               >
                 {t('menu.delete')}
                 <MenubarShortcut>Del</MenubarShortcut>
+              </MenubarItem>
+              <MenubarSeparator />
+              <MenubarItem
+                disabled={duplicableSelection(page, selectedLayers) === null}
+                onClick={() => {
+                  const layer = duplicableSelection(page, selectedLayers)
+                  if (layer) duplicateLayer(layer)
+                }}
+              >
+                {t('menu.duplicateLayer')}
+                <MenubarShortcut>Ctrl+J</MenubarShortcut>
+              </MenubarItem>
+              <MenubarItem
+                disabled={mergeableSelection(page, selectedLayers) === null}
+                onClick={() => {
+                  const layers = mergeableSelection(page, selectedLayers)
+                  if (layers) mergeLayers(layers)
+                }}
+              >
+                {selectedLayers.length > 1 ? t('menu.mergeLayers') : t('menu.mergeDown')}
+                <MenubarShortcut>Ctrl+E</MenubarShortcut>
               </MenubarItem>
             </MenubarContent>
           </MenubarMenu>

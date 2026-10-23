@@ -302,6 +302,29 @@ pub(crate) async fn get_clone_source(
     Ok(super::output::ImageBytes(bytes))
 }
 
+/// A masked layer's pixels before its reveal mask, PNG encoded: what the
+/// Eraser reveals, for its live preview.
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn get_unmasked_layer(
+    layer: EntityId,
+    project: State<'_, CurrentProject>,
+) -> Result<super::output::ImageBytes, Error> {
+    let snapshot = project
+        .project
+        .lock()
+        .await
+        .as_ref()
+        .context("no project is open")?
+        .snapshot();
+    let asset = snapshot
+        .asset(layer, &koharu_scene::AssetRole::new(super::project::UNMASKED_ROLE)?)?
+        .context("the layer has no reveal mask")?;
+    Ok(super::output::ImageBytes(
+        snapshot.read_blob(asset.blob).await?.to_vec(),
+    ))
+}
+
 /// Clone Stamp stroke: paints the page as it shows, read `offset` page units
 /// from each stroke point, into `layer` or the page's visible cleanup layer.
 #[tauri::command]

@@ -332,7 +332,12 @@
     "sourceLabel": "Texto de origem de {{name}}",
     "textName": "Texto {{index}}",
     "title": "Camadas",
-    "translationLabel": "Tradução de {{name}}"
+    "translationLabel": "Tradução de {{name}}",
+    "duplicate": "Duplicar {{name}}",
+    "mergeDown": "Mesclar {{name}} para baixo",
+    "revealMask": "Máscara de revelação",
+    "revealMaskHint": "Oculta a camada inteira e a mostra só onde você usar a Borracha; o Pincel a oculta de novo.",
+    "tint": "Tom vermelho"
   },
   "menu": {
     "about": "Sobre",
@@ -360,7 +365,10 @@
     "undo": "Desfazer",
     "view": "Exibir",
     "pagesPanel": "Painel de páginas",
-    "inspectorPanel": "Painel lateral"
+    "inspectorPanel": "Painel lateral",
+    "duplicateLayer": "Duplicar camada",
+    "mergeLayers": "Mesclar camadas",
+    "mergeDown": "Mesclar para baixo"
   },
   "versions": {
     "delete": "Excluir",

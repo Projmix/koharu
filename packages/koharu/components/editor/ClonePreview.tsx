@@ -5,13 +5,18 @@ import { useEffect, useRef } from 'react'
 
 import { call } from '@/lib/backend'
 import { useKoharuStore } from '@/lib/store'
-import { commands, type Page, type Point } from '@koharu/bridge/protocol'
+import { commands, type EntityId, type Page, type Point } from '@koharu/bridge/protocol'
 
 /** A Clone Stamp stroke in progress, in page coordinates. */
 export interface CloneStroke {
   points: Point[]
   diameter: number
   offset: Point
+  /**
+   * The masked layer an Eraser stroke reveals: the preview then shows that
+   * layer's pixels before its mask, in place.
+   */
+  reveal?: EntityId
 }
 
 /**
@@ -31,11 +36,23 @@ export function ClonePreview({
 }) {
   const canvas = useRef<HTMLCanvasElement>(null)
   const camera = useKoharuStore((state) => state.camera)
-  const opacity = useKoharuStore((state) => state.cloneOpacity)
+  const cloneOpacity = useKoharuStore((state) => state.cloneOpacity)
+  const reveal = stroke?.reveal
+  const opacity = reveal
+    ? (page.layers.find((layer) => layer.id === reveal)?.visibility.opacity ?? 1)
+    : cloneOpacity
   const source = useQuery({
-    queryKey: ['clone-source', page.id, revision],
+    queryKey: ['clone-source', page.id, revision, reveal ?? null],
     queryFn: async () =>
-      createImageBitmap(new Blob([new Uint8Array(await call(commands.getCloneSource, page.id))])),
+      createImageBitmap(
+        new Blob([
+          new Uint8Array(
+            await (reveal
+              ? call(commands.getUnmaskedLayer, reveal)
+              : call(commands.getCloneSource, page.id)),
+          ),
+        ]),
+      ),
     staleTime: Number.POSITIVE_INFINITY,
     gcTime: 0,
   }).data

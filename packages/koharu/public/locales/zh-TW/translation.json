@@ -332,7 +332,12 @@
     "sourceLabel": "{{name}} 的原文",
     "textName": "文字 {{index}}",
     "title": "圖層",
-    "translationLabel": "{{name}} 的譯文"
+    "translationLabel": "{{name}} 的譯文",
+    "duplicate": "複製 {{name}}",
+    "mergeDown": "將 {{name}} 向下合併",
+    "revealMask": "顯示遮色片",
+    "revealMaskHint": "隱藏整個圖層，只在用橡皮擦擦過的地方顯示；筆刷會重新隱藏。",
+    "tint": "紅色著色"
   },
   "menu": {
     "about": "關於",
@@ -360,7 +365,10 @@
     "undo": "復原",
     "view": "檢視",
     "pagesPanel": "頁面面板",
-    "inspectorPanel": "側邊面板"
+    "inspectorPanel": "側邊面板",
+    "duplicateLayer": "複製圖層",
+    "mergeLayers": "合併圖層",
+    "mergeDown": "向下合併"
   },
   "versions": {
     "delete": "刪除",

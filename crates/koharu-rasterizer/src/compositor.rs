@@ -73,6 +73,10 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     } else {
         color = textureSample(source_texture, texture_sampler, input.uv);
     }
+    if uniforms.format_options.x > 0.0 {
+        // A view-only red tint that shows where a layer has pixels.
+        color = vec4<f32>(mix(color.rgb, vec3<f32>(color.a, 0.0, 0.0), 0.6), color.a);
+    }
     var erase = 0.0;
     if uniforms.target_options.w > 0.0 {
         erase = textureSample(erase_texture, texture_sampler, input.screen_uv).a;
@@ -91,6 +95,8 @@ pub struct RasterDraw {
     pub transform: Affine,
     pub opacity: f32,
     pub erase: bool,
+    /// Tints the layer red in the editor view; exports never set it.
+    pub tint: bool,
 }
 
 struct CachedTexture {
@@ -562,6 +568,7 @@ impl GpuCompositor {
                                 size,
                                 draw.opacity.clamp(0.0, 1.0),
                                 erased,
+                                draw.tint,
                             ),
                         });
                     }
@@ -596,6 +603,7 @@ impl GpuCompositor {
                             size,
                             size,
                             1.0,
+                            false,
                             false,
                         ),
                     });
@@ -789,6 +797,7 @@ fn draw_uniforms(
     target_size: (u32, u32),
     opacity: f32,
     use_erase: bool,
+    tint: bool,
 ) -> [f32; UNIFORM_FLOATS] {
     let [a, b, c, d, e, f] = transform.as_coeffs();
     let pixel_aligned =
@@ -806,7 +815,7 @@ fn draw_uniforms(
         target_size.1 as f32,
         opacity,
         f32::from(use_erase),
-        0.0,
+        f32::from(tint),
         f32::from(pixel_aligned),
         0.0,
         0.0,

@@ -13,6 +13,7 @@ const renderer = vi.hoisted(() => ({
   activatePage: vi.fn((_page: string) => false),
   clear: vi.fn(),
   previewOpacity: vi.fn(),
+  setTintedLayers: vi.fn(),
   beginTransform: vi.fn(),
   updateTransform: vi.fn(),
   finishTransform: vi.fn(),

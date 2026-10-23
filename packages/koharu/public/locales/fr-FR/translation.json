@@ -332,7 +332,12 @@
     "sourceLabel": "Texte source de {{name}}",
     "textName": "Texte {{index}}",
     "title": "Calques",
-    "translationLabel": "Traduction de {{name}}"
+    "translationLabel": "Traduction de {{name}}",
+    "duplicate": "Dupliquer {{name}}",
+    "mergeDown": "Fusionner {{name}} vers le bas",
+    "revealMask": "Masque de révélation",
+    "revealMaskHint": "Masque tout le calque et ne l’affiche que là où vous passez la Gomme ; le Pinceau le masque à nouveau.",
+    "tint": "Teinte rouge"
   },
   "menu": {
     "about": "À propos",
@@ -360,7 +365,10 @@
     "undo": "Annuler",
     "view": "Affichage",
     "pagesPanel": "Panneau des pages",
-    "inspectorPanel": "Panneau latéral"
+    "inspectorPanel": "Panneau latéral",
+    "duplicateLayer": "Dupliquer le calque",
+    "mergeLayers": "Fusionner les calques",
+    "mergeDown": "Fusionner avec le calque inférieur"
   },
   "versions": {
     "delete": "Supprimer",
