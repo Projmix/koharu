@@ -68,7 +68,7 @@ struct OrderedEntry {
 /// One block of a chapter request, with where it sits for the manual
 /// exchange: its page number, its number among the page's blocks in reading
 /// order, and its source region's extents.
-struct ChapterTarget {
+pub(super) struct ChapterTarget {
     entity: EntityId,
     layer: EntityId,
     source: String,
@@ -1119,6 +1119,7 @@ mod tests {
             "duplicate",
             "empty-source",
             "empty",
+            "half-empty",
             "missing",
             "extra",
             "redundant-region",
@@ -1135,6 +1136,7 @@ mod tests {
                 "empty" => {
                     invalid["translations"][0]["translated_text"] = serde_json::json!(" \n ")
                 }
+                "half-empty" => invalid["translations"][1]["source_text"] = serde_json::json!(""),
                 "missing" => {
                     invalid["translations"].as_array_mut().unwrap().pop();
                 }
@@ -1365,6 +1367,8 @@ mod tests {
             .add_page(PageDraft::new("page", 120.0, 180.0), At::End)
             .unwrap();
         let (target, region, _) = add_text(&mut edit, page, "ちがう", (80.0, 10.0, 20.0, 30.0));
+        let (hair, hair_region, hair_layer) =
+            add_text(&mut edit, page, "ーー", (10.0, 10.0, 20.0, 30.0));
         let bubble = edit
             .add_analysis_region::<BubbleRegion>(
                 page,
@@ -1383,6 +1387,10 @@ mod tests {
                 "id": format!("page:{page}::region:{region}"),
                 "source_text": "違う",
                 "translated_text": "Не так"
+            }, {
+                "id": format!("page:{page}::region:{hair_region}"),
+                "source_text": "",
+                "translated_text": ""
             }],
             "added": [
                 {"page_index": 1, "box": [10, 110, 30, 30], "kind": "dialogue",
@@ -1416,6 +1424,12 @@ mod tests {
             .unwrap();
         session.commit(patch).await.unwrap();
         let snapshot = session.snapshot();
+        for removed in [hair, hair_region, hair_layer] {
+            assert!(
+                snapshot.entity(removed).is_err(),
+                "a block with no lettering is removed"
+            );
+        }
         let source = snapshot.component::<SourceText>(target).unwrap().unwrap();
         assert_eq!(source.text.value, "違う");
         assert!(matches!(source.text.origin, Origin::User));

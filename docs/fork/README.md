@@ -61,6 +61,9 @@ Known gaps after the rebuild:
   one undo step: a corrected `source_text` replaces the OCR text as an edit
   in the app would (the region and its OCR analysis stay), translations and
   added blocks are the user's, so later OCR or translation runs keep them.
+  An entry with both texts empty marks an outline with no lettering (art,
+  hair, a censor bar); the import removes that block as deleting it in the
+  app would, so cleanup leaves the art under it alone.
 - Named project versions (`save_project_version` and friends).
 - OCR method `local`, `api` or hybrid `local-api`. The hybrid method uses an
   internal `OcrPass { Local, Final }`: the scheduler runs the local pass on
