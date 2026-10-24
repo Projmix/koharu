@@ -75,7 +75,11 @@ Known gaps after the rebuild:
   each with a corrected `translated_text`, a new `box` and/or a whole new
   `typography`; the import writes them as the user's edits (as the text,
   frame and typography panels do) in the same undo step. A chapter with
-  nothing left to translate exports for this pass alone.
+  nothing left to translate exports for this pass alone. The import asks
+  for its scope: text only (translations, OCR corrections, added and
+  removed blocks, corrected layer translations) or text and typesetting
+  (layer boxes and typography as well). Export and import stay in the
+  processing bar whatever the processing scope.
 - Named project versions (`save_project_version` and friends).
 - OCR method `local`, `api` or hybrid `local-api`. The hybrid method uses an
   internal `OcrPass { Local, Final }`: the scheduler runs the local pass on

@@ -182,6 +182,8 @@
     "notSet": "Ayarlanmadı",
     "output": "Çıktı",
     "importChapter": "Çevrilmiş JSON'u içe aktar",
+    "importChapterText": "Yalnızca metin",
+    "importChapterTypesetting": "Metin ve dizgi",
     "exportChapterHelp": "Arşivi çıkarın. prompt.txt dosyasını seçtiğiniz sohbete yapıştırın ve chapter.json dosyasını ekleyin. Yanıtı translation.json olarak kaydedip içe aktarın.",
     "importChapterDone": "Çeviriler içe aktarıldı",
     "pageProfile": "Sayfa profili",

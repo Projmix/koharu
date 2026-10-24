@@ -182,6 +182,8 @@
     "notSet": "未設定",
     "output": "出力",
     "importChapter": "翻訳済み JSON をインポート",
+    "importChapterText": "テキストのみ",
+    "importChapterTypesetting": "テキストと写植",
     "exportChapterHelp": "アーカイブを展開し、prompt.txt を使用するチャットに貼り付けて chapter.json を添付します。応答を translation.json として保存し、インポートしてください。",
     "importChapterDone": "翻訳をインポートしました",
     "pageProfile": "ページプロファイル",

@@ -17,6 +17,7 @@ use koharu_scene::{
 use koharu_translator::{Language, Translator};
 use serde::Deserialize;
 use serde_json::{Value, json};
+use specta::Type;
 
 use super::{
     ChapterTranslation, PRODUCER, layout_containers, reading_permutation, write_translations,
@@ -36,6 +37,16 @@ use crate::{
 pub struct Typeset {
     pub fonts: TypesettingConfig,
     pub pages: HashMap<EntityId, (Frame, RgbImage)>,
+}
+
+/// What an import takes from the file. Text is the translations, OCR
+/// corrections, added and removed blocks and corrected layer translations;
+/// typesetting adds each layer's box and typography.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum ImportScope {
+    Text,
+    Typesetting,
 }
 
 pub struct ManualTranslationExport {
@@ -535,6 +546,7 @@ impl ChapterTranslation {
         &self,
         translator: &Translator,
         response: &str,
+        scope: ImportScope,
     ) -> Result<koharu_scene::Patch> {
         let response: Response = serde_json::from_str(response)
             .context("manual translation file must contain project_id, target_language and translations; use the prompt from the export")?;
@@ -788,6 +800,9 @@ impl ChapterTranslation {
         // A layer change is the user's own edit, as the text, frame and
         // typography panels make it.
         for change in response.layers {
+            if scope == ImportScope::Text && change.translated_text.is_none() {
+                continue;
+            }
             let entry = &reviewable[&change.id];
             edit.promote_entity_to_user(entry.layer)?;
             edit.promote_entity_to_user(entry.content)?;
@@ -814,6 +829,9 @@ impl ChapterTranslation {
                         language: Some(language),
                     },
                 )?;
+            }
+            if scope == ImportScope::Text {
+                continue;
             }
             if let Some([x, y, width, height]) = change.bounds {
                 let value = self.snapshot.page(entry.page)?.page()?;

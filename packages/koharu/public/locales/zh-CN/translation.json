@@ -182,6 +182,8 @@
     "notSet": "未设置",
     "output": "输出",
     "importChapter": "导入已翻译的 JSON",
+    "importChapterText": "仅文本",
+    "importChapterTypesetting": "文本和嵌字",
     "exportChapterHelp": "解压压缩包。将 prompt.txt 粘贴到所选聊天中并附上 chapter.json。将回复保存为 translation.json 后导入。",
     "importChapterDone": "已导入译文",
     "pageProfile": "页面配置",

@@ -62,6 +62,7 @@ import {
   commands,
   type EnhancementConfig,
   type FontFamily,
+  type ImportScope,
   type InpaintingConfig,
   type InpaintingModelChoice,
   type Model,
@@ -74,6 +75,12 @@ import {
   type TypesettingConfig,
 } from '@koharu/bridge/protocol'
 import { Button } from '@koharu/ui/components/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@koharu/ui/components/dropdown-menu'
 import { Popover, PopoverContent, PopoverTrigger } from '@koharu/ui/components/popover'
 import {
   Select,
@@ -122,8 +129,8 @@ export function InferenceControl({
     }
   }
 
-  const importTranslation = async () => {
-    if (await call(commands.importChapterTranslation)) {
+  const importTranslation = async (scope: ImportScope) => {
+    if (await call(commands.importChapterTranslation, scope)) {
       toast.add({ type: 'success', title: t('inference.importChapterDone') })
     }
   }
@@ -139,34 +146,54 @@ export function InferenceControl({
         onStagesChange={setStages}
       />
 
-      {scope === 'project' && (
-        <>
-          <Button
-            type='button'
-            variant='ghost'
-            size='icon-sm'
-            className='shrink-0 rounded-lg'
-            disabled={disabled || Boolean(running)}
-            aria-label={t('inference.exportChapter')}
-            title={t('inference.exportChapter')}
-            onClick={() => void exportTranslation().catch(() => undefined)}
+      <Button
+        type='button'
+        variant='ghost'
+        size='icon-sm'
+        className='shrink-0 rounded-lg'
+        disabled={disabled || Boolean(running)}
+        aria-label={t('inference.exportChapter')}
+        title={t('inference.exportChapter')}
+        onClick={() => void exportTranslation().catch(() => undefined)}
+      >
+        <Upload className='size-3.5' />
+      </Button>
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          render={
+            <Button
+              type='button'
+              variant='ghost'
+              size='icon-sm'
+              className='shrink-0 rounded-lg'
+              disabled={disabled || Boolean(running)}
+              aria-label={t('inference.importChapter')}
+              title={t('inference.importChapter')}
+            />
+          }
+        >
+          <Download className='size-3.5' />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent
+          align='end'
+          className='w-auto min-w-20 border border-border/50 p-0.5 shadow-sm ring-0'
+        >
+          <DropdownMenuItem
+            className='min-h-7 gap-1 px-1.5 py-0.5 text-[11px] [&_svg:not([class*="size-"])]:size-3.5'
+            onClick={() => void importTranslation('text').catch(() => undefined)}
           >
-            <Download className='size-3.5' />
-          </Button>
-          <Button
-            type='button'
-            variant='ghost'
-            size='icon-sm'
-            className='shrink-0 rounded-lg'
-            disabled={disabled || Boolean(running)}
-            aria-label={t('inference.importChapter')}
-            title={t('inference.importChapter')}
-            onClick={() => void importTranslation().catch(() => undefined)}
+            <Languages />
+            {t('inference.importChapterText')}
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            className='min-h-7 gap-1 px-1.5 py-0.5 text-[11px] [&_svg:not([class*="size-"])]:size-3.5'
+            onClick={() => void importTranslation('typesetting').catch(() => undefined)}
           >
-            <Upload className='size-3.5' />
-          </Button>
-        </>
-      )}
+            <Type />
+            {t('inference.importChapterTypesetting')}
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
 
       <Button
         type='button'

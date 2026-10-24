@@ -1792,23 +1792,20 @@ describe('greenfield editor', () => {
     render(<CanvasCommandBar />)
     useCompactProcessingControls()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Processing settings' }))
-    fireEvent.click(screen.getByRole('button', { name: /Scope Selection/ }))
-    fireEvent.click(screen.getByRole('button', { name: /Entire project/ }))
     fireEvent.click(
       screen.getByRole('button', {
         name: 'Export for manual translation (ZIP)',
       }),
     )
-    fireEvent.click(
-      screen.getByRole('button', {
-        name: 'Import translated JSON',
-      }),
-    )
+    fireEvent.click(screen.getByRole('button', { name: 'Import translated JSON' }))
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Text only' }))
     await waitFor(() => {
       expect(exportChapter).toHaveBeenCalledOnce()
-      expect(importChapter).toHaveBeenCalledOnce()
+      expect(importChapter).toHaveBeenCalledWith('text')
     })
+    fireEvent.click(screen.getByRole('button', { name: 'Processing settings' }))
+    fireEvent.click(screen.getByRole('button', { name: /Scope Selection/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Entire project/ }))
     fireEvent.click(screen.getByRole('button', { name: 'Processing settings' }))
     fireEvent.click(screen.getByRole('button', { name: /Stages 4 stages/ }))
     fireEvent.click(screen.getByRole('button', { name: /Translation/ }))
@@ -1825,10 +1822,10 @@ describe('greenfield editor', () => {
     fireEvent.click(screen.getByRole('button', { name: /Scope Project/ }))
     fireEvent.click(screen.getByRole('button', { name: /Selected pages/ }))
     expect(
-      screen.queryByRole('button', {
+      screen.getByRole('button', {
         name: 'Export for manual translation (ZIP)',
       }),
-    ).not.toBeInTheDocument()
+    ).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: /Stages 2 stages/ }))
     fireEvent.click(screen.getByRole('button', { name: /Translation/ }))
     fireEvent.click(screen.getByRole('button', { name: /Inpainting/ }))

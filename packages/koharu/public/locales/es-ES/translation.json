@@ -182,6 +182,8 @@
     "notSet": "Sin definir",
     "output": "Salida",
     "importChapter": "Importar JSON traducido",
+    "importChapterText": "Solo texto",
+    "importChapterTypesetting": "Texto y rotulación",
     "exportChapterHelp": "Descomprime el archivo. Pega prompt.txt en el chat que elijas y adjunta chapter.json. Guarda la respuesta como translation.json e impórtala.",
     "importChapterDone": "Traducciones importadas",
     "pageProfile": "Perfil de página",

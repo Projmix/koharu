@@ -34,7 +34,7 @@ pub use review::{ImageEditReview, ImageEditReviewer};
 pub use scope::{Bounds, Scope};
 pub use stage::{Stage, StageProgress, StageTarget};
 pub use stages::{
-    ChapterTranslation, Flux2KleinConfig, ImageEditConfig, InpaintingApplyMode,
+    ChapterTranslation, Flux2KleinConfig, ImageEditConfig, ImportScope, InpaintingApplyMode,
     KoharuLayoutRFDetrSeg2XLConfig, RoremMixedConfig, Typeset, cleaning_unverified, ocr_unverified,
     open_unboxed_text, text_layer_placement,
 };

@@ -23,7 +23,7 @@ pub use inpainting::{Flux2KleinConfig, RoremMixedConfig, cleaning_unverified};
 pub use markup::open_unboxed_text;
 pub use ocr::ocr_unverified;
 pub(crate) use replicate::ReplicateModel;
-pub use translation::{ChapterTranslation, Typeset};
+pub use translation::{ChapterTranslation, ImportScope, Typeset};
 
 use crate::{
     Bounds, ImageCache, InpaintingIntent, InpaintingMask, InpaintingModelChoice,

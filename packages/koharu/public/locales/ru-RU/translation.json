@@ -184,6 +184,8 @@
     "notSet": "Не задано",
     "output": "Результат",
     "importChapter": "Импорт переведённого JSON",
+    "importChapterText": "Только текст",
+    "importChapterTypesetting": "Текст и тайпинг",
     "pageProfile": "Профиль страницы",
     "pipelineStages": "Этапы конвейера",
     "providerDefault": "По умолчанию у провайдера",

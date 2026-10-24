@@ -94,7 +94,7 @@ export const commands = {
 	runBatch: (projects: string[], stages: Stage[]) => __TAURI_INVOKE<null>("run_batch", { projects, stages }),
 	resolveImageEditPreview: (id: string, prompt: string | null) => __TAURI_INVOKE<null>("resolve_image_edit_preview", { id, prompt }),
 	exportChapterTranslation: () => __TAURI_INVOKE<boolean>("export_chapter_translation"),
-	importChapterTranslation: () => __TAURI_INVOKE<boolean>("import_chapter_translation"),
+	importChapterTranslation: (scope: ImportScope) => __TAURI_INVOKE<boolean>("import_chapter_translation", { scope }),
 	checkChapter: () => __TAURI_INVOKE<ChapterCheck>("check_chapter"),
 	export: (format: ExportFormat) => __TAURI_INVOKE<null>("export", { format }),
 	getThumbnail: (page: EntityId) => __TAURI_INVOKE<ImageBytes>("get_thumbnail", { page }),
@@ -445,6 +445,13 @@ export type InpaintingApplyMode = "full-page" | "mask";
 export type InpaintingConfig = {
 	method: InpaintingMethod,
 	preview_before_send: boolean,
+/**
+ *  What an import takes from the file. Text is the translations, OCR
+ *  corrections, added and removed blocks and corrected layer translations;
+ *  typesetting adds each layer's box and typography.
+ */
+export type ImportScope = "text" | "typesetting";
+
 	local_model: LocalInpaintingModel,
 	manual_model: LocalInpaintingModel,
 	api: ApiInpaintingConfig,

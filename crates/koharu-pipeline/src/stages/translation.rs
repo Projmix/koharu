@@ -25,7 +25,7 @@ const PRODUCER: &str = "dev.koharu.pipeline.translation";
 mod manual;
 mod review;
 
-pub use manual::Typeset;
+pub use manual::{ImportScope, Typeset};
 
 pub(super) struct Processor {
     config: TranslationConfig,
@@ -1079,7 +1079,11 @@ mod tests {
         });
 
         let patch = chapter
-            .patch_from_response(&processor().translator, &response.to_string())
+            .patch_from_response(
+                &processor().translator,
+                &response.to_string(),
+                manual::ImportScope::Typesetting,
+            )
             .await
             .unwrap();
         session.commit(patch).await.unwrap();
@@ -1158,7 +1162,11 @@ mod tests {
             }
             assert!(
                 chapter
-                    .patch_from_response(&processor().translator, &invalid.to_string())
+                    .patch_from_response(
+                        &processor().translator,
+                        &invalid.to_string(),
+                        manual::ImportScope::Typesetting
+                    )
                     .await
                     .is_err(),
                 "{error}"
@@ -1179,7 +1187,11 @@ mod tests {
             );
         }
         let patch = chapter
-            .patch_from_response(&processor().translator, &response.to_string())
+            .patch_from_response(
+                &processor().translator,
+                &response.to_string(),
+                manual::ImportScope::Typesetting,
+            )
             .await
             .unwrap();
         session.commit(patch).await.unwrap();
@@ -1297,7 +1309,11 @@ mod tests {
         session.commit(edit.finish().unwrap()).await.unwrap();
         let current = ChapterTranslation::from_snapshot(session.snapshot(), &config).unwrap();
         let error = current
-            .patch_from_response(&processor().translator, &response.to_string())
+            .patch_from_response(
+                &processor().translator,
+                &response.to_string(),
+                manual::ImportScope::Typesetting,
+            )
             .await
             .unwrap_err()
             .to_string();
@@ -1344,7 +1360,11 @@ mod tests {
             }]
         });
         let patch = chapter
-            .patch_from_response(&processor().translator, &response.to_string())
+            .patch_from_response(
+                &processor().translator,
+                &response.to_string(),
+                manual::ImportScope::Typesetting,
+            )
             .await
             .unwrap();
         session.commit(patch).await.unwrap();
@@ -1419,7 +1439,11 @@ mod tests {
             file["added"] = serde_json::json!([invalid]);
             assert!(
                 chapter
-                    .patch_from_response(&processor().translator, &file.to_string())
+                    .patch_from_response(
+                        &processor().translator,
+                        &file.to_string(),
+                        manual::ImportScope::Typesetting
+                    )
                     .await
                     .is_err(),
                 "{invalid}"
@@ -1427,7 +1451,11 @@ mod tests {
         }
 
         let patch = chapter
-            .patch_from_response(&processor().translator, &response.to_string())
+            .patch_from_response(
+                &processor().translator,
+                &response.to_string(),
+                manual::ImportScope::Typesetting,
+            )
             .await
             .unwrap();
         session.commit(patch).await.unwrap();
@@ -1589,15 +1617,25 @@ mod tests {
             }
             assert!(
                 chapter
-                    .patch_from_response(&processor().translator, &invalid.to_string())
+                    .patch_from_response(
+                        &processor().translator,
+                        &invalid.to_string(),
+                        manual::ImportScope::Typesetting
+                    )
                     .await
                     .is_err(),
                 "{error}"
             );
         }
 
+        // A text import takes the corrected translation and leaves the layer's
+        // typesetting alone.
         let patch = chapter
-            .patch_from_response(&processor().translator, &response.to_string())
+            .patch_from_response(
+                &processor().translator,
+                &response.to_string(),
+                manual::ImportScope::Text,
+            )
             .await
             .unwrap();
         session.commit(patch).await.unwrap();
@@ -1605,6 +1643,25 @@ mod tests {
         let translation = snapshot.component::<Translation>(content).unwrap().unwrap();
         assert_eq!(translation.text.value, "Заткнись");
         assert!(matches!(translation.text.origin, Origin::User));
+        assert!(
+            snapshot
+                .component::<koharu_scene::Typography>(layer)
+                .unwrap()
+                .is_none()
+        );
+        assert!(snapshot.component::<Geometry>(layer).unwrap().is_none());
+
+        let chapter = ChapterTranslation::from_snapshot(snapshot, &config).unwrap();
+        let patch = chapter
+            .patch_from_response(
+                &processor().translator,
+                &response.to_string(),
+                manual::ImportScope::Typesetting,
+            )
+            .await
+            .unwrap();
+        session.commit(patch).await.unwrap();
+        let snapshot = session.snapshot();
         let typography = snapshot
             .component::<koharu_scene::Typography>(layer)
             .unwrap()

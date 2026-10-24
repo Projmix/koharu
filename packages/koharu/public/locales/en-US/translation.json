@@ -182,6 +182,8 @@
     "notSet": "Not set",
     "output": "Output",
     "importChapter": "Import translated JSON",
+    "importChapterText": "Text only",
+    "importChapterTypesetting": "Text and typesetting",
     "exportChapterHelp": "Extract the archive. Paste prompt.txt into your chosen chat and attach chapter.json. Save the response as translation.json and import it.",
     "importChapterDone": "Translations imported",
     "pageProfile": "Page profile",

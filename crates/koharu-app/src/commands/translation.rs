@@ -3,7 +3,7 @@ use std::io::{Cursor, Write};
 use anyhow::{Context as _, Result};
 use futures::future::try_join_all;
 use koharu_desktop::Desktop;
-use koharu_pipeline::{ChapterTranslation, PipelineConfig, Typeset};
+use koharu_pipeline::{ChapterTranslation, ImportScope, PipelineConfig, Typeset};
 use koharu_rasterizer::RasterOptions;
 use koharu_renderer::TypesettingConfig;
 use koharu_scene::Snapshot;
@@ -101,6 +101,7 @@ pub(crate) async fn export_chapter_translation(
 #[tauri::command]
 #[specta::specta]
 pub(crate) async fn import_chapter_translation(
+    scope: ImportScope,
     window: tauri::WebviewWindow<CefRuntime>,
     handle: AppHandle<CefRuntime>,
     project: State<'_, CurrentProject>,
@@ -139,7 +140,7 @@ pub(crate) async fn import_chapter_translation(
         let config = PipelineConfig::load()?.read()?.clone();
         let chapter = ChapterTranslation::from_snapshot(project.snapshot(), &config.translation)?;
         let patch = chapter
-            .patch_from_response(&translator, response.trim_start_matches('\u{feff}'))
+            .patch_from_response(&translator, response.trim_start_matches('\u{feff}'), scope)
             .await?;
         let commit = project
             .commit_rebased(patch)

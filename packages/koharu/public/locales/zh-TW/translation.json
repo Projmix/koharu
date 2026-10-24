@@ -182,6 +182,8 @@
     "notSet": "未設定",
     "output": "輸出",
     "importChapter": "匯入已翻譯的 JSON",
+    "importChapterText": "僅文字",
+    "importChapterTypesetting": "文字和嵌字",
     "exportChapterHelp": "解壓縮封存檔。將 prompt.txt 貼到所選聊天並附上 chapter.json。將回覆儲存為 translation.json 後匯入。",
     "importChapterDone": "已匯入譯文",
     "pageProfile": "頁面設定檔",
