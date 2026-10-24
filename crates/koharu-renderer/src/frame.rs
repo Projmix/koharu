@@ -380,6 +380,9 @@ pub struct TextMetadata {
     pub writing_mode: WritingMode,
     pub angle_degrees: f32,
     pub lines: Arc<[RenderedLine]>,
+    /// The largest size auto-fit could choose for this text, when it fits
+    /// automatically.
+    pub auto_fit_ceiling: Option<f32>,
 }
 
 /// One drawn line of a text layer, as the line breaker set it.
@@ -491,6 +494,7 @@ pub(crate) struct LocalTextMetadata {
     pub(crate) font_size: f32,
     pub(crate) color: [u8; 4],
     pub(crate) lines: Arc<[RenderedLine]>,
+    pub(crate) auto_fit_ceiling: Option<f32>,
 }
 
 pub(crate) fn prepare_frame(

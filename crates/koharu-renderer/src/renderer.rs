@@ -1319,6 +1319,7 @@ fn build_node(
                     font_size: rendered.metadata.font_size,
                     color: rendered.metadata.color,
                     lines: rendered.metadata.lines.into(),
+                    auto_fit_ceiling: rendered.metadata.auto_fit_ceiling,
                 }),
                 diagnostics: rendered.diagnostics.into(),
             })
@@ -1361,6 +1362,7 @@ fn assemble_frame(
                     writing_mode,
                     angle_degrees,
                     lines: metadata.lines.clone(),
+                    auto_fit_ceiling: metadata.auto_fit_ceiling,
                 })
             }
         };

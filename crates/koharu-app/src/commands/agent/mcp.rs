@@ -232,7 +232,12 @@ async fn call(host: &KoharuHost, id: &Value, params: &Value) -> Value {
         Ok(invocation) => {
             let mut content = vec![json!({
                 "type": "text",
-                "text": serde_json::to_string_pretty(&invocation.value).unwrap_or_default(),
+                // Compact JSON, and plain text as itself: results cost the
+                // agent context, and pretty-printing doubled them.
+                "text": match &invocation.value {
+                    Value::String(text) => text.clone(),
+                    value => serde_json::to_string(value).unwrap_or_default(),
+                },
             })];
             for image in invocation.images {
                 if let Some((mime, data)) = image

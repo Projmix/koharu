@@ -246,7 +246,7 @@ impl Host for KoharuHost {
                     ),
                     definition::<typesetting::PageLayers>(
                         "page_layers",
-                        "List a page's text layers in their numbered order: text, role, box, balloon box and the largest box inside the balloon (measured on the page's pixels when the balloon is closed), typography, and what the renderer drew: fonts, final size, text box, layout box (the box less its inset), each drawn line with its width and the room it had, hyphenated words, and an overflow / below_readable_size / low_contrast warning. Also the last lines of the previous page and the first of the next.",
+                        "List a page's text layers in their numbered order: text, role, box (as set, with angle when turned), balloon box and the largest box inside the balloon around the text (measured on the page's pixels when the balloon is closed), typography, what the renderer drew (font, size, auto_fit_max: the largest size auto-fit may choose, small: below 1.2% of the page width, layout box, each line with its width and room, hyphenated words, warning and what overflowed), and lettering: whether the cleaning removed the source lettering and its tone, with check_color when the fill is the opposite tone. Also empty_balloons (balloons with no text layer, for add_text_layer) and the edge lines of the neighbouring pages.",
                     ),
                     definition::<typesetting::Crop>(
                         "crop",
@@ -254,11 +254,15 @@ impl Host for KoharuHost {
                     ),
                     definition::<typesetting::PreviewLayers>(
                         "preview_layers",
-                        "Trial-render text, box and typography changes to layers of one page without committing anything. Returns what the renderer drew for each changed layer (with its drawn lines and hyphenated words) and a PNG of the area at the stated scale. compare puts the source on the left; outline draws the changed layers' boxes with their numbers and the measured balloon interiors. To fit text, try auto_fit in the intended box; line_breaking whole_words or manual stops auto-fit from hyphenating.",
+                        "Trial-render text, box and typography changes to layers of one page without committing anything. Returns each changed layer in short form (box, size, lines, warning, overflow, hyphenated, small; full for the whole layer) and a PNG of the area at the stated scale. compare puts the source on the left; outline draws the changed layers' boxes with their numbers and the measured balloon interiors. To fit text, try auto_fit in the intended box; line_breaking whole_words or manual stops auto-fit from hyphenating.",
                     ),
                     definition::<typesetting::ApplyLayers>(
                         "apply_layers",
-                        "Apply text, box, typography and visibility changes to any layers as one edit, one undo step. Returns what the renderer drew for each changed layer, with fit warnings.",
+                        "Apply text, box, typography and visibility changes to any layers as one edit, one undo step. Returns each changed layer in short form (box, size, lines, warning, overflow, hyphenated, small); full returns them as page_layers does.",
+                    ),
+                    definition::<typesetting::AddTextLayer>(
+                        "add_text_layer",
+                        "Add a text layer in a region, such as an empty balloon from page_layers' empty_balloons, with its translation. Inside a balloon the text flows in the balloon's shape; elsewhere it fits the region. One undo step; returns the layer as apply_layers does.",
                     ),
                     definition::<CheckChapter>(
                         "check_chapter",
@@ -266,7 +270,7 @@ impl Host for KoharuHost {
                     ),
                     definition::<typesetting::ChapterText>(
                         "chapter_text",
-                        "List the chapter's pages in order (number, id, label) with each page's text layers in their numbered order: role, whether it shows, source and translation. No geometry; use it for the page list, terms and sentences that run across balloons and pages.",
+                        "List the chapter's text, one line per layer: `number role [hidden] | source | translation`, line breaks as ` / `, under a `# page N label id` line per page. full returns JSON with ids instead.",
                     ),
                     definition::<RunPipeline>(
                         "run_pipeline",
@@ -524,6 +528,7 @@ impl Host for KoharuHost {
             "apply_layers" => {
                 let arguments: typesetting::ApplyLayers = arguments(&call)?;
                 let layers = typesetting::elements(&arguments.changes)?;
+                let full = arguments.full;
                 let desktop = self.handle.state::<Desktop>();
                 let sizes = layers
                     .iter()
@@ -549,7 +554,55 @@ impl Host for KoharuHost {
                     .await?;
                 let snapshot = self.snapshot().await?;
                 invocation.value["layers"] =
-                    typesetting::report(&desktop, &snapshot, &layers).await?;
+                    typesetting::report(&desktop, &snapshot, &layers, full).await?;
+                Ok(invocation)
+            }
+            "add_text_layer" => {
+                let arguments: typesetting::AddTextLayer = arguments(&call)?;
+                let page = entity(&arguments.page)?;
+                let text = match (arguments.text, arguments.lines) {
+                    (Some(_), Some(_)) => bail!("give either text or lines, not both"),
+                    (text, lines) => text.or_else(|| {
+                        lines.map(|lines| {
+                            lines.join(
+                                "
+",
+                            )
+                        })
+                    }),
+                };
+                let [x, y, width, height] = arguments.region;
+                let frame = Frame {
+                    x: x as f32,
+                    y: y as f32,
+                    width: width as f32,
+                    height: height as f32,
+                    angle_degrees: 0.0,
+                };
+                let source_language = koharu_pipeline::PipelineConfig::load()?
+                    .read()?
+                    .translation
+                    .source_language;
+                let mut invocation = self
+                    .mutate(|project| {
+                        Box::pin(async move {
+                            let commit = project
+                                .add_text_layer(page, frame, source_language, text)
+                                .await?;
+                            let layer = commit.1;
+                            Ok((commit.0, json!({ "element": layer })))
+                        })
+                    })
+                    .await?;
+                let layer = entity(
+                    invocation.value["result"]["element"]
+                        .as_str()
+                        .unwrap_or_default(),
+                )?;
+                let snapshot = self.snapshot().await?;
+                let desktop = self.handle.state::<Desktop>();
+                invocation.value["layers"] =
+                    typesetting::report(&desktop, &snapshot, &[layer], false).await?;
                 Ok(invocation)
             }
             "check_chapter" => {

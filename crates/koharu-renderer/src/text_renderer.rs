@@ -64,6 +64,7 @@ pub(crate) struct RenderedTextMetadata {
     pub(crate) font_size: f32,
     pub(crate) color: [u8; 4],
     pub(crate) lines: Vec<RenderedLine>,
+    pub(crate) auto_fit_ceiling: Option<f32>,
 }
 
 /// Fork divergence: detection measures the outline of the source lettering,
@@ -368,6 +369,8 @@ impl TextRenderer {
                         hyphenated: line.hyphenated,
                     })
                     .collect(),
+                auto_fit_ceiling: (descriptor.auto_fit && !descriptor.point_text)
+                    .then_some(maximum),
             },
             diagnostics,
         })

@@ -157,31 +157,41 @@ Known gaps after the rebuild:
   checker LaMa already continues, it changes nothing.
 - Manual translation, chapter translation presets and unit policy, paste of
   text blocks, page duplication.
-- The in-app Agent's tools are also served over MCP (Streamable HTTP, JSON
-  responses) on `http://127.0.0.1:4100/mcp`, loopback only, always on;
-  requests with a foreign `Origin` are refused. An outside agent connects
-  with `claude mcp add --transport http koharu http://127.0.0.1:4100/mcp`
-  and works on the open project through the same host: the same project
-  lock and undo history as the app. Besides the editing tools it has
-  `page_layers` (a page's text layers in numbered order with box, balloon
-  box and the largest box inside the balloon, measured on the page's pixels
-  without text when the balloon is closed, typography and what the renderer
-  drew: fonts, final size, text box, layout box, each line with its width
-  and the room it had, hyphenated words, fit warning and what overflowed;
-  plus the last lines of the previous page and the first of the next),
-  `crop` (a PNG of part of a page, typeset, without text, or as imported),
-  `preview_layers` (a trial render of text, box, rotation and typography
-  changes that commits nothing; a fit is a trial with auto-fit in the
-  intended box), `apply_layers` (the same changes plus source text and
-  visibility, on any pages, committed as one undo step and answered with
-  what the renderer drew), `chapter_text` (pages in order with each page's
-  source and translation) and `check_chapter` (with page and layer numbers
-  and what hides hidden text). `crop` and `preview_layers` can put the
-  source beside the result and outline the layers' boxes with their numbers
-  and the measured balloon insides; images state their scale. Unknown
-  argument fields are refused. Every edit an agent commits refreshes the
-  app's project, pages and layers. A second running Koharu finds the port
-  taken and runs without the server.
+- The in-app Agent's tools are also served over MCP (Streamable HTTP,
+  compact JSON responses, plain text where a tool returns text) on
+  `http://127.0.0.1:4100/mcp`, loopback only, always on; requests with a
+  foreign `Origin` are refused. An outside agent connects with
+  `claude mcp add --transport http koharu http://127.0.0.1:4100/mcp` and
+  works on the open project through the same host: the same project lock
+  and undo history as the app. Besides the editing tools it has
+  `page_layers` (a page's text layers in numbered order with box, given
+  back unturned with its angle, balloon box and the largest box inside the
+  balloon that holds the text's centre, measured on the page's pixels
+  without text when the balloon is closed, so each lobe of a joined balloon
+  gets its own; typography; what the renderer drew: font, size, the largest
+  size auto-fit may choose, `small` below 1.2% of the page width, layout
+  box, each line with its width and room, hyphenated words, fit warning and
+  what overflowed in the text's own axes; whether the cleaning removed the
+  source lettering and its tone, with `check_color` when neither paint has
+  that tone; balloons with no text layer; and the edge lines of the
+  neighbouring pages), `crop` (a PNG of part of a page, typeset, without
+  text, or as imported), `preview_layers` (a trial render of text, box,
+  rotation and typography changes that commits nothing), `apply_layers`
+  (the same changes plus source text and visibility, on any pages, one
+  undo step), `add_text_layer` (a text layer with its translation in a
+  region; inside a balloon it flows in the balloon), `chapter_text` (one
+  line per layer: number, role, source and translation, under a line per
+  page; JSON with ids on request) and `check_chapter` (with page and layer
+  numbers, what hides hidden text, and a box per flag of lettering outside
+  every text region). Apply and preview answer in a short form per layer
+  (box, size, lines, warning, overflow, hyphenated, small), the full layer
+  on request; on book "2" a 46-layer page went from 65 KB to 8 KB and the
+  chapter text from 97 KB to 20 KB. `crop` and `preview_layers` can put the
+  source beside the result and outline the layers' boxes with their
+  numbers, the measured balloon insides and the unboxed lettering; images
+  state their scale. Unknown argument fields are refused. Every edit an
+  agent commits refreshes the app's project, pages and layers. A second
+  running Koharu finds the port taken and runs without the server.
 - Text typography has a line-breaking choice (inspector "Line breaks",
   agent `line_breaking`): automatic, which hyphenates a word as a last
   resort; whole words only; or keep my lines, which breaks only at line

@@ -1204,6 +1204,33 @@ impl Project {
         frame: Frame,
         source_language: koharu_translator::Language,
     ) -> Result<(Commit, EntityId, EntityId)> {
+        self.add_region_layer(page, frame, source_language, None)
+            .await
+    }
+
+    /// A text layer in a new text region with its translation, flowing in
+    /// the balloon that holds the region: what an agent sets in a balloon
+    /// detection left without text.
+    pub(crate) async fn add_text_layer(
+        &mut self,
+        page: EntityId,
+        frame: Frame,
+        source_language: koharu_translator::Language,
+        translation: Option<String>,
+    ) -> Result<(Commit, EntityId)> {
+        let (commit, layer, _) = self
+            .add_region_layer(page, frame, source_language, translation)
+            .await?;
+        Ok((commit, layer))
+    }
+
+    async fn add_region_layer(
+        &mut self,
+        page: EntityId,
+        frame: Frame,
+        source_language: koharu_translator::Language,
+        translation: Option<String>,
+    ) -> Result<(Commit, EntityId, EntityId)> {
         let snapshot = self.snapshot();
         let geometry = Self::geometry_from_frame(frame)?;
         let page_value = snapshot.page(page)?.page()?;
@@ -1273,6 +1300,24 @@ impl Project {
                 edit.relate::<FlowsIn>(layer, bubble)?;
             } else {
                 edit.relate::<FitsTo>(layer, region)?;
+            }
+            // A translation needs a source; one typed in by an agent has
+            // no reading to keep, as with a text box added by hand.
+            if let Some(text) = translation {
+                edit.set(
+                    content,
+                    &SceneSourceText {
+                        text: Authored::user(String::new()),
+                        language: None,
+                    },
+                )?;
+                edit.set(
+                    content,
+                    &SceneTranslation {
+                        text: Authored::user(text),
+                        language: None,
+                    },
+                )?;
             }
             added = Some((layer, region));
             Ok(())
