@@ -303,8 +303,10 @@ async fn image_edit_preview_model_receives_final_pixels_and_prompt_before_cancel
             } else {
                 assert_eq!(request.image.dimensions(), (4, 2));
                 assert_eq!(request.image.get_pixel(0, 0), Rgba([10, 20, 30, 255]));
-                assert_eq!(request.image.get_pixel(1, 0), Rgba([4, 9, 115, 254]));
-                assert_eq!(request.image.get_pixel(2, 0), Rgba([200, 100, 0, 255]));
+                // The hand-made cleanup and the paint over it, as restoration
+                // sees them.
+                assert_eq!(request.image.get_pixel(1, 0), Rgba([52, 4, 107, 254]));
+                assert_eq!(request.image.get_pixel(2, 0), Rgba([40, 50, 60, 255]));
                 assert_eq!(request.image.get_pixel(3, 0), Rgba([10, 20, 30, 255]));
             }
         }

@@ -263,11 +263,9 @@ impl Model {
                 Self::Fal { config, .. } | Self::OpenRouter { config, .. } | Self::Replicate { config, .. }
                     if config.apply_mode == InpaintingApplyMode::FullPage
             );
-        let include_paint = !remove
-            && matches!(
-                self,
-                Self::Fal { .. } | Self::OpenRouter { .. } | Self::Replicate { .. }
-            );
+        // The owner's paint is part of the page every model sees, and is
+        // kept out of the cleanup layer so the result never covers it.
+        let include_paint = !remove;
         // Automatic local cleaning leaves sound effects for the owner.
         let keep_sound_effects = intent.is_none()
             && !matches!(
@@ -924,9 +922,10 @@ async fn prepare(
         .await?
         .ok_or_else(|| anyhow!("page {page} has no source image"))?;
     let remove = input.inpainting_intent() == Some(InpaintingIntent::Remove);
+    let automatic = input.inpainting_intent().is_none();
     let mut source = original.clone();
     let mut paint = None;
-    if remove || include_paint || include_cleanup {
+    if remove || include_paint || include_cleanup || automatic {
         let mut composite = original.to_rgba8();
         for entity in input.scene.descendants(page)? {
             let entity = entity.id();
@@ -938,9 +937,21 @@ async fn prepare(
                 continue;
             }
             let is_paint = raster.kind == RasterLayerKind::Paint;
+            // Automatic cleaning starts from the page as the owner cleaned it
+            // by hand (eraser, stamp, paste, manual removal, edits to an
+            // earlier result), not from the source under it; an untouched
+            // earlier automatic result stays out, so cleaning again draws a
+            // fresh result from the page.
+            let cleaned_by_hand = raster.kind == RasterLayerKind::Cleanup
+                && automatic
+                && input
+                    .scene
+                    .component::<koharu_scene::EntityOrigin>(entity)?
+                    .is_none_or(|origin| origin.origin == Origin::User);
             if !(remove
                 || is_paint && include_paint
-                || raster.kind == RasterLayerKind::Cleanup && include_cleanup)
+                || raster.kind == RasterLayerKind::Cleanup && include_cleanup
+                || cleaned_by_hand)
             {
                 continue;
             }
