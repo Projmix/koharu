@@ -2578,9 +2578,20 @@ impl Project {
                     };
                     let mut image =
                         image::load_from_memory(&snapshot.read_blob(asset.blob).await?)?.to_rgba8();
-                    for pixel in image.pixels_mut() {
-                        for channel in 0..3 {
-                            pixel[channel] = tables[channel][usize::from(pixel[channel])];
+                    // A cleaned page a model returned whole hides the
+                    // enhancement: it takes the page's tone curve on its own.
+                    let opaque = image.pixels().filter(|pixel| pixel[3] == 255).count();
+                    if opaque * 100 >= image.pixels().len() * 99 {
+                        image = tokio_rayon::spawn(move || {
+                            koharu_pipeline::tone_cleaned_page(&mut image);
+                            image
+                        })
+                        .await;
+                    } else {
+                        for pixel in image.pixels_mut() {
+                            for channel in 0..3 {
+                                pixel[channel] = tables[channel][usize::from(pixel[channel])];
+                            }
                         }
                     }
                     let mut metadata = asset.metadata.clone();

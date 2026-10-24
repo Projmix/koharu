@@ -63,12 +63,23 @@ original and the run says why.
    becomes black and white per channel, which also removes the scan's
    cast (Give me more covers: black printed as 46-56). Digital colour pages
    are left alone; their tints are the design.
+   A page in one tinted ink on white paper (sepia print, book "2": every
+   coloured pixel at hue 26 degrees, paper tint at most 8) counts as
+   monochrome: the luminance Levels runs and each pixel's colour is scaled
+   with its luminance, so the ink's darkest brown becomes black, paper
+   white, and mid-tones keep the sepia. Per-channel black points crushed a
+   dark page's blue into yellow.
    Cleanup and paint layers made before a page was enhanced were sampled
    from the grey source and show as grey patches on the white page. "Match
    cleanup to scan enhancement" (Process menu, selected pages) maps them
    through a per-channel table from the page source to its visible
    enhancement layer, as one undoable user edit; a layer already matched to
-   the current enhancement is skipped.
+   the current enhancement is skipped. A cleaned page a model returned whole
+   (at least 99% opaque) hides the enhancement and is lighter than the
+   source (ink 53-67 against 40-50 on book "2"), so the source's table left
+   its black at 15-40; it takes the page's tone curve on its own luminance
+   instead. Histogram matching against the enhancement darkened a faint
+   watermark and copied the enhancement's colour cast.
    A monochrome page with too little ink to measure (a light page of a
    washed scan, Shanpankouru 2 pages 30 and 82) takes the chapter's black:
    the median ink edge of up to eight evenly spaced other monochrome pages,
@@ -110,7 +121,7 @@ dB and kept 96-99% of screentone detail; at q90 it lost detail, hence the
 cut-off at 90.
 
 On the owner's 106 pages (28 WebP, 26 PNG, 33 JPEG q100, all clean digital
-releases): JPEG and WebP pages are untouched, sepia/colour pages get no tone
+releases): JPEG and WebP pages are untouched, colour pages get no tone
 curve, and 9 monochrome PNG pages get only the tone curve (ink edge 0-32,
 paper 244-250). An earlier rule that ran Surface Blur on WebP by blockiness
 erased the kraft-paper texture of a colour cover; that is why de-artifacting

@@ -36,7 +36,7 @@ pub use stage::{Stage, StageProgress, StageTarget};
 pub use stages::{
     ChapterTranslation, Flux2KleinConfig, ImageEditConfig, ImportScope, InpaintingApplyMode,
     KoharuLayoutRFDetrSeg2XLConfig, RoremMixedConfig, Typeset, cleaning_unverified, ocr_unverified,
-    open_unboxed_text, text_layer_placement,
+    open_unboxed_text, text_layer_placement, tone_cleaned_page,
 };
 
 use images::ImageCache;

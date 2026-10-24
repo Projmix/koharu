@@ -15,6 +15,7 @@ use async_trait::async_trait;
 use koharu_scene::{Edit, EntityId, Generation, Patch, ProducerId, Snapshot};
 
 pub use detection::{KoharuLayoutRFDetrSeg2XLConfig, text_layer_placement};
+pub use enhancement::tone_cleaned_page;
 pub(crate) use enhancement::visible_enhancement_layer;
 pub(crate) use fal::FalModel;
 pub(crate) use fal::normalize_cleanup_prompt;

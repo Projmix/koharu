@@ -30,12 +30,30 @@ use crate::{EnhancementConfig, ModelCell};
 
 const PRODUCER: &str = "dev.koharu.pipeline.enhancement";
 /// Bumped whenever the analysis, filters or checks change what a page gets.
-const REVISION: &str = "5";
+const REVISION: &str = "7";
 const LAYER_NAME: &str = "Scan enhancement";
 /// Paper grain of a physical scan (1.1-1.8 on the owner's scans) rather than
 /// a digital release (0.02-0.13). Only scanned colour pages get Auto Color:
 /// on a digital cover the tints are the design.
 const SCANNED_GRAIN: f32 = 0.5;
+
+/// A cleaned page a model returned whole hides the enhancement under it, so
+/// it takes the tone curve this stage gives a page, measured on its own
+/// luminance: ink to black, paper to white, each pixel's colour scaled with
+/// its luminance. On the owner's sepia book these layers were lighter than
+/// the source (ink at 53-67 against 40-50), so a table learned from the source
+/// left their black at 15-40, and histogram matching against the enhancement
+/// darkened a faint watermark and copied the enhancement's colour cast.
+pub fn tone_cleaned_page(image: &mut image::RgbaImage) {
+    let rgb = image::DynamicImage::ImageRgba8(image.clone()).to_rgb8();
+    let luma = scan::Plane::luma(&rgb);
+    let levels = scan::page_levels(&luma);
+    for (pixel, value) in image.pixels_mut().zip(&luma.data) {
+        for channel in 0..3 {
+            pixel[channel] = scan::scaled(f32::from(pixel[channel]), *value, levels);
+        }
+    }
+}
 
 /// The page's scan enhancement layer, when it has one.
 pub(crate) fn enhancement_layer(scene: &Snapshot, page: EntityId) -> Result<Option<EntityId>> {

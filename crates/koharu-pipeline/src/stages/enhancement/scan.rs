@@ -4,8 +4,10 @@
 //!
 //! Everything works on luminance. Colour pages keep their chroma: the change
 //! in luminance is added to every channel, so a sepia or duotone page keeps
-//! its ink colour. The tone curve runs only on pages whose ink is neutral, so
-//! tinted ink and coloured paper that are part of the design stay as drawn.
+//! its ink colour. The tone curve runs on pages whose ink is neutral and on
+//! pages printed in one tinted ink on white paper, where its darkest tone
+//! becomes black and the paper white while mid-tones keep the ink's colour;
+//! coloured paper and colour art that are part of the design stay as drawn.
 //! Thresholds come from the measurements in docs/fork/scan-restoration.md.
 use image::{GrayImage, Luma, RgbImage};
 use rayon::prelude::*;
@@ -108,8 +110,14 @@ pub(crate) struct Analysis {
     /// Grey ink on grey paper, possibly stored with colour channels.
     pub(crate) grayscale: bool,
     /// Neutral ink and no colour beyond the paper's tint: a greyscale page
-    /// printed or scanned on tinted paper. The tone curve runs only on these.
+    /// printed or scanned on tinted paper; or a page in one tinted ink, see
+    /// `tinted_ink`. The tone curve runs only on these.
     pub(crate) monochrome: bool,
+    /// One tinted ink, such as sepia, on white paper: every coloured pixel
+    /// has the same hue. Its tone curve runs on luminance and scales each
+    /// pixel's colour with it, so the ink's darkest tone becomes black and its
+    /// mid-tones keep their colour.
+    pub(crate) tinted_ink: bool,
     /// libjpeg quality of the file's luminance table, for JPEG sources.
     pub(crate) jpeg_quality: Option<u8>,
     /// A lossless container (PNG, BMP, TIFF) that may hold a re-saved JPEG.
@@ -126,9 +134,21 @@ impl Analysis {
         let (mut counted, mut total_spread, mut strong) = (0u64, 0u64, 0u64);
         let (mut ink, mut ink_spread) = (0u64, 0u64);
         let mut paper = Vec::new();
+        // Unit hue vectors of clearly coloured pixels on the opponent axes.
+        let (mut hue_x, mut hue_y, mut hued) = (0f64, 0f64, 0u64);
         for (pixel, value) in image.pixels().zip(&luma.data) {
             let value = *value;
             let spread = spread(pixel.0);
+            if spread > 20 {
+                let [r, g, b] = pixel.0.map(f64::from);
+                let (x, y) = (r - (g + b) / 2.0, (g - b) * 0.866);
+                let length = x.hypot(y);
+                if length > 0.0 {
+                    hue_x += x / length;
+                    hue_y += y / length;
+                    hued += 1;
+                }
+            }
             if value < 96.0 {
                 ink += 1;
                 ink_spread += u64::from(spread);
@@ -148,13 +168,23 @@ impl Analysis {
         let grayscale =
             counted == 0 || total_spread as f64 / counted as f64 <= 3.0 && strong * 1000 <= counted;
         let neutral_ink = ink == 0 || ink_spread as f64 / ink as f64 <= 8.0;
+        let paper_share = paper.len() as f64 / luma.data.len().max(1) as f64;
         let paper_tint = if paper.is_empty() {
             0
         } else {
             let middle = paper.len() / 2;
             *paper.select_nth_unstable(middle).1
         };
+        // Sepia print measured a mean hue vector of 1.00 on every page of the
+        // owner's chapter; colour art spreads over several hues. White paper
+        // keeps a two-colour cover on coloured stock out.
+        let tinted_ink = !grayscale
+            && paper_share >= 0.05
+            && paper_tint <= 8
+            && hued * 100 >= counted
+            && hue_x.hypot(hue_y) >= 0.95 * hued as f64;
         let monochrome = grayscale
+            || tinted_ink
             || neutral_ink && {
                 let limit = (u16::from(paper_tint) + 12).max(24);
                 let (mut mid, mut colourful) = (0u64, 0u64);
@@ -169,6 +199,7 @@ impl Analysis {
         Self {
             grayscale,
             monochrome,
+            tinted_ink,
             jpeg_quality: jpeg_quality(encoded),
             lossless: encoded.starts_with(b"\x89PNG")
                 || encoded.starts_with(b"BM")
@@ -518,6 +549,24 @@ fn levels_of(histogram: &[u64; 256], total: u64, chapter_ink: Option<f32>) -> Le
     levels
 }
 
+/// The masked Levels of a page's own luminance: its ink edge to black and its
+/// paper edge to white.
+pub(crate) fn page_levels(plane: &Plane) -> Levels {
+    let (histogram, total) = histogram(plane.data.iter().copied());
+    levels_of(&histogram, total, None)
+}
+
+/// A colour scaled with its luminance from `value` through `levels`, so ink
+/// at or below the black point becomes black and mid-tones keep their hue.
+pub(crate) fn scaled(channel: f32, value: f32, levels: Levels) -> u8 {
+    let ratio = if value > 0.0 {
+        levels.apply(value) / value
+    } else {
+        0.0
+    };
+    to_u8(channel * ratio)
+}
+
 /// The tone curve of a monochrome page after its luminance changed from
 /// `before` to `after`: ink from luminance, paper per channel so tinted paper
 /// becomes white. `chapter_ink` is the ink edge of the chapter's other
@@ -795,6 +844,20 @@ pub(crate) fn compose(
         ));
     }
     let mut out = image.clone();
+    if let (true, Some(levels)) = (analysis.tinted_ink, tone) {
+        // Per-channel black points crushed the blue of a dark sepia page into
+        // yellow: each channel's ramp spans a different share of its range.
+        // The curve runs on luminance instead and scales the ink's colour.
+        let levels = levels[1];
+        for (index, pixel) in out.pixels_mut().enumerate() {
+            let value = after.data[index];
+            let delta = value - before.data[index];
+            for channel in 0..3 {
+                pixel[channel] = scaled(f32::from(pixel[channel]) + delta, value, levels);
+            }
+        }
+        return image::DynamicImage::ImageRgb8(out);
+    }
     for (index, pixel) in out.pixels_mut().enumerate() {
         let delta = after.data[index] - before.data[index];
         for channel in 0..3 {
@@ -913,6 +976,46 @@ mod tests {
             assert_eq!(levels.apply(f32::from([46u8, 38, 50][channel])), 0.0);
             assert_eq!(levels.apply(f32::from([250u8, 244, 246][channel])), 255.0);
         }
+    }
+
+    #[test]
+    fn sepia_ink_becomes_black_and_keeps_its_colour() {
+        // Book "2": printed in brown ink, its solid black at (36, 24, 14).
+        let ink = [36u8, 24, 14];
+        let mid = [150u8, 112, 80];
+        let image = RgbImage::from_fn(100, 100, |x, _| match x {
+            0..15 => image::Rgb(ink),
+            15..40 => image::Rgb(mid),
+            _ => image::Rgb([255, 255, 255]),
+        });
+        let luma = Plane::luma(&image);
+        let analysis = Analysis::new(&image, &luma, &[]);
+        assert!(analysis.monochrome && analysis.tinted_ink && !analysis.grayscale);
+        let levels = tone(&image, &luma, &luma, None).expect("ink moves");
+        let toned = compose(&image, analysis, &luma, &luma, Some(levels)).to_rgb8();
+        assert_eq!(toned.get_pixel(5, 5).0, [0; 3]);
+        assert_eq!(toned.get_pixel(20, 5).0, mid, "mid-tones keep the sepia");
+        assert_eq!(toned.get_pixel(60, 5).0, [255; 3]);
+    }
+
+    #[test]
+    fn a_washed_cleaned_page_gets_black_ink_and_keeps_its_sepia() {
+        // A model's cleaned page from book "2": ink at (66, 52, 40), lighter
+        // than the source's, on white paper.
+        let page = RgbImage::from_fn(100, 100, |x, _| match x {
+            0..15 => image::Rgb([66, 52, 40]),
+            15..40 => image::Rgb([150, 112, 80]),
+            _ => image::Rgb([255, 255, 255]),
+        });
+        let luma = Plane::luma(&page);
+        let levels = page_levels(&luma);
+        let toned = |x: usize| -> [u8; 3] {
+            let pixel = page.get_pixel(x as u32, 0).0;
+            std::array::from_fn(|channel| scaled(f32::from(pixel[channel]), luma.at(x, 0), levels))
+        };
+        assert_eq!(toned(5), [0; 3]);
+        assert_eq!(toned(20), [150, 112, 80], "mid-tones keep the sepia");
+        assert_eq!(toned(60), [255; 3]);
     }
 
     #[test]
