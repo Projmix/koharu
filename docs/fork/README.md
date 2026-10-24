@@ -122,12 +122,31 @@ Known gaps after the rebuild:
   endpoint and credential.
 - Image-edit inpainting through Fal, OpenRouter and Replicate, with a
   preview and approval dialog before the result is committed.
-- Cloud cleaning fills only classic balloons first (smooth outline, plain
-  white or black, lettering clear of the outline) and sends the rest to the
-  model whole. The local model "Balloon fill only" commits that fill alone
-  for review, and "Compare with original" shows the page source beside the
-  editable canvas, with page navigation and a cleanup rerun that sends a new
-  seed ([cleaning-models.ru.md](cleaning-models.ru.md)).
+- Cleaning first fills the lettering, not the balloon: each lettering pixel
+  takes the mean of the unmasked pixels within 6 px (more on larger pages)
+  when they are flat (every channel within 5), and the fill grows into thick
+  strokes only where the unmasked pixels three radii around are flat and of
+  the same colour. Open balloons, plain paper and tinted or gradient
+  balloons fill; letters touching an outline, sound effects over artwork and
+  translucent balloons with the background showing through go to the model,
+  so a translucent balloon is no longer painted white over the art. Inside a
+  detected balloon only its own pixels count; a balloon its mask covers
+  entirely takes its dominant interior colour. The local model "Balloon fill
+  only" commits that fill alone for review, and "Compare with original"
+  shows the page source beside the editable canvas, with page navigation and
+  a cleanup rerun that sends a new seed
+  ([cleaning-models.ru.md](cleaning-models.ru.md)).
+- After a local model (LaMa, AOT, FLUX.2 Klein, RORem), regular screentone
+  is redrawn over what it filled (`inpainting/screentone.rs`): the screen's
+  lattice comes from the autocorrelation of the known ring around each
+  masked area, refined on its multiples to a fraction of a pixel, its phase
+  from the dots' darkness, and dots are drawn as a binary round-dot screen
+  at the model's local tone, averaged over 4x4 subsamples. The pattern is
+  first drawn over the ring; only 16 px tiles whose dots match (correlation
+  of dots minus tone >= 0.4) are redrawn, and the model's plain paper,
+  solid ink and dark lines stay. On a crisp 2219 px page it removes the pale
+  patch LaMa leaves in large holes; at 1280 px, where the screen is a 2 px
+  checker LaMa already continues, it changes nothing.
 - Manual translation, chapter translation presets and unit policy, paste of
   text blocks, page duplication.
 - Paint and cleanup layers can be duplicated (Ctrl+J), merged down or

@@ -37,6 +37,8 @@ use crate::{
 
 const PRODUCER: &str = "dev.koharu.pipeline.inpainting";
 
+mod screentone;
+
 #[cfg(test)]
 mod preview_tests;
 #[cfg(test)]
@@ -295,6 +297,7 @@ impl Model {
             return target.patch(&input, BALLOON_FILL, &prepared.image.to_rgba8(), false, &[]);
         }
         let sent = prepared.image.clone();
+        let pending = prepared.unfilled_mask.clone();
         let (model_name, image) = match self {
             Self::BalloonFill => unreachable!("balloon fill returns above"),
             Self::LaMa(model) => {
@@ -462,6 +465,22 @@ impl Model {
                 };
                 (model.id(), image)
             }
+        };
+        // Local models leave screentone as grey mush; redraw its dots.
+        let image = if !restore
+            && matches!(
+                self,
+                Self::LaMa(_) | Self::Aot(_) | Self::Flux { .. } | Self::Rorem { .. }
+            ) {
+            let source = sent.to_rgb8();
+            tokio_rayon::spawn(move || {
+                let mut image = image.to_rgb8();
+                screentone::rescreen(&source, &mut image, &pending);
+                DynamicImage::ImageRgb8(image)
+            })
+            .await
+        } else {
+            image
         };
         let residual = if intent.is_none()
             && matches!(
@@ -894,18 +913,10 @@ async fn prepare(
             }
         }
     }
-    let mut flat_fill_regions = flat_fill_regions(input, source.width(), source.height())?;
-    // Only classic balloons are filled; the rest goes to the model whole.
-    flat_fill_regions
-        .retain(|region| classic_balloon(region) && !lettering_reaches_outline(region, &text_mask));
+    let balloons = flat_fill_regions(input, source.width(), source.height())?;
     let mut filled = source.to_rgb8();
     let mut unfilled_mask = mask.clone();
-    let flat_fill = fill_uniform_regions(
-        &mut filled,
-        &mut unfilled_mask,
-        &text_mask,
-        &flat_fill_regions,
-    );
+    let flat_fill = fill_flat_lettering(&mut filled, &mut unfilled_mask, &text_mask, &balloons);
     if !flat_fill.is_empty() {
         source = Arc::new(DynamicImage::ImageRgb8(filled));
     }
@@ -1095,18 +1106,17 @@ const TILE_CONTEXT: u32 = 128;
 const UNIFORM_BACKGROUND_MIN_PIXELS: usize = 16;
 const FLAT_FILL_EDGE_MARGIN: f32 = 3.0;
 const BALLOON_FILL: &str = "balloon-fill";
-const OUTLINE_BAND_MIN: f32 = 4.0;
-/// The outline band grows with the page: 4 px at 1280, 8 px on a 2560 scan.
-const OUTLINE_BAND_DIVISOR: f32 = 320.0;
-/// Lettering pixels within that band that mark a balloon as crossed. On six
-/// test pages clean balloons had 0-24 (a two-lobed balloon whose waist runs
-/// near its text) and crossed ones 57-2658.
-const OUTLINE_TOUCH_MIN_PIXELS: usize = 40;
-const CLASSIC_MAX_PERIMETER_RATIO: f32 = 1.08;
-const CLASSIC_MIN_SOLIDITY: f32 = 0.9;
-const CLASSIC_WHITE_MIN: u8 = 215;
-const CLASSIC_MAX_TINT: u8 = 16;
-const CLASSIC_BLACK_MAX: u8 = 40;
+/// Most a channel of a lettering pixel's surroundings may vary for the pixel
+/// to be filled flat. Paper grain on a scan stays within it; a background
+/// seen through a translucent balloon, an outline or screentone does not.
+const FLAT_FILL_MAX_DEVIATION: f64 = 5.0;
+/// A lettering pixel needs known surroundings on at least a sixth of its
+/// neighbourhood (`window / FLAT_FILL_MIN_SHARE` pixels).
+const FLAT_FILL_MIN_SHARE: u32 = 6;
+/// Side of the page tiles lettering is grouped by for the fill.
+const FLAT_FILL_TILE: u32 = 128;
+/// Passes that grow the fill inward, one neighbourhood radius each.
+const FLAT_FILL_PASSES: usize = 12;
 const MASKED_FILL_TOLERANCE: u8 = 32;
 const MASKED_FILL_MIN_SHARE: f64 = 0.6;
 
@@ -1176,142 +1186,302 @@ fn inpaint_tiled(
 // sound effects cross, and turned translucent balloons into opaque patches.
 // Those balloons go to the model whole (docs/fork/cleaning-models.ru.md).
 
-/// Whether a balloon outline is smooth: its perimeter stays close to that of
-/// its convex hull and it fills most of the hull. On six test pages classic
-/// balloons, two-lobed and cloud-shaped ones included, measured at most 1.074
-/// and at least 0.914; ragged and spiked ones from 1.075 and 0.867.
-fn classic_balloon(region: &FlatFillRegion) -> bool {
-    let hull = convex_hull(&region.polygon);
-    let hull_area = polygon_area(&hull);
-    hull_area > 0.0
-        && polygon_perimeter(&region.polygon)
-            <= polygon_perimeter(&hull) * CLASSIC_MAX_PERIMETER_RATIO
-        && polygon_area(&region.polygon) >= hull_area * CLASSIC_MIN_SOLIDITY
-}
-
-/// Paper white or black, without a tint. Scanned paper reads as light grey
-/// (226-238 on a Douyara scan), so white starts lower than pure white; tinted
-/// and mid-grey balloons are left to the model.
-fn classic_balloon_color(color: Rgb<u8>) -> bool {
-    let [red, green, blue] = color.0;
-    let (low, high) = (red.min(green).min(blue), red.max(green).max(blue));
-    high - low <= CLASSIC_MAX_TINT && (low >= CLASSIC_WHITE_MIN || high <= CLASSIC_BLACK_MAX)
-}
-
-/// Whether lettering reaches a balloon's outline: hearts or sound effects
-/// drawn across it, or a balloon whose traced contour hugs the letters.
-fn lettering_reaches_outline(region: &FlatFillRegion, text_mask: &GrayImage) -> bool {
-    let (width, height) = text_mask.dimensions();
-    let band = (width.max(height) as f32 / OUTLINE_BAND_DIVISOR).max(OUTLINE_BAND_MIN);
-    let reach = band.ceil() as u32;
-    let [left, top, right, bottom] = region.bounds;
-    let outline = OutlineIndex::new(&region.polygon, band);
-    let mut touching = 0;
-    for y in top.saturating_sub(reach)..(bottom + reach).min(height) {
-        for x in left.saturating_sub(reach)..(right + reach).min(width) {
-            if text_mask.get_pixel(x, y)[0] >= 127
-                && outline.within((x as f32 + 0.5, y as f32 + 0.5), band * band)
-            {
-                touching += 1;
-                if touching >= OUTLINE_TOUCH_MIN_PIXELS {
-                    return true;
-                }
-            }
-        }
-    }
-    false
-}
-
-/// Andrew's monotone chain.
-fn convex_hull(points: &[(f32, f32)]) -> Vec<(f32, f32)> {
-    let mut sorted = points.to_vec();
-    sorted.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)));
-    let cross = |o: (f32, f32), a: (f32, f32), b: (f32, f32)| {
-        (a.0 - o.0) * (b.1 - o.1) - (a.1 - o.1) * (b.0 - o.0)
-    };
-    let mut hull: Vec<(f32, f32)> = Vec::with_capacity(sorted.len() + 1);
-    for chain in [sorted.clone(), sorted.into_iter().rev().collect()] {
-        let start = hull.len();
-        for point in chain {
-            while hull.len() >= start + 2
-                && cross(hull[hull.len() - 2], hull[hull.len() - 1], point) <= 0.0
-            {
-                hull.pop();
-            }
-            hull.push(point);
-        }
-        hull.pop();
-    }
-    hull
-}
-
-fn polygon_perimeter(polygon: &[(f32, f32)]) -> f32 {
-    let mut previous = polygon[polygon.len() - 1];
-    let mut perimeter = 0.0;
-    for &point in polygon {
-        perimeter += (point.0 - previous.0).hypot(point.1 - previous.1);
-        previous = point;
-    }
-    perimeter
-}
-
-fn polygon_area(polygon: &[(f32, f32)]) -> f32 {
-    if polygon.len() < 3 {
-        return 0.0;
-    }
-    let mut previous = polygon[polygon.len() - 1];
-    let mut twice = 0.0;
-    for &point in polygon {
-        twice += previous.0 * point.1 - point.0 * previous.1;
-        previous = point;
-    }
-    (twice / 2.0).abs()
-}
-
-/// Fills the text inside uniform balloons and returns every pixel of those
-/// balloons that is no longer pending, with its final colour.
-fn fill_uniform_regions(
+/// Fills lettering whose surroundings are one flat colour, pixel by pixel,
+/// and returns every pixel a model result must not change, with its colour.
+///
+/// Each lettering pixel looks at the pixels outside the mask within
+/// `flat_fill_radius` of it. When they are flat (every channel's standard
+/// deviation at most `FLAT_FILL_MAX_DEVIATION`), it takes their mean;
+/// otherwise it stays for the model. A pixel with no unmasked pixels that
+/// close reads the pixels filled on earlier passes instead, so the fill
+/// reaches the middle of thick strokes, but only when the unmasked pixels
+/// three radii around are flat and of the same colour: otherwise the fill
+/// would creep along a mask into artwork it never saw. Nothing
+/// depends on a balloon being closed or classically shaped: lettering on an
+/// open balloon, on plain paper or in a tinted or gradient balloon fills,
+/// while letters touching an outline, a sound effect over artwork and a
+/// translucent balloon with the background showing through keep enough
+/// texture around them to go to the model. Inside a detected balloon only
+/// pixels of the same balloon count, so its fill never borrows the colour
+/// outside it; a balloon whose mask covers its whole interior (white
+/// lettering on a dark balloon) takes its dominant interior colour.
+fn fill_flat_lettering(
     output: &mut RgbImage,
     pending_mask: &mut GrayImage,
     text_mask: &GrayImage,
-    regions: &[FlatFillRegion],
+    balloons: &[FlatFillRegion],
 ) -> Vec<(u32, u32, Rgb<u8>)> {
-    let mut filled = Vec::new();
-    for region in regions {
+    let (width, height) = output.dimensions();
+    let index = |x: u32, y: u32| y as usize * width as usize + x as usize;
+    let mut balloon = vec![0u16; width as usize * height as usize];
+    let interiors = balloons.iter().map(polygon_interior).collect::<Vec<_>>();
+    for (number, (region, inside)) in balloons.iter().zip(&interiors).enumerate() {
         let [left, top, right, bottom] = region.bounds;
-        let inside = polygon_interior(region);
-        let mut targets = Vec::new();
         for y in top..bottom {
             for x in left..right {
-                if pending_mask.get_pixel(x, y)[0] >= 127
-                    && text_mask.get_pixel(x, y)[0] >= 127
-                    && inside.contains(x, y)
-                {
-                    targets.push((x, y));
+                if inside.contains(x, y) {
+                    balloon[index(x, y)] = number as u16 + 1;
                 }
             }
         }
-        if targets.is_empty() {
-            continue;
+    }
+    let original = pending_mask
+        .as_raw()
+        .iter()
+        .map(|value| *value < 127)
+        .collect::<Vec<_>>();
+    let mut known = original.clone();
+    let radius = flat_fill_radius(width, height);
+    let minimum = u64::from(((2 * radius + 1).pow(2) / FLAT_FILL_MIN_SHARE).max(6));
+    let reach = 3 * radius + 1;
+    // Lettering is grouped by page tile; each group's crop is its tile plus
+    // what its neighbourhoods and their context can reach.
+    let columns = width.div_ceil(FLAT_FILL_TILE);
+    let tiles = (columns * height.div_ceil(FLAT_FILL_TILE)) as usize;
+    let mut groups = vec![Vec::new(); tiles];
+    for (at, (pending, text)) in pending_mask
+        .as_raw()
+        .iter()
+        .zip(text_mask.as_raw())
+        .enumerate()
+    {
+        if *pending >= 127 && *text >= 127 {
+            let (x, y) = ((at % width as usize) as u32, (at / width as usize) as u32);
+            groups[(y / FLAT_FILL_TILE * columns + x / FLAT_FILL_TILE) as usize].push((x, y));
         }
-        let Some(color) = uniform_region_color(output, pending_mask, region, &inside)
-            .filter(|color| classic_balloon_color(*color))
-        else {
-            continue;
-        };
-        for (x, y) in targets {
+    }
+    let crops = (0..tiles as u32)
+        .map(|tile| {
+            let (left, top) = (
+                tile % columns * FLAT_FILL_TILE,
+                tile / columns * FLAT_FILL_TILE,
+            );
+            [
+                left.saturating_sub(reach),
+                top.saturating_sub(reach),
+                (left + FLAT_FILL_TILE + reach).min(width),
+                (top + FLAT_FILL_TILE + reach).min(height),
+            ]
+        })
+        .collect::<Vec<_>>();
+    let mut filled_any = vec![false; balloons.len() + 1];
+    let mut filled = Vec::new();
+    let mut fill = |output: &mut RgbImage,
+                    pending_mask: &mut GrayImage,
+                    known: &mut Vec<bool>,
+                    fills: Vec<(u32, u32, Rgb<u8>, u16)>| {
+        for (x, y, color, label) in fills {
             output.put_pixel(x, y, color);
             pending_mask.put_pixel(x, y, Luma([0]));
+            known[index(x, y)] = true;
+            filled_any[usize::from(label)] = true;
+            if label == 0 {
+                filled.push((x, y, color));
+            }
         }
-        for y in top..bottom {
-            for x in left..right {
-                if pending_mask.get_pixel(x, y)[0] < 127 && inside.contains(x, y) {
-                    filled.push((x, y, *output.get_pixel(x, y)));
+    };
+    // First, every pixel with enough unmasked surroundings, from those alone.
+    // The rest are deep inside strokes and remember the colour of the
+    // unmasked pixels three radii around, when those are flat.
+    let mut deep = Vec::new();
+    for (group, &crop) in groups.iter().zip(&crops) {
+        if group.is_empty() {
+            continue;
+        }
+        let mut labels = group
+            .iter()
+            .map(|&(x, y)| balloon[index(x, y)])
+            .collect::<Vec<_>>();
+        labels.sort_unstable();
+        labels.dedup();
+        let mut fills = Vec::new();
+        for label in labels {
+            let members = group
+                .iter()
+                .copied()
+                .filter(|&(x, y)| balloon[index(x, y)] == label)
+                .collect::<Vec<_>>();
+            // Only as far as this balloon's own letters can reach.
+            let [left, top, right, bottom] = members.iter().fold(
+                [u32::MAX, u32::MAX, 0, 0],
+                |[left, top, right, bottom], &(x, y)| {
+                    [left.min(x), top.min(y), right.max(x + 1), bottom.max(y + 1)]
+                },
+            );
+            let crop = [
+                left.saturating_sub(reach).max(crop[0]),
+                top.saturating_sub(reach).max(crop[1]),
+                (right + reach).min(crop[2]),
+                (bottom + reach).min(crop[3]),
+            ];
+            let seen = WindowSums::new(output, crop, |x, y| {
+                original[index(x, y)] && balloon[index(x, y)] == label
+            });
+            for (x, y) in members {
+                let (count, color) = seen.flat_mean(x, y, radius);
+                if count >= minimum {
+                    if let Some(color) = color {
+                        fills.push((x, y, color, label));
+                    }
+                } else if let (_, Some(context)) = seen.flat_mean(x, y, 3 * radius) {
+                    deep.push((x, y, label, context, crop));
+                }
+            }
+        }
+        fill(output, pending_mask, &mut known, fills);
+    }
+    // Then the deep pixels grow inward from filled ones, pass by pass.
+    for _ in 1..FLAT_FILL_PASSES {
+        let mut fills = Vec::new();
+        let mut tables = Vec::<([u32; 4], u16, WindowSums)>::new();
+        deep.retain(|&(x, y, label, context, crop)| {
+            let near = match tables
+                .iter()
+                .position(|(seen_crop, seen_label, _)| *seen_crop == crop && *seen_label == label)
+            {
+                Some(table) => &tables[table].2,
+                None => {
+                    tables.push((
+                        crop,
+                        label,
+                        WindowSums::new(output, crop, |x, y| {
+                            known[index(x, y)] && balloon[index(x, y)] == label
+                        }),
+                    ));
+                    &tables[tables.len() - 1].2
+                }
+            };
+            let (inner, color) = near.flat_mean(x, y, radius);
+            let Some(color) = color.filter(|color| {
+                inner >= minimum
+                    && (0..3).all(|channel| {
+                        f64::from(color[channel].abs_diff(context[channel]))
+                            <= 2.0 * FLAT_FILL_MAX_DEVIATION
+                    })
+            }) else {
+                return true;
+            };
+            fills.push((x, y, color, label));
+            false
+        });
+        if fills.is_empty() {
+            break;
+        }
+        fill(output, pending_mask, &mut known, fills);
+    }
+    let targets = groups
+        .concat()
+        .into_iter()
+        .filter(|&(x, y)| !known[index(x, y)])
+        .collect::<Vec<_>>();
+    for (number, (region, inside)) in balloons.iter().zip(&interiors).enumerate() {
+        let label = number as u16 + 1;
+        let [left, top, right, bottom] = region.bounds;
+        let remaining = targets
+            .iter()
+            .filter(|&&(x, y)| balloon[index(x, y)] == label)
+            .copied()
+            .collect::<Vec<_>>();
+        let known_inside = (top..bottom)
+            .flat_map(|y| (left..right).map(move |x| (x, y)))
+            .filter(|&(x, y)| inside.contains(x, y) && known[index(x, y)])
+            .count();
+        if !remaining.is_empty()
+            && known_inside < UNIFORM_BACKGROUND_MIN_PIXELS
+            && let Some(color) = uniform_region_color(output, pending_mask, region, inside)
+        {
+            for (x, y) in remaining {
+                output.put_pixel(x, y, color);
+                pending_mask.put_pixel(x, y, Luma([0]));
+            }
+            filled_any[usize::from(label)] = true;
+        }
+        // A filled balloon keeps its whole interior: an image-edit model sees
+        // the page and may repaint a balloon it was told to keep.
+        if filled_any[usize::from(label)] {
+            for y in top..bottom {
+                for x in left..right {
+                    if pending_mask.get_pixel(x, y)[0] < 127 && inside.contains(x, y) {
+                        filled.push((x, y, *output.get_pixel(x, y)));
+                    }
                 }
             }
         }
     }
     filled
+}
+
+/// Pixel counts and per-channel sums and squares over a crop, as an integral
+/// image, for the pixels `include` accepts.
+struct WindowSums {
+    crop: [u32; 4],
+    stride: usize,
+    table: Vec<[u64; 7]>,
+}
+
+impl WindowSums {
+    fn new(image: &RgbImage, crop: [u32; 4], include: impl Fn(u32, u32) -> bool) -> Self {
+        let [left, top, right, bottom] = crop;
+        let stride = (right - left + 1) as usize;
+        let mut table = vec![[0u64; 7]; stride * (bottom - top + 1) as usize];
+        for y in top..bottom {
+            let mut row = [0u64; 7];
+            for x in left..right {
+                if include(x, y) {
+                    let pixel = image.get_pixel(x, y);
+                    row[0] += 1;
+                    for channel in 0..3 {
+                        let value = u64::from(pixel[channel]);
+                        row[1 + channel] += value;
+                        row[4 + channel] += value * value;
+                    }
+                }
+                let at = (y - top + 1) as usize * stride + (x - left + 1) as usize;
+                let above = table[at - stride];
+                table[at] = std::array::from_fn(|value| above[value] + row[value]);
+            }
+        }
+        Self {
+            crop,
+            stride,
+            table,
+        }
+    }
+
+    /// How many accepted pixels lie within `reach` of (x, y), and their mean
+    /// colour when every channel deviates at most `FLAT_FILL_MAX_DEVIATION`.
+    fn flat_mean(&self, x: u32, y: u32, reach: u32) -> (u64, Option<Rgb<u8>>) {
+        let [left, top, right, bottom] = self.crop;
+        let (x0, y0) = (
+            x.saturating_sub(reach).max(left),
+            y.saturating_sub(reach).max(top),
+        );
+        let (x1, y1) = ((x + reach + 1).min(right), (y + reach + 1).min(bottom));
+        let at =
+            |x: u32, y: u32| &self.table[(y - top) as usize * self.stride + (x - left) as usize];
+        let sums: [u64; 7] = std::array::from_fn(|value| {
+            at(x1, y1)[value] + at(x0, y0)[value] - at(x0, y1)[value] - at(x1, y0)[value]
+        });
+        let count = sums[0];
+        if count == 0 {
+            return (0, None);
+        }
+        let flat = (0..3).all(|channel| {
+            let mean = sums[1 + channel] as f64 / count as f64;
+            sums[4 + channel] as f64 / count as f64 - mean * mean
+                <= FLAT_FILL_MAX_DEVIATION * FLAT_FILL_MAX_DEVIATION
+        });
+        let mean = Rgb(std::array::from_fn(|channel| {
+            (sums[1 + channel] as f64 / count as f64).round() as u8
+        }));
+        (count, flat.then_some(mean))
+    }
+}
+
+/// The neighbourhood a lettering pixel reads its fill colour from: 6 px on a
+/// 1280 px page, growing with larger pages.
+fn flat_fill_radius(width: u32, height: u32) -> u32 {
+    (width.max(height) / 200).max(6)
 }
 
 fn inpaint_tiles(mask: &GrayImage) -> (ImageBuffer<Luma<u32>, Vec<u32>>, Vec<InpaintTile>) {
@@ -1861,6 +2031,7 @@ mod tests {
     #[ignore = "needs a real project in KOHARU_BENCH_PROJECT"]
     async fn cleaning_benchmark() {
         // KOHARU_BENCH_MODEL picks `balloon-fill` (default) or `lama`;
+        // KOHARU_BENCH_PAGES limits it to some 1-based page numbers;
         // KOHARU_BENCH_THREADS sets libtorch's thread count; with
         // KOHARU_BENCH_OUT each page's cleanup layer is saved there, and with
         // KOHARU_BENCH_REFERENCE it is compared to an earlier run's.
@@ -1920,6 +2091,14 @@ mod tests {
         let images = Arc::new(crate::ImageCache::default());
         let (mut prepare_total, mut run_total, mut digest) = (0.0, 0.0, DefaultHasher::new());
         for (index, &page) in pages.iter().enumerate() {
+            // KOHARU_BENCH_PAGES limits the run to some 1-based page numbers.
+            if std::env::var("KOHARU_BENCH_PAGES").is_ok_and(|pages| {
+                !pages
+                    .split(',')
+                    .any(|number| number.trim() == (index + 1).to_string())
+            }) {
+                continue;
+            }
             // Each page's commit moves the head, so every page reads the latest.
             let base = session.snapshot();
             let input =
@@ -2688,7 +2867,7 @@ mod tests {
         }
         let mut calls = 0;
         let mut pending = mask.clone();
-        fill_uniform_regions(
+        fill_flat_lettering(
             &mut image,
             &mut pending,
             &mask,
@@ -2842,50 +3021,181 @@ mod tests {
         assert!(cleaned(&snapshot, page).unwrap());
     }
 
-    #[test]
-    fn only_classic_balloons_are_filled() {
-        let square = rectangle_region([20, 20, 76, 76]);
-        assert!(classic_balloon(&square));
-        // A spiked outline: every other point pulled in towards the centre.
-        let spiked = FlatFillRegion {
-            bounds: [20, 20, 76, 76],
-            polygon: (0..24)
-                .map(|step| {
-                    let angle = step as f32 * std::f32::consts::TAU / 24.0;
-                    let radius = if step % 2 == 0 { 28.0 } else { 18.0 };
-                    (48.0 + radius * angle.cos(), 48.0 + radius * angle.sin())
-                })
-                .collect(),
+    /// Cuts lettering-shaped holes into screentone on a real page, fills them
+    /// with LaMa, then with LaMa and rescreening, and compares both with the
+    /// page: mean error and the correlation of fine detail (dots in place).
+    ///
+    /// `KOHARU_SCREENTONE_PAGE=<image> KOHARU_SCREENTONE_WIDTH=1280
+    /// KOHARU_SCREENTONE_HOLES="x,y;x,y" KOHARU_SCREENTONE_OUT=<dir>
+    /// cargo test -p koharu-pipeline screentone_benchmark -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore = "needs a page image and the LaMa weights"]
+    async fn screentone_benchmark() {
+        let page = image::open(std::env::var("KOHARU_SCREENTONE_PAGE").unwrap()).unwrap();
+        let width = std::env::var("KOHARU_SCREENTONE_WIDTH")
+            .map(|value| value.parse::<u32>().unwrap())
+            .unwrap_or(page.width());
+        let page = page
+            .resize(width, u32::MAX, image::imageops::FilterType::Lanczos3)
+            .to_rgb8();
+        let holes = std::env::var("KOHARU_SCREENTONE_HOLES")
+            .unwrap()
+            .split(';')
+            .map(|hole| {
+                let (x, y) = hole.split_once(',').unwrap();
+                (x.parse::<u32>().unwrap(), y.parse::<u32>().unwrap())
+            })
+            .collect::<Vec<_>>();
+        let output = std::path::PathBuf::from(std::env::var("KOHARU_SCREENTONE_OUT").unwrap());
+        std::fs::create_dir_all(&output).unwrap();
+        // Three strokes of a character, 4 px wide, in a 36 x 28 box, times
+        // KOHARU_SCREENTONE_SCALE.
+        let scale = std::env::var("KOHARU_SCREENTONE_SCALE")
+            .map(|value| value.parse::<u32>().unwrap())
+            .unwrap_or(1);
+        let mut mask = GrayImage::new(page.width(), page.height());
+        for &(left, top) in &holes {
+            for y in 0..28 * scale {
+                for x in 0..36 * scale {
+                    let (x0, y0) = (x / scale, y / scale);
+                    let stroke =
+                        (4..8).contains(&y0) || (12..16).contains(&x0) || (20..24).contains(&y0);
+                    if stroke {
+                        mask.put_pixel(left + x, top + y, Luma([255]));
+                    }
+                }
+            }
+        }
+        let mut damaged = page.clone();
+        for (x, y, value) in mask.enumerate_pixels() {
+            if value[0] > 0 {
+                damaged.put_pixel(x, y, Rgb([0, 0, 0]));
+            }
+        }
+        koharu_ml::init().await.unwrap();
+        let Model::LaMa(model) = Model::load(koharu_ml::Device::cpu(), &InpaintingModel::LaMa {})
+            .await
+            .unwrap()
+        else {
+            unreachable!("LaMa loads as LaMa")
         };
-        assert!(!classic_balloon(&spiked));
+        let lama = inpaint_tiled(
+            &DynamicImage::ImageRgb8(damaged.clone()),
+            &mask,
+            |image, mask| {
+                Ok(DynamicImage::ImageRgb8(model.lock().unwrap().inference(
+                    image,
+                    mask,
+                    &InpaintRequest::default(),
+                )?))
+            },
+        )
+        .unwrap()
+        .to_rgb8();
+        let mut rescreened = lama.clone();
+        let redrawn = screentone::rescreen(&damaged, &mut rescreened, &mask);
+        let luma = |image: &RgbImage, x: u32, y: u32| f64::from(image.get_pixel(x, y)[0]);
+        let detail = |image: &RgbImage, x: u32, y: u32| {
+            let mut sum = 0.0;
+            for dy in 0..5 {
+                for dx in 0..5 {
+                    sum += luma(image, x + dx - 2, y + dy - 2);
+                }
+            }
+            luma(image, x, y) - sum / 25.0
+        };
+        for (name, result) in [("lama", &lama), ("rescreen", &rescreened)] {
+            let (mut error, mut count) = (0.0, 0.0);
+            let mut sums = [0.0f64; 5];
+            for (x, y, value) in mask.enumerate_pixels() {
+                if value[0] == 0 {
+                    continue;
+                }
+                error += (luma(result, x, y) - luma(&page, x, y)).abs();
+                count += 1.0;
+                let (a, b) = (detail(&page, x, y), detail(result, x, y));
+                sums[0] += a;
+                sums[1] += b;
+                sums[2] += a * a;
+                sums[3] += b * b;
+                sums[4] += a * b;
+            }
+            let covariance = sums[4] / count - sums[0] * sums[1] / (count * count);
+            let correlation = covariance
+                / ((sums[2] / count - (sums[0] / count).powi(2))
+                    * (sums[3] / count - (sums[1] / count).powi(2)))
+                .sqrt()
+                .max(1e-9);
+            println!(
+                "{name}: mean error {:.1}, detail correlation {correlation:.2}",
+                error / count
+            );
+        }
+        println!(
+            "rescreened {redrawn} of {} masked pixels",
+            mask.pixels().filter(|value| value[0] > 0).count()
+        );
+        for (name, image) in [("page", &page), ("lama", &lama), ("rescreen", &rescreened)] {
+            image.save(output.join(format!("{name}.png"))).unwrap();
+        }
+        for (index, &(left, top)) in holes.iter().enumerate() {
+            let (x, y) = (
+                left.saturating_sub(18 * scale),
+                top.saturating_sub(18 * scale),
+            );
+            let crop = |image: &RgbImage| {
+                image::imageops::resize(
+                    &image::imageops::crop_imm(image, x, y, 72 * scale, 64 * scale).to_image(),
+                    288,
+                    256,
+                    image::imageops::FilterType::Nearest,
+                )
+            };
+            let mut sheet = RgbImage::from_pixel(288 * 4 + 30, 256, Rgb([255, 0, 0]));
+            for (column, image) in [&page, &damaged, &lama, &rescreened]
+                .into_iter()
+                .enumerate()
+            {
+                image::imageops::overlay(&mut sheet, &crop(image), column as i64 * 298, 0);
+            }
+            sheet
+                .save(output.join(format!("hole-{index}.png")))
+                .unwrap();
+        }
+    }
 
-        assert!(classic_balloon_color(Rgb([250, 250, 248])));
-        assert!(classic_balloon_color(Rgb([12, 12, 12])));
-        assert!(classic_balloon_color(Rgb([232, 230, 228])));
-        assert!(!classic_balloon_color(Rgb([250, 240, 220])));
-        assert!(!classic_balloon_color(Rgb([150, 150, 150])));
-
-        // Lettering inside, and a sound effect drawn across the left outline.
-        let mut inside = GrayImage::new(96, 96);
-        for y in 40..56 {
-            for x in 44..60 {
-                inside.put_pixel(x, y, Luma([u8::MAX]));
+    #[test]
+    fn lettering_fills_where_its_surroundings_are_flat() {
+        // Left: plain paper with no detected balloon (an open balloon).
+        // Middle: a translucent balloon with a 230/255 pattern showing
+        // through. Right: a sound effect running from paper onto hatching.
+        let mut image = RgbImage::from_fn(300, 100, |x, y| {
+            if (100..200).contains(&x) && (x + y).is_multiple_of(2) {
+                Rgb([230, 230, 230])
+            } else if x >= 250 && (x / 2).is_multiple_of(2) {
+                Rgb([40, 40, 40])
+            } else {
+                Rgb([250, 250, 250])
+            }
+        });
+        let mut mask = GrayImage::new(300, 100);
+        for y in 40..60 {
+            for x in (20..80).chain(120..180).chain(220..280) {
+                image.put_pixel(x, y, Rgb([10, 10, 10]));
+                mask.put_pixel(x, y, Luma([u8::MAX]));
             }
         }
-        let mut across = inside.clone();
-        for y in 40..56 {
-            for x in 12..30 {
-                across.put_pixel(x, y, Luma([u8::MAX]));
-            }
-        }
-        assert!(!lettering_reaches_outline(&square, &inside));
-        assert!(lettering_reaches_outline(&square, &across));
+        let mut pending = mask.clone();
+        let filled = fill_flat_lettering(&mut image, &mut pending, &mask, &[]);
 
-        // A uniform mid-grey balloon is left pending.
-        let mut image = RgbImage::from_pixel(96, 96, Rgb([150, 150, 150]));
-        let mut pending = inside.clone();
-        assert!(fill_uniform_regions(&mut image, &mut pending, &inside, &[square]).is_empty());
-        assert_eq!(pending, inside);
+        assert_eq!(image.get_pixel(50, 50), &Rgb([250, 250, 250]));
+        assert_eq!(pending.get_pixel(50, 50)[0], 0);
+        assert!(filled.contains(&(50, 50, Rgb([250, 250, 250]))));
+        // The pattern behind the translucent balloon is left to the model.
+        assert_eq!(pending.get_pixel(150, 50)[0], u8::MAX);
+        // The sound effect fills on paper and stays pending over hatching.
+        assert_eq!(pending.get_pixel(225, 50)[0], 0);
+        assert_eq!(pending.get_pixel(275, 50)[0], u8::MAX);
     }
 
     #[test]
@@ -2919,7 +3229,7 @@ mod tests {
         }
         let mut calls = 0;
         let mut pending = mask.clone();
-        fill_uniform_regions(
+        fill_flat_lettering(
             &mut image,
             &mut pending,
             &mask,
@@ -2960,7 +3270,7 @@ mod tests {
         }
         let mut pending = mask.clone();
 
-        let filled = fill_uniform_regions(
+        let filled = fill_flat_lettering(
             &mut image,
             &mut pending,
             &mask,
