@@ -758,13 +758,33 @@ struct FlatFillRegion {
 }
 
 /// Removes from the mask each lettering blob lying mostly inside a text region
-/// whose text is a sound effect.
+/// whose text is a sound effect, unless that region sits in a detected
+/// balloon: detection calls small shouts in balloons ("HUH?") sound effects,
+/// and a balloon cleans like any other.
 fn drop_sound_effects(
     input: &StageInput,
     mask: &mut GrayImage,
     text_mask: &mut GrayImage,
 ) -> Result<()> {
     let (width, height) = mask.dimensions();
+    let balloons = flat_fill_regions(input, width, height)?
+        .into_iter()
+        .map(|region| {
+            let inside = polygon_interior(&region);
+            (region, inside)
+        })
+        .collect::<Vec<_>>();
+    let in_balloon = |x: f64, y: f64| {
+        let (x, y) = (x.floor() as i64, y.floor() as i64);
+        balloons.iter().any(|(region, inside)| {
+            let [left, top, right, bottom] = region.bounds;
+            x >= i64::from(left)
+                && y >= i64::from(top)
+                && x < i64::from(right)
+                && y < i64::from(bottom)
+                && inside.contains(x as u32, y as u32)
+        })
+    };
     let mut effect = vec![false; width as usize * height as usize];
     let mut any = false;
     for entity in input.scene.descendants(input.page()?)? {
@@ -790,6 +810,9 @@ fn drop_sound_effects(
         let Some((left, top, right, bottom)) = crate::scope::geometry_extents(&geometry) else {
             continue;
         };
+        if in_balloon((left + right) / 2.0, (top + bottom) / 2.0) {
+            continue;
+        }
         let bounds = [
             left.floor().clamp(0.0, f64::from(width)) as u32,
             top.floor().clamp(0.0, f64::from(height)) as u32,
@@ -1206,6 +1229,9 @@ const FLAT_FILL_INLIER_RANGE: u8 = 24;
 /// Share of a neighbourhood's unmasked pixels that must be the balloon's own
 /// colour for a flat fill: a few stray letter ends pass, hatching does not.
 const FLAT_FILL_MIN_INLIERS: f64 = 0.6;
+/// Share of a balloon's unmasked interior that must be its own colour for
+/// all its lettering to fill at once.
+const FLAT_FILL_BALLOON_INLIERS: f64 = 0.9;
 /// Side of the page tiles lettering is grouped by for the fill.
 const FLAT_FILL_TILE: u32 = 128;
 /// Passes that grow the fill inward, one neighbourhood radius each.
@@ -1373,6 +1399,48 @@ fn fill_flat_lettering(
             }
         }
     };
+    // A detected balloon whose unmasked interior is one flat colour fills all
+    // its lettering with it at once, however little of it shows around the
+    // letters (small balloons).
+    for (number, (region, inside)) in balloons.iter().zip(&interiors).enumerate() {
+        let label = number as u16 + 1;
+        let [left, top, right, bottom] = region.bounds;
+        let mut pixels = Vec::new();
+        for y in top..bottom {
+            for x in left..right {
+                if inside.contains(x, y) && original[index(x, y)] {
+                    pixels.push(*output.get_pixel(x, y));
+                }
+            }
+        }
+        if pixels.len() < UNIFORM_BACKGROUND_MIN_PIXELS {
+            continue;
+        }
+        let mut brightness = pixels.iter().map(luma).collect::<Vec<_>>();
+        let reference = median(&mut brightness);
+        let inliers = pixels
+            .iter()
+            .copied()
+            .filter(|pixel| luma(pixel).abs_diff(reference) <= FLAT_FILL_INLIER_RANGE)
+            .collect::<Vec<_>>();
+        if (inliers.len() as f64) < FLAT_FILL_BALLOON_INLIERS * pixels.len() as f64 {
+            continue;
+        }
+        let Some(color) = flat_color(&inliers) else {
+            continue;
+        };
+        let fills = groups
+            .iter()
+            .flatten()
+            .copied()
+            .filter(|&(x, y)| balloon[index(x, y)] == label)
+            .map(|(x, y)| (x, y, color, label))
+            .collect::<Vec<_>>();
+        fill(output, pending_mask, &mut known, fills);
+    }
+    for group in &mut groups {
+        group.retain(|&(x, y)| !known[index(x, y)]);
+    }
     // First, every pixel with enough unmasked surroundings, from those alone.
     // The rest are deep inside strokes and remember the colour of the
     // unmasked pixels three radii around, when those are flat.
@@ -2265,6 +2333,12 @@ mod tests {
             let first = started.elapsed().as_secs_f64() * 1000.0;
             let started = Instant::now();
             let prepared = prepare(&input(), false, false, false).await.unwrap();
+            if let Some(output) = &output {
+                prepared
+                    .original
+                    .save(output.join(format!("page-{:02}-base.png", index + 1)))
+                    .unwrap();
+            }
             let prepare_ms = started.elapsed().as_secs_f64() * 1000.0;
             let started = Instant::now();
             let tiles = inpaint_tiles(&prepared.unfilled_mask).1;
