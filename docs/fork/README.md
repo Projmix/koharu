@@ -166,14 +166,30 @@ Known gaps after the rebuild:
   `page_layers` (a page's text layers in numbered order with box, balloon
   box and the largest box inside the balloon, measured on the page's pixels
   without text when the balloon is closed, typography and what the renderer
-  drew: fonts, final size, text box, fit warning), `crop` (a PNG of part of
-  a page, typeset, without text, or as imported), `preview_layers` (a trial
-  render of text, box and typography changes that commits nothing; a fit is
-  a trial with auto-fit in the intended box), `apply_layers` (the same
-  changes plus visibility, on any pages, committed as one undo step and
-  answered with what the renderer drew) and `check_chapter`. Every edit an
-  agent commits refreshes the app's project, pages and layers. A second
-  running Koharu finds the port taken and runs without the server.
+  drew: fonts, final size, text box, layout box, each line with its width
+  and the room it had, hyphenated words, fit warning and what overflowed;
+  plus the last lines of the previous page and the first of the next),
+  `crop` (a PNG of part of a page, typeset, without text, or as imported),
+  `preview_layers` (a trial render of text, box, rotation and typography
+  changes that commits nothing; a fit is a trial with auto-fit in the
+  intended box), `apply_layers` (the same changes plus source text and
+  visibility, on any pages, committed as one undo step and answered with
+  what the renderer drew), `chapter_text` (pages in order with each page's
+  source and translation) and `check_chapter` (with page and layer numbers
+  and what hides hidden text). `crop` and `preview_layers` can put the
+  source beside the result and outline the layers' boxes with their numbers
+  and the measured balloon insides; images state their scale. Unknown
+  argument fields are refused. Every edit an agent commits refreshes the
+  app's project, pages and layers. A second running Koharu finds the port
+  taken and runs without the server.
+- Text typography has a line-breaking choice (inspector "Line breaks",
+  agent `line_breaking`): automatic, which hyphenates a word as a last
+  resort; whole words only; or keep my lines, which breaks only at line
+  breaks in the text. With either of the last two, auto-fit shrinks the
+  text instead of splitting a word, and a fixed size that does not fit
+  overflows. Start or end alignment of free text, outside a balloon, sets
+  the whole block against that side of its box, as Photoshop paragraph
+  text does; balloon text stays centred in the balloon.
 - Paint and cleanup layers can be duplicated (Ctrl+J), merged down or
   merged together as they show (Ctrl+E; masks and opacity are baked in,
   hidden layers are refused), and given a reveal mask, Photoshop's Layer

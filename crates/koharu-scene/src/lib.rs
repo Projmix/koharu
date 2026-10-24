@@ -26,12 +26,12 @@ pub use component::{Component, ValidationContext};
 pub use components::{
     Asset, AssetInput, AssetMetadata, AssetRole, Authored, Character, CharacterId, CharacterList,
     CleanupDone, DetectionAnalysis, DetectionLabel, EntityOrigin, FontStyle, Gender, Generation,
-    Geometry, Group, LanguageTag, ObservedText, OcrAnalysis, Origin, Page, PageDraft, PageMarkup,
-    PageMarkupMissing, PageMarkupStatus, Point, Project, RasterLayer, RasterLayerKind, Region,
-    RegionKind, Relation, RelationKind, SourceText, SpeechKind, SpeechMarkup, TextAlignment,
-    TextContent, TextDirection, TextGroup, TextLayout, TextLayoutKind, TextRole, Translation,
-    TranslationReview, TranslationReviewReason, Typography, UnboxedText, UnboxedTextReview,
-    Visibility, WritingMode,
+    Geometry, Group, LanguageTag, LineBreaking, ObservedText, OcrAnalysis, Origin, Page, PageDraft,
+    PageMarkup, PageMarkupMissing, PageMarkupStatus, Point, Project, RasterLayer, RasterLayerKind,
+    Region, RegionKind, Relation, RelationKind, SourceText, SpeechKind, SpeechMarkup,
+    TextAlignment, TextContent, TextDirection, TextGroup, TextLayout, TextLayoutKind, TextRole,
+    Translation, TranslationReview, TranslationReviewReason, Typography, UnboxedText,
+    UnboxedTextReview, Visibility, WritingMode,
 };
 pub use document::{AnalysisRegionRef, GroupRef, TextContentRef, TextLayerRef};
 pub use edit::{At, Edit, RemovePolicy};

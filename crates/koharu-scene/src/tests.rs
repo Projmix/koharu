@@ -1260,6 +1260,7 @@ async fn independent_pipeline_components_rebase() {
                     alignment: Some(TextAlignment::Center),
                     writing_mode: None,
                     extensions: BTreeMap::new(),
+                    line_breaking: None,
                 },
             )
         })

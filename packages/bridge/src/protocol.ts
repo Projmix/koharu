@@ -527,6 +527,16 @@ export type LayerVisibility = {
 	opacity: number,
 };
 
+/**
+ *  Where text may break across lines; `None` on the typography lets the
+ *  renderer hyphenate a word as a last resort.
+ */
+export type LineBreaking = 
+/**  Wrap between words only, never inside one. */
+"whole_words" | 
+/**  Keep the author's lines: break only at line breaks in the text. */
+"manual";
+
 export type LmStudioConfig = {
 	base_url?: string | null,
 };
@@ -961,6 +971,7 @@ export type Typography = {
 	stroke_width: number | null,
 	alignment: TextAlignment | null,
 	writing_mode: WritingMode | null,
+	line_breaking: LineBreaking | null,
 };
 
 export type TypographyUpdate = {

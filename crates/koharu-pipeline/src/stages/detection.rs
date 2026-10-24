@@ -579,6 +579,7 @@ fn write_region<'a>(
         alignment: None,
         writing_mode: inferred.map(|value| value.writing_mode),
         extensions: Default::default(),
+        line_breaking: None,
     };
     edit.relate::<RecognizedFrom>(content, entity)
         .context("failed to associate detected text content with its region")?;
@@ -3322,6 +3323,7 @@ mod tests {
                                 alignment: None,
                                 writing_mode: None,
                                 extensions: Default::default(),
+                                line_breaking: None,
                             },
                         }],
                     },

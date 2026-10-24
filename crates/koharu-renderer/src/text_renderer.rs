@@ -10,7 +10,7 @@ use koharu_rasterizer::{
 use vello::kurbo::Affine;
 
 use crate::{
-    Error, FontStyle, HyphenationPolicy, LayoutRun, RenderBounds, RenderDiagnostic,
+    Error, FontStyle, HyphenationPolicy, LayoutRun, RenderBounds, RenderDiagnostic, RenderedLine,
     Result as RenderResult, TextAlign, TextLayout, WritingMode,
     bubble::LayoutBox,
     fonts::{Fonts, font_key},
@@ -34,6 +34,7 @@ pub(crate) struct TextNodeDescriptor {
     /// Largest automatic size, scaled to the page by the renderer.
     pub(crate) automatic_ceiling: f32,
     pub(crate) auto_fit: bool,
+    pub(crate) line_breaking: Option<koharu_scene::LineBreaking>,
     pub(crate) alignment: TextAlign,
     pub(crate) writing_mode: WritingMode,
     pub(crate) foreground_color: [u8; 4],
@@ -62,6 +63,7 @@ pub(crate) struct RenderedTextMetadata {
     pub(crate) post_script_fonts: Vec<String>,
     pub(crate) font_size: f32,
     pub(crate) color: [u8; 4],
+    pub(crate) lines: Vec<RenderedLine>,
 }
 
 /// Fork divergence: detection measures the outline of the source lettering,
@@ -240,7 +242,13 @@ impl TextRenderer {
             layout = layout.with_hyphenation_language_tag(language.as_str());
         }
         if !descriptor.point_text && descriptor.writing_mode == WritingMode::Horizontal {
-            layout = layout.with_hyphenation_policy(HyphenationPolicy::LastResort);
+            layout = layout.with_hyphenation_policy(match descriptor.line_breaking {
+                None => HyphenationPolicy::LastResort,
+                Some(_) => HyphenationPolicy::Disabled,
+            });
+        }
+        if descriptor.line_breaking == Some(koharu_scene::LineBreaking::Manual) {
+            layout = layout.with_manual_line_breaks(true);
         }
         let layout = if descriptor.auto_fit && !descriptor.point_text {
             layout
@@ -260,6 +268,19 @@ impl TextRenderer {
         } else {
             placement(bounds, layout.width, layout.height)
         };
+        // As in Photoshop paragraph text, start or end alignment sets the
+        // block against that side of a free text box, not only its lines. A
+        // balloon keeps its block centred in the balloon's shape.
+        if !is_bubble_text
+            && !descriptor.point_text
+            && descriptor.writing_mode == WritingMode::Horizontal
+        {
+            match descriptor.alignment {
+                TextAlign::Left | TextAlign::Justify => x = bounds.x,
+                TextAlign::Right => x = bounds.x + bounds.width - layout.width,
+                TextAlign::Center => {}
+            }
+        }
         x += layout.placement_offset_x();
         y += layout.placement_offset_y();
         let transform = Affine::translate((f64::from(x), f64::from(y)));
@@ -333,6 +354,20 @@ impl TextRenderer {
                     .collect(),
                 font_size: layout.font_size,
                 color,
+                lines: layout
+                    .lines
+                    .iter()
+                    .map(|line| RenderedLine {
+                        text: format!(
+                            "{}{}",
+                            descriptor.text[line.range.clone()].trim_end(),
+                            if line.hyphenated { "-" } else { "" }
+                        ),
+                        width: line.advance,
+                        available: line.available,
+                        hyphenated: line.hyphenated,
+                    })
+                    .collect(),
             },
             diagnostics,
         })
@@ -482,6 +517,7 @@ mod tests {
             minimum_font_size: 9.0,
             automatic_ceiling: 24.0,
             auto_fit: true,
+            line_breaking: None,
             alignment: TextAlign::Center,
             writing_mode: WritingMode::Horizontal,
             foreground_color: [0, 0, 0, 255],
@@ -541,6 +577,7 @@ mod tests {
                 minimum_font_size: 9.0,
                 automatic_ceiling: 24.0,
                 auto_fit: false,
+                line_breaking: None,
                 alignment: TextAlign::Center,
                 writing_mode: WritingMode::Horizontal,
                 foreground_color: [0, 0, 0, 255],

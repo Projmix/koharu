@@ -243,6 +243,7 @@ pub struct Typography {
     pub stroke_width: Option<f32>,
     pub alignment: Option<koharu_scene::TextAlignment>,
     pub writing_mode: Option<koharu_scene::WritingMode>,
+    pub line_breaking: Option<koharu_scene::LineBreaking>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, Type)]
@@ -913,6 +914,7 @@ impl Project {
                     alignment: typography.alignment,
                     writing_mode: typography.writing_mode,
                     extensions: Default::default(),
+                    line_breaking: typography.line_breaking,
                 },
             )?;
         }
@@ -1250,6 +1252,7 @@ impl Project {
                     alignment: None,
                     writing_mode: None,
                     extensions: Default::default(),
+                    line_breaking: None,
                 },
             )?;
             edit.set(
@@ -1328,6 +1331,7 @@ impl Project {
                     },
                     writing_mode: None,
                     extensions: Default::default(),
+                    line_breaking: None,
                 },
             )?;
             Ok(())
@@ -1343,12 +1347,22 @@ impl Project {
         layer: EntityId,
         text: String,
     ) -> Result<Commit> {
-        let snapshot = self.snapshot();
-        let content = Self::text_content(&snapshot, layer)?;
+        let step = Self::source_step(&self.snapshot(), layer, text)?;
+        self.apply_steps(vec![step]).await
+    }
+
+    /// `set_source_text`'s change, checked against `snapshot`, as a step.
+    /// Source text written by hand is no longer an unverified OCR draft.
+    pub(crate) fn source_step(
+        snapshot: &Snapshot,
+        layer: EntityId,
+        text: String,
+    ) -> Result<EditStep> {
+        let content = Self::text_content(snapshot, layer)?;
         let language = snapshot
             .component::<SceneSourceText>(content)?
             .and_then(|source| source.language);
-        let patch = snapshot.patch(|edit| {
+        Ok(Box::new(move |edit| {
             edit.promote_entity_to_user(layer)?;
             edit.promote_entity_to_user(content)?;
             edit.set(
@@ -1358,8 +1372,7 @@ impl Project {
                     language,
                 },
             )
-        })?;
-        self.commit(patch).await
+        }))
     }
 
     pub(crate) async fn set_text_role(&mut self, layer: EntityId, role: String) -> Result<Commit> {
@@ -1691,6 +1704,7 @@ impl Project {
                         alignment: update.typography.alignment,
                         writing_mode: update.typography.writing_mode,
                         extensions: Default::default(),
+                        line_breaking: update.typography.line_breaking,
                     },
                 )?;
             }
@@ -2995,6 +3009,7 @@ impl Project {
             stroke_width: typography.stroke_width,
             alignment: typography.alignment,
             writing_mode,
+            line_breaking: typography.line_breaking,
         }
     }
 
@@ -3090,7 +3105,7 @@ impl Project {
         Ok(roots)
     }
 
-    fn geometry_from_frame(frame: Frame) -> Result<SceneGeometry> {
+    pub(crate) fn geometry_from_frame(frame: Frame) -> Result<SceneGeometry> {
         if !frame.x.is_finite()
             || !frame.y.is_finite()
             || !frame.width.is_finite()
@@ -3432,6 +3447,7 @@ mod tests {
             alignment: None,
             writing_mode: Some(WritingMode::Vertical),
             extensions: Default::default(),
+            line_breaking: None,
         };
 
         assert_eq!(
@@ -3806,6 +3822,7 @@ mod tests {
                     alignment: Some(koharu_scene::TextAlignment::Center),
                     writing_mode: Some(WritingMode::Vertical),
                     extensions: Default::default(),
+                    line_breaking: None,
                 },
             )
             .unwrap();
@@ -4673,6 +4690,7 @@ mod tests {
             alignment: None,
             writing_mode: None,
             extensions: Default::default(),
+            line_breaking: None,
         };
         session.commit(setup.finish().unwrap()).await.unwrap();
         let mut detection = session.snapshot().edit_as(Generation::new(

@@ -83,6 +83,7 @@ import {
   type TextFitWarningKind,
   type TranslationReviewReason,
   type Typography,
+  type LineBreaking,
   type WritingMode,
 } from '@koharu/bridge/protocol'
 import { Badge } from '@koharu/ui/components/badge'
@@ -144,6 +145,7 @@ const defaultTypography: Typography = {
   stroke_width: 0,
   alignment: null,
   writing_mode: null,
+  line_breaking: null,
 }
 
 const textRoleOptions = [
@@ -466,6 +468,35 @@ function TypeInspector() {
             </Select>
           </InspectorField>
         </div>
+
+        <InspectorField label={t('inspector.lineBreaking')}>
+          <Select
+            disabled={disabled}
+            value={typography.line_breaking ?? 'auto'}
+            onValueChange={(line_breaking) =>
+              apply((value) => ({
+                ...value,
+                line_breaking: line_breaking === 'auto' ? null : (line_breaking as LineBreaking),
+              }))
+            }
+          >
+            <SelectTrigger size='sm' aria-label={t('inspector.lineBreaking')} className='w-full'>
+              <SelectValue>
+                {t(
+                  {
+                    whole_words: 'inspector.lineBreakingWholeWords',
+                    manual: 'inspector.lineBreakingManual',
+                  }[typography.line_breaking ?? ''] ?? 'inspector.lineBreakingAuto',
+                )}
+              </SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value='auto'>{t('inspector.lineBreakingAuto')}</SelectItem>
+              <SelectItem value='whole_words'>{t('inspector.lineBreakingWholeWords')}</SelectItem>
+              <SelectItem value='manual'>{t('inspector.lineBreakingManual')}</SelectItem>
+            </SelectContent>
+          </Select>
+        </InspectorField>
 
         <div className='grid min-w-0 grid-cols-[2.75rem_minmax(5.5rem,1fr)_1.5rem] items-end gap-1.5'>
           <InspectorField label={t('inspector.border')}>

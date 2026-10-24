@@ -879,6 +879,7 @@ impl Traversal<'_> {
             minimum_font_size: MINIMUM_FONT_SIZE,
             automatic_ceiling,
             auto_fit: typography.as_ref().is_none_or(|value| value.auto_fit),
+            line_breaking: typography.as_ref().and_then(|value| value.line_breaking),
             alignment,
             writing_mode,
             foreground_color: typography
@@ -1317,6 +1318,7 @@ fn build_node(
                     post_script_fonts: rendered.metadata.post_script_fonts,
                     font_size: rendered.metadata.font_size,
                     color: rendered.metadata.color,
+                    lines: rendered.metadata.lines.into(),
                 }),
                 diagnostics: rendered.diagnostics.into(),
             })
@@ -1358,6 +1360,7 @@ fn assemble_frame(
                     alignment,
                     writing_mode,
                     angle_degrees,
+                    lines: metadata.lines.clone(),
                 })
             }
         };
@@ -2068,6 +2071,7 @@ mod tests {
             alignment: None,
             writing_mode: Some(koharu_scene::WritingMode::Vertical),
             extensions: BTreeMap::new(),
+            line_breaking: None,
         };
         let bounds = LayoutBox {
             x: 0.0,
@@ -2104,6 +2108,7 @@ mod tests {
             alignment: None,
             writing_mode: Some(koharu_scene::WritingMode::Vertical),
             extensions: BTreeMap::new(),
+            line_breaking: None,
         };
         let bounds = LayoutBox {
             x: 0.0,
@@ -2840,6 +2845,7 @@ mod tests {
                             alignment: None,
                             writing_mode: None,
                             extensions: Default::default(),
+                            line_breaking: None,
                         },
                     )?;
                     layers.push(layer);

@@ -246,15 +246,15 @@ impl Host for KoharuHost {
                     ),
                     definition::<typesetting::PageLayers>(
                         "page_layers",
-                        "List a page's text layers in their numbered order: text, role, box, balloon box and the largest box inside the balloon, typography, and what the renderer drew (fonts, final size, text box, overflow / below_readable_size / low_contrast warning).",
+                        "List a page's text layers in their numbered order: text, role, box, balloon box and the largest box inside the balloon (measured on the page's pixels when the balloon is closed), typography, and what the renderer drew: fonts, final size, text box, layout box (the box less its inset), each drawn line with its width and the room it had, hyphenated words, and an overflow / below_readable_size / low_contrast warning. Also the last lines of the previous page and the first of the next.",
                     ),
                     definition::<typesetting::Crop>(
                         "crop",
-                        "Return a PNG of part of a page as it shows: typeset (with text), clean (without its text layers) or source (as imported).",
+                        "Return a PNG of part of a page as it shows: typeset (with text), clean (without its text layers) or source (as imported). compare puts the source on the left and the view on the right; outline draws every text layer's box with its number and the measured balloon interiors.",
                     ),
                     definition::<typesetting::PreviewLayers>(
                         "preview_layers",
-                        "Trial-render text, box and typography changes to layers of one page without committing anything. Returns what the renderer drew for each changed layer and a PNG of the area. To fit text, try auto_fit in the intended box and read the final size.",
+                        "Trial-render text, box and typography changes to layers of one page without committing anything. Returns what the renderer drew for each changed layer (with its drawn lines and hyphenated words) and a PNG of the area at the stated scale. compare puts the source on the left; outline draws the changed layers' boxes with their numbers and the measured balloon interiors. To fit text, try auto_fit in the intended box; line_breaking whole_words or manual stops auto-fit from hyphenating.",
                     ),
                     definition::<typesetting::ApplyLayers>(
                         "apply_layers",
@@ -262,7 +262,11 @@ impl Host for KoharuHost {
                     ),
                     definition::<CheckChapter>(
                         "check_chapter",
-                        "Run the pre-export chapter check: blocks with no translation, Japanese left in a translation, fit warnings, unverified OCR or cleaning, translated text that is hidden, and pages with lettering outside every text region.",
+                        "Run the pre-export chapter check: blocks with no translation, Japanese left in a translation, fit warnings, unverified OCR (cleared by writing the source text) or cleaning, translated text that is hidden and what hides it, and pages with lettering outside every text region. Pages and layers carry their numbers.",
+                    ),
+                    definition::<typesetting::ChapterText>(
+                        "chapter_text",
+                        "List the chapter's pages in order (number, id, label) with each page's text layers in their numbered order: role, whether it shows, source and translation. No geometry; use it for the page list, terms and sentences that run across balloons and pages.",
                     ),
                     definition::<RunPipeline>(
                         "run_pipeline",
@@ -399,6 +403,7 @@ impl Host for KoharuHost {
                     stroke_width: arguments.stroke_width,
                     alignment: arguments.alignment.map(Into::into),
                     writing_mode: arguments.writing_mode.map(Into::into),
+                    line_breaking: arguments.line_breaking.map(Into::into),
                 };
                 let laid_out_size = self.handle.state::<Desktop>().presented_font_size(element);
                 self.mutate(|project| {
@@ -559,7 +564,13 @@ impl Host for KoharuHost {
                 };
                 let snapshot = self.snapshot().await?;
                 let desktop = self.handle.state::<Desktop>();
-                Invocation::read(output::chapter_check(&snapshot, &desktop, source, target).await?)
+                let check = output::chapter_check(&snapshot, &desktop, source, target).await?;
+                Invocation::read(typesetting::chapter_issues(&snapshot, check)?)
+            }
+            "chapter_text" => {
+                let arguments: typesetting::ChapterText = arguments(&call)?;
+                let snapshot = self.snapshot().await?;
+                Invocation::read(typesetting::chapter_text(&snapshot, &arguments)?)
             }
             "run_pipeline" => self.run_pipeline(arguments(&call)?, control).await,
             name => bail!("unknown Koharu tool {name}"),
@@ -613,34 +624,41 @@ fn entities(values: &[String]) -> Result<Vec<EntityId>> {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct InspectProject {}
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct CheckChapter {}
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct ViewPage {
     page: String,
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct RenamePage {
     page: String,
     label: String,
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct MovePage {
     page: String,
     index: usize,
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct DeletePages {
     pages: Vec<String>,
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct AddTextBox {
     page: String,
     x: f32,
@@ -652,12 +670,14 @@ struct AddTextBox {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct SetText {
     element: String,
     text: String,
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct SetTranslation {
     element: String,
     text: Option<String>,
@@ -692,6 +712,25 @@ pub(super) enum AgentWritingMode {
 
 #[derive(Clone, Copy, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+pub(super) enum AgentLineBreaking {
+    /// Wrap between words only, never inside one.
+    WholeWords,
+    /// Keep the given lines: break only at line breaks in the text. Auto-fit
+    /// shrinks the text to keep them; a fixed size that cannot overflows.
+    Manual,
+}
+
+impl From<AgentLineBreaking> for koharu_scene::LineBreaking {
+    fn from(value: AgentLineBreaking) -> Self {
+        match value {
+            AgentLineBreaking::WholeWords => Self::WholeWords,
+            AgentLineBreaking::Manual => Self::Manual,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
 pub(super) enum AgentFontStyle {
     Normal,
     Italic,
@@ -718,6 +757,7 @@ impl From<AgentWritingMode> for koharu_scene::WritingMode {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct SetTypography {
     element: String,
     preferred_font: Option<String>,
@@ -730,21 +770,28 @@ struct SetTypography {
     stroke_width: Option<f32>,
     alignment: Option<AgentTextAlignment>,
     writing_mode: Option<AgentWritingMode>,
+    /// Where lines may break; automatic (hyphenating a word as a last
+    /// resort) when absent.
+    #[serde(default)]
+    line_breaking: Option<AgentLineBreaking>,
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct SetGeometry {
     element: String,
     points: Vec<AgentPoint>,
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct AgentPoint {
     x: f64,
     y: f64,
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct SetVisibility {
     elements: Vec<String>,
     visible: Option<bool>,
@@ -752,11 +799,13 @@ struct SetVisibility {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct DeleteElements {
     elements: Vec<String>,
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct MoveElement {
     element: String,
     parent: String,
@@ -796,6 +845,7 @@ impl From<AgentPipelineOperation> for Operation {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct RunPipeline {
     operation: AgentPipelineOperation,
     #[serde(default)]

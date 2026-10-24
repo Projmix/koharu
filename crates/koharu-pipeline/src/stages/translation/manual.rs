@@ -10,8 +10,8 @@ use image::{DynamicImage, Rgb, RgbImage};
 use koharu_renderer::{Frame, LayerKind, RenderDiagnostic, TypesettingConfig};
 use koharu_scene::{
     At, Authored, BubbleRegion, EntityId, FitsTo, FlowsIn, FontStyle, Geometry, Inside,
-    LanguageTag, Origin, RecognizedFrom, Region, RegionSpec, RemovePolicy, SourceText,
-    TextAlignment, TextLayout, TextLayoutKind, TextRegion, TextRole, Translation,
+    LanguageTag, LineBreaking, Origin, RecognizedFrom, Region, RegionSpec, RemovePolicy,
+    SourceText, TextAlignment, TextLayout, TextLayoutKind, TextRegion, TextRole, Translation,
     TranslationReview, Typography, WritingMode,
 };
 use koharu_translator::{Language, Translator};
@@ -128,6 +128,8 @@ struct LayerTypography {
     alignment: Option<TextAlignment>,
     #[serde(default)]
     writing_mode: Option<WritingMode>,
+    #[serde(default)]
+    line_breaking: Option<LineBreaking>,
 }
 
 /// A translated text layer the agent may proofread and typeset: every visible
@@ -787,6 +789,7 @@ impl ChapterTranslation {
                     alignment: None,
                     writing_mode: None,
                     extensions: Default::default(),
+                    line_breaking: None,
                 },
             )?;
             edit.relate::<RecognizedFrom>(content, region)?;
@@ -875,6 +878,7 @@ impl ChapterTranslation {
                         alignment: typography.alignment,
                         writing_mode: typography.writing_mode,
                         extensions: Default::default(),
+                        line_breaking: typography.line_breaking,
                     },
                 )
                 .with_context(|| format!("layer {} has invalid typography", change.id))?;

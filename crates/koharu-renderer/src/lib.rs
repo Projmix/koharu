@@ -18,7 +18,7 @@ pub use config::{KindFonts, TypesettingConfig};
 pub use error::{Error, Result};
 pub use frame::{
     Frame, ImageKind, ImageMetadata, Layer, LayerKind, Presentation, RasterImage, RenderBounds,
-    RenderDependency, RenderDiagnostic, RetentionStats, TextMetadata,
+    RenderDependency, RenderDiagnostic, RenderedLine, RetentionStats, TextMetadata,
 };
 pub use layout::WritingMode;
 pub use renderer::Renderer;

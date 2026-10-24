@@ -1,17 +1,20 @@
 //! Typesetting tools for agents: a page's text layers with what the renderer
-//! drew for them, crops of the page as it shows, with or without its text or
-//! as imported, and trial renders of text, box and typography changes that
-//! commit nothing. A fit is a trial with auto-fit in the intended box.
+//! drew for them, line by line, crops of the page as it shows, with or
+//! without its text or as imported, trial renders of text, box and typography
+//! changes that commit nothing, and the chapter's text and check with page
+//! and layer numbers. A fit is a trial with auto-fit in the intended box.
 
 use std::io::Cursor;
 
 use anyhow::{Context as _, Result, bail};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use image::{DynamicImage, ImageFormat, RgbaImage};
-use koharu_desktop::Desktop;
+use koharu_desktop::{Desktop, Frame as TextFrame};
 use koharu_rasterizer::RasterOptions;
-use koharu_renderer::{Frame, LayerKind, RenderDiagnostic};
-use koharu_scene::{AssetRole, EntityId, Geometry, Origin, Snapshot, Visibility};
+use koharu_renderer::{Frame, LayerKind, RenderDiagnostic, RenderedLine};
+use koharu_scene::{
+    AssetRole, EntityId, Geometry, Origin, Snapshot, TextLayout as SceneTextLayout, Visibility,
+};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -19,13 +22,16 @@ use serde_json::{Value, json};
 use crate::commands::{
     canvas::Point,
     editing::{GeometryUpdate, TypographyUpdate},
-    output,
+    output::{self, ChapterCheck},
     project::{EditStep, Project, Typography},
 };
 
-use super::host::{AgentFontStyle, AgentTextAlignment, AgentWritingMode, entity};
+use super::host::{
+    AgentFontStyle, AgentLineBreaking, AgentTextAlignment, AgentWritingMode, entity,
+};
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub(super) struct PageLayers {
     pub(super) page: String,
 }
@@ -43,6 +49,7 @@ pub(super) enum CropView {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub(super) struct Crop {
     pub(super) page: String,
     /// [x, y, width, height] in page pixels; the whole page when absent.
@@ -53,9 +60,17 @@ pub(super) struct Crop {
     /// Output scale, 0.1 to 4; 1 keeps page pixels.
     #[serde(default)]
     pub(super) scale: Option<f64>,
+    /// Put the imported source on the left of the same region.
+    #[serde(default)]
+    pub(super) compare: bool,
+    /// Draw every text layer's box with its number, and the measured inside
+    /// of its balloon.
+    #[serde(default)]
+    pub(super) outline: bool,
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub(super) struct TrialTypography {
     preferred_font: Option<String>,
     font_weight: Option<u16>,
@@ -67,17 +82,32 @@ pub(super) struct TrialTypography {
     stroke_width: Option<f32>,
     alignment: Option<AgentTextAlignment>,
     writing_mode: Option<AgentWritingMode>,
+    /// Where lines may break; automatic (hyphenating a word as a last
+    /// resort) when absent.
+    #[serde(default)]
+    line_breaking: Option<AgentLineBreaking>,
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub(super) struct TrialChange {
     element: String,
     /// New translation text.
     #[serde(default)]
     text: Option<String>,
+    /// New translation as its lines, instead of text with line breaks.
+    #[serde(default)]
+    lines: Option<Vec<String>>,
+    /// New source text. Writing it confirms an unverified OCR reading.
+    #[serde(default)]
+    source: Option<String>,
     /// New text box, [x, y, width, height] in page pixels.
     #[serde(default)]
     region: Option<[f64; 4]>,
+    /// Turn the new box about its centre by this many degrees, clockwise;
+    /// 180 sets text upside down. Needs region.
+    #[serde(default)]
+    angle: Option<f32>,
     /// Whole new typography, as set_typography takes it.
     #[serde(default)]
     typography: Option<TrialTypography>,
@@ -87,11 +117,13 @@ pub(super) struct TrialChange {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub(super) struct ApplyLayers {
     pub(super) changes: Vec<TrialChange>,
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub(super) struct PreviewLayers {
     page: String,
     changes: Vec<TrialChange>,
@@ -99,6 +131,24 @@ pub(super) struct PreviewLayers {
     /// layers when absent.
     #[serde(default)]
     region: Option<[f64; 4]>,
+    /// Output scale, 0.1 to 4; 1 keeps page pixels.
+    #[serde(default)]
+    scale: Option<f64>,
+    /// Put the imported source on the left of the same region.
+    #[serde(default)]
+    compare: bool,
+    /// Draw the changed layers' boxes with their numbers, and the measured
+    /// inside of their balloons.
+    #[serde(default)]
+    outline: bool,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ChapterText {
+    /// First and last page number to list, from 1; every page when absent.
+    #[serde(default)]
+    pages: Option<[usize; 2]>,
 }
 
 /// The text layers of `page` in their numbered order with what the renderer
@@ -115,33 +165,160 @@ pub(super) async fn page_layers(
     if let Some(group) = snapshot.page(page)?.text_group()? {
         for (index, layer) in group.text_layers()?.enumerate() {
             let mut value = layer_value(snapshot, &frame, layer.id(), index + 1)?;
-            let measured = value["balloon"]["box"]
-                .as_array()
-                .zip(value["box"].as_array())
-                .and_then(|(balloon, text)| {
-                    let read = |values: &Vec<Value>| -> Option<[f64; 4]> {
-                        let values = values
-                            .iter()
-                            .map(Value::as_f64)
-                            .collect::<Option<Vec<_>>>()?;
-                        values.try_into().ok()
-                    };
-                    pixel_inner_box(&clean, read(balloon)?, read(text)?)
-                });
-            if let Some(measured) = measured {
-                value["balloon"]["inner_box"] = json!(measured);
-                value["balloon"]["measured"] = json!("pixels");
-            }
+            measure_balloon(&clean, &mut value);
             layers.push(value);
         }
     }
     let size = snapshot.page(page)?.page()?;
+    let pages = snapshot.pages().map(|page| page.id()).collect::<Vec<_>>();
+    let position = pages.iter().position(|candidate| *candidate == page);
+    let neighbour = |offset: isize, last: bool| -> Result<Value> {
+        let Some(other) = position
+            .and_then(|position| position.checked_add_signed(offset))
+            .and_then(|position| pages.get(position))
+        else {
+            return Ok(Value::Null);
+        };
+        let texts = page_texts(snapshot, *other)?
+            .into_iter()
+            .filter(|text| text["shows"] == json!(true))
+            .collect::<Vec<_>>();
+        let keep = if last {
+            texts[texts.len().saturating_sub(2)..].to_vec()
+        } else {
+            texts.into_iter().take(2).collect()
+        };
+        Ok(Value::Array(keep))
+    };
     Ok(json!({
         "page": page,
+        "number": position.map(|position| position + 1),
         "label": size.label,
         "size": [size.width, size.height],
         "layers": layers,
+        "previous_page_end": neighbour(-1, true)?,
+        "next_page_start": neighbour(1, false)?,
     }))
+}
+
+fn read_box(value: &Value) -> Option<[f64; 4]> {
+    let values = value
+        .as_array()?
+        .iter()
+        .map(Value::as_f64)
+        .collect::<Option<Vec<_>>>()?;
+    values.try_into().ok()
+}
+
+/// Replaces a layer value's outline estimate of the balloon's inside with
+/// the one measured on the clean page, when the balloon is closed.
+fn measure_balloon(clean: &RgbaImage, value: &mut Value) {
+    let measured = read_box(&value["balloon"]["box"])
+        .zip(read_box(&value["box"]))
+        .and_then(|(balloon, text)| pixel_inner_box(clean, balloon, text));
+    match measured {
+        Some(measured) => {
+            value["balloon"]["inner_box"] = json!(measured);
+            value["balloon"]["measured"] = json!("pixels");
+        }
+        None if value["balloon"].is_object() => {
+            value["balloon"]["measured"] = json!("outline");
+        }
+        None => {}
+    }
+}
+
+/// The chapter's pages in order with the text of each, for `chapter_text`.
+pub(super) fn chapter_text(snapshot: &Snapshot, arguments: &ChapterText) -> Result<Value> {
+    let [first, last] = arguments.pages.unwrap_or([1, usize::MAX]);
+    let mut pages = Vec::new();
+    for (index, page) in snapshot.pages().enumerate() {
+        let number = index + 1;
+        if number < first || number > last {
+            continue;
+        }
+        let label = page.page()?.label;
+        pages.push(json!({
+            "number": number,
+            "id": page.id(),
+            "label": label,
+            "layers": page_texts(snapshot, page.id())?,
+        }));
+    }
+    Ok(json!({ "pages": pages }))
+}
+
+/// A page's text layers in their numbered order, without geometry.
+fn page_texts(snapshot: &Snapshot, page: EntityId) -> Result<Vec<Value>> {
+    let Some(group) = snapshot.page(page)?.text_group()? else {
+        return Ok(Vec::new());
+    };
+    let group_shown = shown(snapshot, group.id())?;
+    group
+        .text_layers()?
+        .enumerate()
+        .map(|(index, layer)| {
+            let content = layer.content()?;
+            Ok(json!({
+                "number": index + 1,
+                "id": layer.id(),
+                "role": content.role()?.map(|role| role.role),
+                "shows": group_shown && shown(snapshot, layer.id())?,
+                "source": content.source()?.map(|source| source.text.value),
+                "translation": content.translation()?.map(|translation| translation.text.value),
+            }))
+        })
+        .collect()
+}
+
+fn shown(snapshot: &Snapshot, entity: EntityId) -> Result<bool> {
+    Ok(snapshot
+        .component::<Visibility>(entity)?
+        .is_none_or(|visibility| visibility.visible && visibility.opacity > 0.0))
+}
+
+/// The chapter check with page and layer numbers, both texts, and what hides
+/// a hidden block, for agents.
+pub(super) fn chapter_issues(snapshot: &Snapshot, check: ChapterCheck) -> Result<Value> {
+    let pages = snapshot.pages().map(|page| page.id()).collect::<Vec<_>>();
+    let page_value = |page: EntityId| -> Result<Value> {
+        Ok(json!({
+            "id": page,
+            "number": pages.iter().position(|candidate| *candidate == page).map(|index| index + 1),
+            "label": snapshot.page(page)?.page()?.label,
+        }))
+    };
+    let mut texts = Vec::new();
+    for issue in check.texts {
+        let numbers = numbering(snapshot, issue.page)?;
+        let content = snapshot.text_layer(issue.element)?.content()?;
+        let hidden_by = if !issue.hidden {
+            Value::Null
+        } else if !shown(snapshot, issue.element)? {
+            json!({ "layer": issue.element })
+        } else {
+            json!({ "text_group": snapshot.page(issue.page)?.text_group()?.map(|group| group.id()) })
+        };
+        texts.push(json!({
+            "page": page_value(issue.page)?,
+            "layer": numbers(issue.element),
+            "element": issue.element,
+            "source": content.source()?.map(|source| source.text.value),
+            "translation": content.translation()?.map(|translation| translation.text.value),
+            "translation_issue": issue.translation,
+            "fit": issue.fit,
+            "ocr_unverified": issue.ocr_unverified,
+            "cleaning_unverified": issue.cleaning_unverified,
+            "hidden": issue.hidden,
+            "hidden_by": hidden_by,
+        }));
+    }
+    let unboxed_text = check
+        .unboxed_text
+        .into_iter()
+        .map(|issue| Ok(json!({ "page": page_value(issue.page)?, "count": issue.count })))
+        .collect::<Result<Vec<_>>>()?;
+    Ok(json!({ "texts": texts, "unboxed_text": unboxed_text }))
 }
 
 /// A crop of `page` in the chosen view, as PNG.
@@ -151,21 +328,39 @@ pub(super) async fn crop(
     arguments: &Crop,
 ) -> Result<(Value, String)> {
     let page = entity(&arguments.page)?;
-    let image = match arguments.view {
+    let mut image = match arguments.view {
         CropView::Typeset => render_image(desktop, snapshot, page).await?,
         CropView::Clean => {
             let hidden = without_text(snapshot, page)?;
             render_image(desktop, &hidden, page).await?
         }
-        CropView::Source => {
-            let asset = snapshot
-                .asset(page, &AssetRole::new("source")?)?
-                .context("the page has no source image")?;
-            image::load_from_memory(&snapshot.read_blob(asset.blob).await?)?.to_rgba8()
-        }
+        CropView::Source => source_image(snapshot, page).await?,
     };
-    let (region, png) = cut(&image, arguments.region, arguments.scale.unwrap_or(1.0))?;
-    Ok((json!({ "page": page, "region": region }), png))
+    let scale = arguments.scale.unwrap_or(1.0).clamp(0.1, 4.0);
+    if arguments.outline {
+        let layers = match snapshot.page(page)?.text_group()? {
+            Some(group) => group.text_layers()?.map(|layer| layer.id()).collect(),
+            None => Vec::new(),
+        };
+        let frame = desktop.renderer().render(snapshot, page).await?;
+        let clean = render_image(desktop, &without_text(snapshot, page)?, page).await?;
+        draw_outlines(&mut image, snapshot, &frame, &clean, page, &layers, scale)?;
+    }
+    let source = if arguments.compare {
+        Some(source_image(snapshot, page).await?)
+    } else {
+        None
+    };
+    let (region, png) = picture(&image, source.as_ref(), arguments.region, scale)?;
+    Ok((
+        json!({
+            "page": page,
+            "region": region,
+            "scale": scale,
+            "layout": if arguments.compare { "source | view" } else { "view" },
+        }),
+        png,
+    ))
 }
 
 /// Renders `page` with the changes applied to a preview of the project:
@@ -198,9 +393,12 @@ pub(super) async fn preview_layers(
         .map(|layer| layer_value(&trial, &frame, *layer, numbers(*layer)))
         .collect::<Result<Vec<_>>>()?;
     let region = arguments.region.or_else(|| {
+        // The layers' boxes as well as what was drawn, so text that shrank
+        // still shows in its box.
         let boxes = changed
             .iter()
             .filter_map(|layer| rendered_box(&frame, *layer))
+            .chain(layers.iter().filter_map(|value| read_box(&value["box"])))
             .collect::<Vec<_>>();
         let left = boxes.iter().map(|b| b[0]).fold(f64::INFINITY, f64::min);
         let top = boxes.iter().map(|b| b[1]).fold(f64::INFINITY, f64::min);
@@ -221,10 +419,30 @@ pub(super) async fn preview_layers(
             ]
         })
     });
-    let image = rasterize(desktop, &frame).await?;
-    let (region, png) = cut(&image, region, 1.0)?;
+    let mut layers = layers;
+    let scale = arguments.scale.unwrap_or(1.0).clamp(0.1, 4.0);
+    let mut image = rasterize(desktop, &frame).await?;
+    if arguments.outline {
+        let clean = render_image(desktop, &without_text(&trial, page)?, page).await?;
+        for value in &mut layers {
+            measure_balloon(&clean, value);
+        }
+        draw_outlines(&mut image, &trial, &frame, &clean, page, &changed, scale)?;
+    }
+    let source = if arguments.compare {
+        Some(source_image(snapshot, page).await?)
+    } else {
+        None
+    };
+    let (region, png) = picture(&image, source.as_ref(), region, scale)?;
     Ok((
-        json!({ "page": page, "region": region, "layers": layers }),
+        json!({
+            "page": page,
+            "region": region,
+            "scale": scale,
+            "layout": if arguments.compare { "source | preview" } else { "preview" },
+            "layers": layers,
+        }),
         png,
     ))
 }
@@ -247,10 +465,38 @@ pub(super) fn steps(
     let mut steps = Vec::new();
     for change in changes {
         let layer = entity(&change.element)?;
-        if let Some(text) = change.text {
+        let text = match (change.text, change.lines) {
+            (Some(_), Some(_)) => bail!("give {layer} either text or lines, not both"),
+            (text, lines) => text.or_else(|| lines.map(|lines| lines.join("\n"))),
+        };
+        if let Some(text) = text {
             steps.push(Project::translation_step(snapshot, layer, Some(text))?);
         }
-        if let Some([x, y, width, height]) = change.region {
+        if let Some(source) = change.source {
+            steps.push(Project::source_step(snapshot, layer, source)?);
+        }
+        if let Some(angle) = change.angle {
+            let [x, y, width, height] = change
+                .region
+                .with_context(|| format!("turning {layer} needs its region"))?;
+            let geometry = Project::geometry_from_frame(TextFrame {
+                x: x as f32,
+                y: y as f32,
+                width: width as f32,
+                height: height as f32,
+                angle_degrees: angle,
+            })?;
+            let mut layout = snapshot
+                .component::<SceneTextLayout>(layer)?
+                .context("only text layers can turn")?;
+            layout.origin = Origin::User;
+            layout.angle_degrees = Some(angle);
+            steps.push(Box::new(move |edit| {
+                edit.promote_entity_to_user(layer)?;
+                edit.set(layer, &geometry)?;
+                edit.set(layer, &layout)
+            }));
+        } else if let Some([x, y, width, height]) = change.region {
             let points = [
                 (x, y),
                 (x + width, y),
@@ -279,6 +525,7 @@ pub(super) fn steps(
                 stroke_width: typography.stroke_width,
                 alignment: typography.alignment.map(Into::into),
                 writing_mode: typography.writing_mode.map(Into::into),
+                line_breaking: typography.line_breaking.map(Into::into),
             };
             steps.push(Project::typography_step(
                 snapshot,
@@ -396,13 +643,59 @@ fn layer_value(
             "inner_box": inner_box(geometry),
         })),
         "typography": typography,
-        "rendered": rendered.map(|rendered| json!({
-            "fonts": rendered.post_script_fonts,
-            "font_size": (f64::from(rendered.font_size) * 10.0).round() / 10.0,
-            "text_box": rendered_box(frame, layer),
-            "warning": warning(frame.diagnostics(), layer),
-        })),
+        "rendered": rendered.map(|rendered| {
+            let bounds = rendered.layout_bounds;
+            json!({
+                "fonts": rendered.post_script_fonts,
+                "font_size": (f64::from(rendered.font_size) * 10.0).round() / 10.0,
+                "text_box": rendered_box(frame, layer),
+                "layout_box": ([bounds.x, bounds.y, bounds.width, bounds.height]
+                    .map(|value| f64::from(value).round())),
+                "lines": rendered.lines.iter().map(|line| json!({
+                    "text": line.text,
+                    "width": f64::from(line.width).round(),
+                    "room": f64::from(line.available).round(),
+                })).collect::<Vec<_>>(),
+                "hyphenated": hyphenated_words(&rendered.lines),
+                "warning": warning(frame.diagnostics(), layer),
+                "overflow": overflow(frame.diagnostics(), layer),
+            })
+        }),
     }))
+}
+
+/// The words the renderer split across lines, rejoined: «ВЗРОС-ЛЫХ».
+fn hyphenated_words(lines: &[RenderedLine]) -> Vec<String> {
+    lines
+        .windows(2)
+        .filter(|pair| pair[0].hyphenated)
+        .map(|pair| {
+            let head = pair[0]
+                .text
+                .split_whitespace()
+                .next_back()
+                .unwrap_or_default();
+            let tail = pair[1].text.split_whitespace().next().unwrap_or_default();
+            format!("{head}{tail}")
+        })
+        .collect()
+}
+
+/// What overflowed: the room the layout had and the size it drew.
+fn overflow(diagnostics: &[RenderDiagnostic], layer: EntityId) -> Option<Value> {
+    diagnostics.iter().find_map(|diagnostic| match diagnostic {
+        RenderDiagnostic::TextOverflow {
+            entity,
+            available,
+            actual_width,
+            actual_height,
+            ..
+        } if *entity == layer => Some(json!({
+            "room": ([available.width, available.height].map(|value| f64::from(value).round())),
+            "drawn": ([*actual_width, *actual_height].map(|value| f64::from(value).round())),
+        })),
+        _ => None,
+    })
 }
 
 fn rendered_box(frame: &Frame, layer: EntityId) -> Option<[f64; 4]> {
@@ -726,8 +1019,44 @@ async fn rasterize(desktop: &Desktop, frame: &Frame) -> Result<RgbaImage> {
     )
 }
 
-/// The region of `image` (clamped to it) at `scale`, as base64 PNG.
-fn cut(image: &RgbaImage, region: Option<[f64; 4]>, scale: f64) -> Result<(Value, String)> {
+async fn source_image(snapshot: &Snapshot, page: EntityId) -> Result<RgbaImage> {
+    let asset = snapshot
+        .asset(page, &AssetRole::new("source")?)?
+        .context("the page has no source image")?;
+    Ok(image::load_from_memory(&snapshot.read_blob(asset.blob).await?)?.to_rgba8())
+}
+
+/// The region of `image` at `scale` as base64 PNG, with the same region of
+/// `source` on its left when given.
+fn picture(
+    image: &RgbaImage,
+    source: Option<&RgbaImage>,
+    region: Option<[f64; 4]>,
+    scale: f64,
+) -> Result<(Value, String)> {
+    const GAP: u32 = 8;
+    let (region, view) = cut(image, region, scale)?;
+    let picture = match source {
+        Some(source) => {
+            let (_, source) = cut(source, read_box(&region), scale)?;
+            let mut joined = RgbaImage::from_pixel(
+                source.width() + GAP + view.width(),
+                source.height().max(view.height()),
+                image::Rgba([128, 128, 128, 255]),
+            );
+            image::imageops::replace(&mut joined, &source, 0, 0);
+            image::imageops::replace(&mut joined, &view, i64::from(source.width() + GAP), 0);
+            joined
+        }
+        None => view,
+    };
+    let mut bytes = Cursor::new(Vec::new());
+    DynamicImage::ImageRgba8(picture).write_to(&mut bytes, ImageFormat::Png)?;
+    Ok((region, STANDARD.encode(bytes.into_inner())))
+}
+
+/// The region of `image` (clamped to it) at `scale`.
+fn cut(image: &RgbaImage, region: Option<[f64; 4]>, scale: f64) -> Result<(Value, RgbaImage)> {
     let (width, height) = image.dimensions();
     let [x, y, w, h] = region.unwrap_or([0.0, 0.0, f64::from(width), f64::from(height)]);
     let left = x.max(0.0).floor().min(f64::from(width)) as u32;
@@ -748,12 +1077,112 @@ fn cut(image: &RgbaImage, region: Option<[f64; 4]>, scale: f64) -> Result<(Value
             image::imageops::FilterType::Lanczos3,
         );
     }
-    let mut bytes = Cursor::new(Vec::new());
-    DynamicImage::ImageRgba8(crop).write_to(&mut bytes, ImageFormat::Png)?;
-    Ok((
-        json!([left, top, right - left, bottom - top]),
-        STANDARD.encode(bytes.into_inner()),
-    ))
+    Ok((json!([left, top, right - left, bottom - top]), crop))
+}
+
+const LAYER_COLOR: [u8; 4] = [230, 0, 160, 255];
+const BALLOON_COLOR: [u8; 4] = [0, 170, 230, 255];
+
+/// Draws each of `layers`' box in magenta with its number, and the inside of
+/// its balloon as measured for `page_layers` in blue. Strokes and digits are
+/// sized to stay legible at `scale`.
+fn draw_outlines(
+    image: &mut RgbaImage,
+    snapshot: &Snapshot,
+    frame: &Frame,
+    clean: &RgbaImage,
+    page: EntityId,
+    layers: &[EntityId],
+    scale: f64,
+) -> Result<()> {
+    let numbers = numbering(snapshot, page)?;
+    let stroke = (2.0 / scale).ceil().max(1.0) as u32;
+    let cell = (3.0 / scale).ceil().max(2.0) as u32;
+    for layer in layers {
+        let number = numbers(*layer);
+        let mut value = layer_value(snapshot, frame, *layer, number)?;
+        measure_balloon(clean, &mut value);
+        if let Some(inner) = read_box(&value["balloon"]["inner_box"]) {
+            draw_box(image, inner, stroke, BALLOON_COLOR);
+        }
+        if let Some(region) = read_box(&value["box"]) {
+            draw_box(image, region, stroke, LAYER_COLOR);
+            draw_number(image, region, number, cell);
+        }
+    }
+    Ok(())
+}
+
+fn draw_box(image: &mut RgbaImage, [x, y, width, height]: [f64; 4], stroke: u32, color: [u8; 4]) {
+    let (image_width, image_height) = image.dimensions();
+    if image_width == 0 || image_height == 0 {
+        return;
+    }
+    let left = (x.max(0.0) as u32).min(image_width - 1);
+    let top = (y.max(0.0) as u32).min(image_height - 1);
+    let right = ((x + width).max(0.0) as u32).min(image_width - 1);
+    let bottom = ((y + height).max(0.0) as u32).min(image_height - 1);
+    for py in top..=bottom {
+        for px in left..=right {
+            let edge = px < left + stroke
+                || px + stroke > right
+                || py < top + stroke
+                || py + stroke > bottom;
+            if edge {
+                image.put_pixel(px, py, image::Rgba(color));
+            }
+        }
+    }
+}
+
+/// Glyphs of the digits 0-9, three columns by five rows, top row first.
+const DIGITS: [[u8; 5]; 10] = [
+    [0b111, 0b101, 0b101, 0b101, 0b111],
+    [0b010, 0b110, 0b010, 0b010, 0b111],
+    [0b111, 0b001, 0b111, 0b100, 0b111],
+    [0b111, 0b001, 0b111, 0b001, 0b111],
+    [0b101, 0b101, 0b111, 0b001, 0b001],
+    [0b111, 0b100, 0b111, 0b001, 0b111],
+    [0b111, 0b100, 0b111, 0b101, 0b111],
+    [0b111, 0b001, 0b010, 0b010, 0b010],
+    [0b111, 0b101, 0b111, 0b101, 0b111],
+    [0b111, 0b101, 0b111, 0b001, 0b111],
+];
+
+/// White digits on a magenta tag at the box's top left corner.
+fn draw_number(image: &mut RgbaImage, [x, y, _, _]: [f64; 4], number: usize, cell: u32) {
+    let digits = number.to_string();
+    let tag_width = cell * (4 * digits.len() as u32 + 1);
+    let tag_height = cell * 7;
+    let (image_width, image_height) = image.dimensions();
+    let left = (x.max(0.0) as u32).min(image_width.saturating_sub(tag_width));
+    let top = (y.max(0.0) as u32).min(image_height.saturating_sub(tag_height));
+    for py in top..(top + tag_height).min(image_height) {
+        for px in left..(left + tag_width).min(image_width) {
+            image.put_pixel(px, py, image::Rgba(LAYER_COLOR));
+        }
+    }
+    for (index, digit) in digits.bytes().enumerate() {
+        let glyph = DIGITS[usize::from(digit - b'0')];
+        let origin_x = left + cell * (1 + 4 * index as u32);
+        let origin_y = top + cell;
+        for (row, bits) in glyph.iter().enumerate() {
+            for column in 0..3u32 {
+                if bits & (0b100 >> column) == 0 {
+                    continue;
+                }
+                for dy in 0..cell {
+                    for dx in 0..cell {
+                        let px = origin_x + column * cell + dx;
+                        let py = origin_y + row as u32 * cell + dy;
+                        if px < image_width && py < image_height {
+                            image.put_pixel(px, py, image::Rgba([255, 255, 255, 255]));
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]

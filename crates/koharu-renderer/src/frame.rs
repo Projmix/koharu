@@ -379,6 +379,20 @@ pub struct TextMetadata {
     pub alignment: TextAlign,
     pub writing_mode: WritingMode,
     pub angle_degrees: f32,
+    pub lines: Arc<[RenderedLine]>,
+}
+
+/// One drawn line of a text layer, as the line breaker set it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RenderedLine {
+    /// The line's text, with `-` appended where a word was hyphenated.
+    pub text: String,
+    /// The line's advance at the drawn size.
+    pub width: f32,
+    /// The room the line breaker allowed: the box, or the balloon's width at
+    /// this line.
+    pub available: f32,
+    pub hyphenated: bool,
 }
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
@@ -476,6 +490,7 @@ pub(crate) struct LocalTextMetadata {
     pub(crate) post_script_fonts: Vec<String>,
     pub(crate) font_size: f32,
     pub(crate) color: [u8; 4],
+    pub(crate) lines: Arc<[RenderedLine]>,
 }
 
 pub(crate) fn prepare_frame(

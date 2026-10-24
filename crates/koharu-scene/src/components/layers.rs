@@ -145,7 +145,19 @@ pub enum FontStyle {
     Oblique,
 }
 
+/// Where text may break across lines; `None` on the typography lets the
+/// renderer hyphenate a word as a last resort.
 #[revisioned(revision = 1)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum LineBreaking {
+    /// Wrap between words only, never inside one.
+    WholeWords,
+    /// Keep the author's lines: break only at line breaks in the text.
+    Manual,
+}
+
+#[revisioned(revision = 2)]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Type)]
 pub struct Typography {
     pub origin: Origin,
@@ -160,6 +172,8 @@ pub struct Typography {
     pub alignment: Option<TextAlignment>,
     pub writing_mode: Option<WritingMode>,
     pub extensions: BTreeMap<String, String>,
+    #[revision(start = 2)]
+    pub line_breaking: Option<LineBreaking>,
 }
 
 impl Component for Typography {

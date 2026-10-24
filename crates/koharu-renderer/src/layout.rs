@@ -67,6 +67,11 @@ pub struct LayoutLine<'a> {
     pub advance: f32,
     /// Baseline position for this line (x, y).
     pub baseline: (f32, f32),
+    /// Inline extent the line breaker allowed this line: the box, or the
+    /// balloon's width at this line.
+    pub available: f32,
+    /// The line ends in a discretionary hyphen inside a word.
+    pub hyphenated: bool,
 }
 
 /// A collection of laid out lines.
@@ -180,6 +185,7 @@ pub struct TextLayout<'a> {
     center_vertical_punctuation: bool,
     hyphenation_lang: Option<Lang>,
     hyphenation_policy: HyphenationPolicy,
+    manual_line_breaks: bool,
     comic_balloon: Option<ComicBalloon>,
     font: &'a Font,
     fallback_fonts: &'a [Font],
@@ -253,6 +259,36 @@ fn layout_split_words(text: &str, layout: &LayoutRun<'_>) -> usize {
         .count()
 }
 
+/// Joins every run of segments up to the next mandatory break into one, so
+/// the line breaker has no optional break left to take.
+fn join_optional_breaks(segments: Vec<ShapedSegment<'_>>) -> Vec<ShapedSegment<'_>> {
+    let mut joined: Vec<ShapedSegment<'_>> = Vec::with_capacity(segments.len());
+    let mut open = false;
+    for segment in segments {
+        match joined.last_mut() {
+            Some(current) if open => {
+                current.runs.extend(segment.runs);
+                current.advance += segment.advance;
+                current.range.end = segment.range.end;
+                current.visible_end = segment.visible_end;
+                current.next_offset = segment.next_offset;
+                current.is_mandatory = segment.is_mandatory;
+                current.trailing_advance = segment.trailing_advance;
+                current.break_penalty = segment.break_penalty;
+                current.binds_to_next = false;
+                current.break_suffix = None;
+            }
+            _ => joined.push(ShapedSegment {
+                binds_to_next: false,
+                break_suffix: None,
+                ..segment
+            }),
+        }
+        open = !joined.last().is_some_and(|segment| segment.is_mandatory);
+    }
+    joined
+}
+
 fn largest_fitting_font_size<T>(
     minimum: f32,
     maximum: f32,
@@ -313,6 +349,7 @@ impl<'a> TextLayout<'a> {
             center_vertical_punctuation: true,
             hyphenation_lang: Some(Lang::English),
             hyphenation_policy: HyphenationPolicy::Normal,
+            manual_line_breaks: false,
             comic_balloon: None,
             font,
             fallback_fonts: &[],
@@ -368,6 +405,13 @@ impl<'a> TextLayout<'a> {
     #[must_use]
     pub fn with_hyphenation_policy(mut self, policy: HyphenationPolicy) -> Self {
         self.hyphenation_policy = policy;
+        self
+    }
+
+    /// Break only at mandatory breaks; a line wider than its room overflows.
+    #[must_use]
+    pub fn with_manual_line_breaks(mut self, manual: bool) -> Self {
+        self.manual_line_breaks = manual;
         self
     }
 
@@ -775,6 +819,10 @@ impl<'a> TextLayout<'a> {
             });
         }
 
+        if self.manual_line_breaks {
+            shaped_segments = join_optional_breaks(shaped_segments);
+        }
+
         let fallback_ink = if self.writing_mode.is_vertical() {
             InkBand {
                 before: line_height * 0.5,
@@ -854,6 +902,10 @@ impl<'a> TextLayout<'a> {
                     &mut line_profiles,
                 );
             }
+        }
+
+        for (line, profile) in lines.iter_mut().zip(&line_profiles) {
+            line.available = profile.width;
         }
 
         // Baselines depend only on line index and metrics. For vertical text we compute absolute X
@@ -1215,6 +1267,7 @@ impl<'a> TextLayout<'a> {
             return next_offset;
         }
 
+        let hyphenated = break_suffix.is_some();
         if let Some(mut suffix) = break_suffix {
             runs.append(&mut suffix.runs);
         }
@@ -1224,6 +1277,7 @@ impl<'a> TextLayout<'a> {
 
         let mut line = LayoutLine {
             range: offset..visible_end,
+            hyphenated,
             ..Default::default()
         };
 
@@ -3710,6 +3764,41 @@ mod tests {
             (c0 - c1).abs() < 1.0,
             "expected line centres to match, got c0={c0} c1={c1}",
         );
+        Ok(())
+    }
+
+    #[test]
+    fn manual_line_breaks_keep_the_given_lines_and_shrink_to_fit() -> anyhow::Result<()> {
+        let font = any_system_font();
+        let text = "antidisestablishmentarianism forever
+and ever";
+        let unwrapped = TextLayout::new(&font).with_font_size(24.0).run(text)?;
+        let max_width = unwrapped.lines[0].advance * 0.6;
+
+        let hyphenated = TextLayout::new(&font)
+            .with_max_width(max_width)
+            .with_max_font_size(24.0)
+            .with_min_font_size(4.0)
+            .with_hyphenation_policy(HyphenationPolicy::LastResort)
+            .run(text)?;
+        assert!(hyphenated.lines.len() > 2, "{hyphenated:?}");
+
+        let manual = TextLayout::new(&font)
+            .with_max_width(max_width)
+            .with_max_font_size(24.0)
+            .with_min_font_size(4.0)
+            .with_hyphenation_policy(HyphenationPolicy::Disabled)
+            .with_manual_line_breaks(true)
+            .run(text)?;
+        let lines = manual
+            .lines
+            .iter()
+            .map(|line| text[line.range.clone()].trim())
+            .collect::<Vec<_>>();
+        assert_eq!(lines, ["antidisestablishmentarianism forever", "and ever"]);
+        assert!(manual.lines.iter().all(|line| !line.hyphenated));
+        assert!(!manual.overflowed());
+        assert!(manual.font_size < 24.0);
         Ok(())
     }
 
