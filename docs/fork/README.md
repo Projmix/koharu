@@ -132,10 +132,12 @@ Known gaps after the rebuild:
   so a translucent balloon is no longer painted white over the art. Inside a
   detected balloon only its own pixels count; a balloon its mask covers
   entirely takes its dominant interior colour. Every model, local or
-  image-edit, starts from the page as the owner cleaned it: visible paint
-  layers and visible cleanup layers the owner made or edited (eraser, stamp,
-  paste, manual removal) are composited into its input, while an untouched
-  earlier automatic result is not, so cleaning again draws a fresh result.
+  image-edit, starts from the page as it shows: every visible paint and
+  cleanup layer is composited into its input, and a hidden one is not, so
+  hiding them all sends the page itself (to clean again from scratch, hide
+  the earlier result). Lettering is filled whole or not at all: a block the
+  fill can only partly erase goes to the model intact, since an image-edit
+  model keeps the fragments of half-erased letters as drawing.
   Automatic local cleaning leaves sound effects outside balloons to the
   owner. The local model "Balloon fill
   only" commits that fill alone for review, and "Compare with original"

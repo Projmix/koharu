@@ -937,21 +937,13 @@ async fn prepare(
                 continue;
             }
             let is_paint = raster.kind == RasterLayerKind::Paint;
-            // Automatic cleaning starts from the page as the owner cleaned it
-            // by hand (eraser, stamp, paste, manual removal, edits to an
-            // earlier result), not from the source under it; an untouched
-            // earlier automatic result stays out, so cleaning again draws a
-            // fresh result from the page.
-            let cleaned_by_hand = raster.kind == RasterLayerKind::Cleanup
-                && automatic
-                && input
-                    .scene
-                    .component::<koharu_scene::EntityOrigin>(entity)?
-                    .is_none_or(|origin| origin.origin == Origin::User);
+            // Automatic cleaning starts from the page as it shows: every
+            // visible cleanup layer, the owner's and earlier results alike.
+            // Hiding a layer keeps it out, so hiding them all sends the page
+            // itself.
             if !(remove
                 || is_paint && include_paint
-                || raster.kind == RasterLayerKind::Cleanup && include_cleanup
-                || cleaned_by_hand)
+                || raster.kind == RasterLayerKind::Cleanup && (include_cleanup || automatic))
             {
                 continue;
             }
@@ -1342,6 +1334,7 @@ fn fill_flat_lettering(
     balloons: &[FlatFillRegion],
 ) -> Vec<(u32, u32, Rgb<u8>)> {
     let (width, height) = output.dimensions();
+    let before = output.clone();
     let index = |x: u32, y: u32| y as usize * width as usize + x as usize;
     let mut balloon = vec![0u16; width as usize * height as usize];
     let interiors = balloons.iter().map(polygon_interior).collect::<Vec<_>>();
@@ -1394,20 +1387,14 @@ fn fill_flat_lettering(
             ]
         })
         .collect::<Vec<_>>();
-    let mut filled_any = vec![false; balloons.len() + 1];
-    let mut filled = Vec::new();
-    let mut fill = |output: &mut RgbImage,
-                    pending_mask: &mut GrayImage,
-                    known: &mut Vec<bool>,
-                    fills: Vec<(u32, u32, Rgb<u8>, u16)>| {
-        for (x, y, color, label) in fills {
+    let fill = |output: &mut RgbImage,
+                pending_mask: &mut GrayImage,
+                known: &mut Vec<bool>,
+                fills: Vec<(u32, u32, Rgb<u8>, u16)>| {
+        for (x, y, color, _) in fills {
             output.put_pixel(x, y, color);
             pending_mask.put_pixel(x, y, Luma([0]));
             known[index(x, y)] = true;
-            filled_any[usize::from(label)] = true;
-            if label == 0 {
-                filled.push((x, y, color));
-            }
         }
     };
     // A detected balloon whose unmasked interior is one flat colour fills all
@@ -1605,16 +1592,53 @@ fn fill_flat_lettering(
                 output.put_pixel(x, y, color);
                 pending_mask.put_pixel(x, y, Luma([0]));
             }
-            filled_any[usize::from(label)] = true;
         }
-        // A filled balloon keeps its whole interior: an image-edit model sees
-        // the page and may repaint a balloon it was told to keep.
-        if filled_any[usize::from(label)] {
-            for y in top..bottom {
-                for x in left..right {
-                    if pending_mask.get_pixel(x, y)[0] < 127 && inside.contains(x, y) {
-                        filled.push((x, y, *output.get_pixel(x, y)));
-                    }
+    }
+    // Lettering is filled whole or not at all: a block the fill could only
+    // partly erase goes back to the model intact, since an image-edit model
+    // takes the fragments of half-erased letters for drawing and keeps them.
+    let lettering = GrayImage::from_fn(width, height, |x, y| {
+        Luma([u8::from(!original[index(x, y)] && text_mask.get_pixel(x, y)[0] >= 127) * u8::MAX])
+    });
+    let (blocks, count) = {
+        let (labels, components) = mask_components(&lettering);
+        (labels, components.len())
+    };
+    let mut unfinished = vec![false; count + 1];
+    for (at, block) in blocks.as_raw().iter().enumerate() {
+        if *block != 0 && pending_mask.as_raw()[at] >= 127 {
+            unfinished[*block as usize] = true;
+        }
+    }
+    let mut filled = Vec::new();
+    let mut filled_in = vec![false; balloons.len() + 1];
+    for (at, block) in blocks.as_raw().iter().enumerate() {
+        if *block == 0 {
+            continue;
+        }
+        let (x, y) = (at as u32 % width, at as u32 / width);
+        if unfinished[*block as usize] {
+            output.put_pixel(x, y, *before.get_pixel(x, y));
+            pending_mask.put_pixel(x, y, Luma([u8::MAX]));
+            continue;
+        }
+        let label = balloon[at];
+        filled_in[usize::from(label)] = true;
+        if label == 0 {
+            filled.push((x, y, *output.get_pixel(x, y)));
+        }
+    }
+    // A filled balloon keeps its whole interior: an image-edit model sees the
+    // page and may repaint a balloon it was told to keep.
+    for (number, (region, inside)) in balloons.iter().zip(&interiors).enumerate() {
+        if !filled_in[number + 1] {
+            continue;
+        }
+        let [left, top, right, bottom] = region.bounds;
+        for y in top..bottom {
+            for x in left..right {
+                if pending_mask.get_pixel(x, y)[0] < 127 && inside.contains(x, y) {
+                    filled.push((x, y, *output.get_pixel(x, y)));
                 }
             }
         }
@@ -2348,6 +2372,13 @@ mod tests {
                 prepared
                     .original
                     .save(output.join(format!("page-{:02}-base.png", index + 1)))
+                    .unwrap();
+                // What an image-edit model would receive for this page.
+                prepare(&input(), true, false, false)
+                    .await
+                    .unwrap()
+                    .image
+                    .save(output.join(format!("page-{:02}-sent.png", index + 1)))
                     .unwrap();
             }
             let prepare_ms = started.elapsed().as_secs_f64() * 1000.0;
@@ -3434,9 +3465,11 @@ mod tests {
         assert!(filled.contains(&(50, 50, Rgb([250, 250, 250]))));
         // The pattern behind the translucent balloon is left to the model.
         assert_eq!(pending.get_pixel(150, 50)[0], u8::MAX);
-        // The sound effect fills on paper and stays pending over hatching.
-        assert_eq!(pending.get_pixel(225, 50)[0], 0);
+        // A sound effect running from paper onto hatching cannot be filled
+        // whole, so none of it is: the model gets it intact.
+        assert_eq!(pending.get_pixel(225, 50)[0], u8::MAX);
         assert_eq!(pending.get_pixel(275, 50)[0], u8::MAX);
+        assert_eq!(image.get_pixel(225, 50), &Rgb([10, 10, 10]));
     }
 
     #[test]
