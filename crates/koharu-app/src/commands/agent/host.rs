@@ -117,6 +117,16 @@ impl KoharuHost {
         }))
     }
 
+    /// The open project's name and revision, to tell an agent when someone
+    /// else changed the project between its calls.
+    pub(super) async fn project_revision(&self) -> Option<(String, Value)> {
+        let current = self.handle.state::<CurrentProject>();
+        let current = current.project.lock().await;
+        let info = current.as_ref()?.info();
+        let revision = serde_json::to_value(info.revision).ok()?;
+        Some((info.name, revision))
+    }
+
     async fn snapshot(&self) -> Result<Snapshot> {
         Ok(self
             .handle
@@ -246,7 +256,7 @@ impl Host for KoharuHost {
                     ),
                     definition::<typesetting::PageLayers>(
                         "page_layers",
-                        "List a page's text layers in their numbered order: text, role, box (as set, with angle when turned), balloon box and the largest box inside the balloon around the text (measured on the page's pixels when the balloon is closed), typography, what the renderer drew (font, size, auto_fit_max: the largest size auto-fit may choose, small: below 1.2% of the page width, layout box, each line with its width and room, hyphenated words, warning and what overflowed), and lettering: whether the cleaning removed the source lettering and its tone, with check_color when the fill is the opposite tone. Also empty_balloons (balloons with no text layer, for add_text_layer) and the edge lines of the neighbouring pages.",
+                        "List a page's text layers in their numbered order: text, role, box (as set, with angle when turned), balloon box and the largest box inside the balloon around the text (measured on the page's pixels when the balloon is closed), typography, what the renderer drew (font, size, auto_fit_max: the largest size auto-fit may choose, small: below 1.2% of the page width, layout box, each line with its width and room, hyphenated words, warning and what overflowed), and lettering: whether the cleaning removed the source lettering and its tone, with check_color when the fill is the opposite tone. Also flow (balloon: laid out in the balloon's shape with no box of its own; box: in its box), the balloon's interior (box and centre of the lobe holding the text, without tail and bumps), off_centre (drawn block centre minus that centre, px) and edge_gap (narrowest gap between a line and the balloon's inside, px; negative crosses it), fits_up_to (when auto-fit stopped at its ceiling: the largest size the box takes, to set as a fixed size), empty_balloons (balloons with no text layer, for add_text_layer) and the edge lines of the neighbouring pages.",
                     ),
                     definition::<typesetting::Crop>(
                         "crop",
@@ -258,11 +268,11 @@ impl Host for KoharuHost {
                     ),
                     definition::<typesetting::ApplyLayers>(
                         "apply_layers",
-                        "Apply text, box, typography and visibility changes to any layers as one edit, one undo step. Returns each changed layer in short form (box, size, lines, warning, overflow, hyphenated, small); full returns them as page_layers does.",
+                        "Apply text, box, typography and visibility changes to any layers as one edit, one undo step. flow: balloon drops a layer's box and lays it out in the shape of the balloon that holds it (each line as wide as the balloon at its height, placed by the renderer, a joined balloon shared among its layers); a region gives it a box again. Returns each changed layer in short form (box, flow, size, lines, warning, overflow, hyphenated, small, inner_box, off_centre, edge_gap, fits_up_to); full returns them as page_layers does.",
                     ),
                     definition::<typesetting::AddTextLayer>(
                         "add_text_layer",
-                        "Add a text layer in a region, such as an empty balloon from page_layers' empty_balloons, with its translation. Inside a balloon the text flows in the balloon's shape; elsewhere it fits the region. One undo step; returns the layer as apply_layers does.",
+                        "Add a text layer in a region with its translation and typography: an empty balloon from page_layers' empty_balloons, or a box from check_chapter's unboxed_text for lettering drawn in the art. Inside a balloon the text flows in the balloon's shape; elsewhere it fits the region. Without a colour the text is black, or white on a dark ground. One undo step; returns the layer as apply_layers does.",
                     ),
                     definition::<CheckChapter>(
                         "check_chapter",
@@ -583,11 +593,23 @@ impl Host for KoharuHost {
                     .read()?
                     .translation
                     .source_language;
+                let typography = {
+                    let snapshot = self.snapshot().await?;
+                    let desktop = self.handle.state::<Desktop>();
+                    typesetting::new_layer_typography(
+                        &desktop,
+                        &snapshot,
+                        page,
+                        arguments.region,
+                        arguments.typography,
+                    )
+                    .await?
+                };
                 let mut invocation = self
                     .mutate(|project| {
                         Box::pin(async move {
                             let commit = project
-                                .add_text_layer(page, frame, source_language, text)
+                                .add_text_layer(page, frame, source_language, text, typography)
                                 .await?;
                             let layer = commit.1;
                             Ok((commit.0, json!({ "element": layer })))

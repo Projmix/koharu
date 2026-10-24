@@ -16,6 +16,9 @@ use tokio::{
 
 use super::host::KoharuHost;
 
+/// The project and revision the MCP agent last saw, after its last call.
+static LAST_SEEN: tokio::sync::Mutex<Option<(String, Value)>> = tokio::sync::Mutex::const_new(None);
+
 /// Loopback address and port of the server; `claude mcp add --transport http
 /// koharu http://127.0.0.1:4100/mcp` connects to it.
 const ADDRESS: &str = "127.0.0.1:4100";
@@ -228,9 +231,34 @@ async fn call(host: &KoharuHost, id: &Value, params: &Value) -> Value {
         name,
         arguments: arguments.to_string(),
     };
-    match host.invoke(call, &Control::default()).await {
+    // The owner edits in the app while an agent works: say so when the
+    // project moved since the agent's last call, before it trusts ids or
+    // page numbers it read then.
+    let before = host.project_revision().await;
+    let notice = {
+        let last = LAST_SEEN.lock().await;
+        match (last.as_ref(), before.as_ref()) {
+            (Some((last_name, _)), Some((name, _))) if last_name != name => Some(format!(
+                "Another project is open now: {name} (was {last_name}). Reread pages and layers."
+            )),
+            (Some((_, last_revision)), Some((_, revision))) if last_revision != revision => {
+                Some(format!(
+                    "The project changed outside this agent since its last call (revision {last_revision} to {revision}): pages, layers or their numbers may differ. Reread before relying on earlier results."
+                ))
+            }
+            (Some(_), None) => Some("No project is open now.".to_owned()),
+            _ => None,
+        }
+    };
+    let result = host.invoke(call, &Control::default()).await;
+    *LAST_SEEN.lock().await = host.project_revision().await;
+    match result {
         Ok(invocation) => {
-            let mut content = vec![json!({
+            let mut content = Vec::new();
+            if let Some(notice) = notice {
+                content.push(json!({ "type": "text", "text": notice }));
+            }
+            content.push(json!({
                 "type": "text",
                 // Compact JSON, and plain text as itself: results cost the
                 // agent context, and pretty-printing doubled them.
@@ -238,7 +266,7 @@ async fn call(host: &KoharuHost, id: &Value, params: &Value) -> Value {
                     Value::String(text) => text.clone(),
                     value => serde_json::to_string(value).unwrap_or_default(),
                 },
-            })];
+            }));
             for image in invocation.images {
                 if let Some((mime, data)) = image
                     .data_url

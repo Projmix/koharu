@@ -65,6 +65,7 @@ pub(crate) struct RenderedTextMetadata {
     pub(crate) color: [u8; 4],
     pub(crate) lines: Vec<RenderedLine>,
     pub(crate) auto_fit_ceiling: Option<f32>,
+    pub(crate) fits_up_to: Option<f32>,
 }
 
 /// Fork divergence: detection measures the outline of the source lettering,
@@ -251,19 +252,45 @@ impl TextRenderer {
         if descriptor.line_breaking == Some(koharu_scene::LineBreaking::Manual) {
             layout = layout.with_manual_line_breaks(true);
         }
-        let layout = if descriptor.auto_fit && !descriptor.point_text {
+        let fitting = descriptor.auto_fit && !descriptor.point_text;
+        let builder = if fitting {
             layout
+                .clone()
                 .with_max_font_size(maximum)
                 .with_min_font_size(minimum)
         } else {
-            layout.with_font_size(descriptor.font_size.unwrap_or(maximum))
+            layout
+                .clone()
+                .with_font_size(descriptor.font_size.unwrap_or(maximum))
         };
-        let layout = self
-            .layout(&layout, &descriptor.text)
-            .map_err(|source| Error::Layout {
-                entity: descriptor.entity,
-                source,
-            })?;
+        let layout_error = |source| Error::Layout {
+            entity: descriptor.entity,
+            source,
+        };
+        let laid_out = self
+            .layout(&builder, &descriptor.text)
+            .map_err(layout_error)?;
+        // Auto-fit stops at a page-scaled ceiling; when it does, the largest
+        // size the box would take tells a typesetter what a fixed size can
+        // reach.
+        // Free text only: its fit is a binary search, while a balloon's is
+        // probed every half pixel and its own width caps it anyway.
+        let fits_up_to = if fitting
+            && !is_bubble_text
+            && !laid_out.overflowed()
+            && laid_out.font_size + 0.05 >= maximum
+        {
+            let open = layout
+                .with_max_font_size(maximum * 4.0)
+                .with_min_font_size(maximum);
+            self.layout(&open, &descriptor.text)
+                .ok()
+                .filter(|wide| !wide.overflowed() && wide.font_size > maximum + 0.5)
+                .map(|wide| wide.font_size)
+        } else {
+            None
+        };
+        let layout = laid_out;
         let (mut x, mut y) = if descriptor.point_text {
             (bounds.x, bounds.y)
         } else {
@@ -369,8 +396,8 @@ impl TextRenderer {
                         hyphenated: line.hyphenated,
                     })
                     .collect(),
-                auto_fit_ceiling: (descriptor.auto_fit && !descriptor.point_text)
-                    .then_some(maximum),
+                auto_fit_ceiling: fitting.then_some(maximum),
+                fits_up_to,
             },
             diagnostics,
         })

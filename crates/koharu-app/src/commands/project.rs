@@ -1204,7 +1204,7 @@ impl Project {
         frame: Frame,
         source_language: koharu_translator::Language,
     ) -> Result<(Commit, EntityId, EntityId)> {
-        self.add_region_layer(page, frame, source_language, None)
+        self.add_region_layer(page, frame, source_language, None, None)
             .await
     }
 
@@ -1217,9 +1217,10 @@ impl Project {
         frame: Frame,
         source_language: koharu_translator::Language,
         translation: Option<String>,
+        typography: Typography,
     ) -> Result<(Commit, EntityId)> {
         let (commit, layer, _) = self
-            .add_region_layer(page, frame, source_language, translation)
+            .add_region_layer(page, frame, source_language, translation, Some(typography))
             .await?;
         Ok((commit, layer))
     }
@@ -1230,8 +1231,41 @@ impl Project {
         frame: Frame,
         source_language: koharu_translator::Language,
         translation: Option<String>,
+        typography: Option<Typography>,
     ) -> Result<(Commit, EntityId, EntityId)> {
         let snapshot = self.snapshot();
+        let typography = typography.map_or_else(
+            || SceneTypography {
+                origin: Origin::User,
+                preferred_font: None,
+                font_weight: None,
+                font_style: None,
+                size: None,
+                auto_fit: true,
+                color: None,
+                stroke_color: None,
+                stroke_width: None,
+                alignment: None,
+                writing_mode: None,
+                extensions: Default::default(),
+                line_breaking: None,
+            },
+            |typography| SceneTypography {
+                origin: Origin::User,
+                preferred_font: typography.preferred_font,
+                font_weight: typography.font_weight,
+                font_style: typography.font_style,
+                size: typography.size.filter(|size| *size > 0.0),
+                auto_fit: typography.auto_fit,
+                color: typography.color,
+                stroke_color: typography.stroke_color,
+                stroke_width: typography.stroke_width,
+                alignment: typography.alignment,
+                writing_mode: typography.writing_mode,
+                extensions: Default::default(),
+                line_breaking: typography.line_breaking,
+            },
+        );
         let geometry = Self::geometry_from_frame(frame)?;
         let page_value = snapshot.page(page)?.page()?;
         if geometry.points.iter().any(|point| {
@@ -1264,24 +1298,7 @@ impl Project {
                     angle_degrees: None,
                 },
             )?;
-            edit.set(
-                layer,
-                &SceneTypography {
-                    origin: Origin::User,
-                    preferred_font: None,
-                    font_weight: None,
-                    font_style: None,
-                    size: None,
-                    auto_fit: true,
-                    color: None,
-                    stroke_color: None,
-                    stroke_width: None,
-                    alignment: None,
-                    writing_mode: None,
-                    extensions: Default::default(),
-                    line_breaking: None,
-                },
-            )?;
+            edit.set(layer, &typography)?;
             edit.set(
                 content,
                 &SceneTextRole {
@@ -3271,7 +3288,7 @@ impl Project {
         })
     }
 
-    fn containing_bubble(
+    pub(crate) fn containing_bubble(
         snapshot: &Snapshot,
         page: EntityId,
         geometry: &SceneGeometry,

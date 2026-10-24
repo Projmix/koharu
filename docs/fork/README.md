@@ -165,11 +165,16 @@ Known gaps after the rebuild:
   works on the open project through the same host: the same project lock
   and undo history as the app. Besides the editing tools it has
   `page_layers` (a page's text layers in numbered order with box, given
-  back unturned with its angle, balloon box and the largest box inside the
-  balloon that holds the text's centre, measured on the page's pixels
-  without text when the balloon is closed, so each lobe of a joined balloon
-  gets its own; typography; what the renderer drew: font, size, the largest
-  size auto-fit may choose, `small` below 1.2% of the page width, layout
+  back unturned with its angle, and flow: `balloon` when the layer has no
+  box and the renderer lays it out in the balloon's shape; balloon box and
+  the inside of the balloon measured on the page's pixels without text when
+  the balloon is closed: opened by 15% of its shorter side to drop the tail
+  and bumps and part lobes at a narrow neck, the lobe holding the text, its
+  centre, the largest box around that centre, how far the drawn block sits
+  from the centre and the narrowest gap between a line and the inside;
+  typography; what the renderer drew: font, size, the largest
+  size auto-fit may choose and, when free text stopped there, the largest
+  size its box takes, `small` below 1.2% of the page width, layout
   box, each line with its width and room, hyphenated words, fit warning and
   what overflowed in the text's own axes; whether the cleaning removed the
   source lettering and its tone, with `check_color` when neither paint has
@@ -178,8 +183,11 @@ Known gaps after the rebuild:
   text, or as imported), `preview_layers` (a trial render of text, box,
   rotation and typography changes that commits nothing), `apply_layers`
   (the same changes plus source text and visibility, on any pages, one
-  undo step), `add_text_layer` (a text layer with its translation in a
-  region; inside a balloon it flows in the balloon), `chapter_text` (one
+  undo step; `flow: balloon` drops a layer's box so it follows the balloon's
+  shape), `add_text_layer` (a text layer with its translation and
+  typography in a region, an empty balloon or an unboxed lettering box;
+  inside a balloon it flows in the balloon; without a colour it is black,
+  or white on a dark ground), `chapter_text` (one
   line per layer: number, role, source and translation, under a line per
   page; JSON with ids on request) and `check_chapter` (with page and layer
   numbers, what hides hidden text, and a box per flag of lettering outside
@@ -189,7 +197,9 @@ Known gaps after the rebuild:
   chapter text from 97 KB to 20 KB. `crop` and `preview_layers` can put the
   source beside the result and outline the layers' boxes with their
   numbers, the measured balloon insides and the unboxed lettering; images
-  state their scale. Unknown argument fields are refused. Every edit an
+  state their scale. Unknown argument fields are refused. A call after the
+  project changed outside the agent (the owner editing in the app) starts
+  with a notice to reread. Every edit an
   agent commits refreshes the app's project, pages and layers. A second
   running Koharu finds the port taken and runs without the server.
 - Text typography has a line-breaking choice (inspector "Line breaks",

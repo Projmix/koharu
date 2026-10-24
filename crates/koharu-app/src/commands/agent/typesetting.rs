@@ -69,7 +69,7 @@ pub(super) struct Crop {
     pub(super) outline: bool,
 }
 
-#[derive(Deserialize, JsonSchema)]
+#[derive(Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(super) struct TrialTypography {
     preferred_font: Option<String>,
@@ -108,12 +108,24 @@ pub(super) struct TrialChange {
     /// 180 sets text upside down. Needs region.
     #[serde(default)]
     angle: Option<f32>,
+    /// `balloon` drops the layer's box and flows it in the balloon that holds
+    /// it: each line as wide as the balloon at its height, the block placed
+    /// in the balloon, a joined balloon shared among its layers. A region
+    /// sets a box again.
+    #[serde(default)]
+    flow: Option<TrialFlow>,
     /// Whole new typography, as set_typography takes it.
     #[serde(default)]
     typography: Option<TrialTypography>,
     /// Show or hide the layer.
     #[serde(default)]
     visible: Option<bool>,
+}
+
+#[derive(Clone, Copy, Deserialize, JsonSchema, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum TrialFlow {
+    Balloon,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -138,6 +150,10 @@ pub(super) struct AddTextLayer {
     pub(super) text: Option<String>,
     #[serde(default)]
     pub(super) lines: Option<Vec<String>>,
+    /// Typography, as apply_layers takes it. Without a colour the text is
+    /// black, or white on a dark ground.
+    #[serde(default)]
+    pub(super) typography: Option<TrialTypography>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -370,11 +386,60 @@ fn read_box(value: &Value) -> Option<[f64; 4]> {
 fn measure_balloon(clean: &RgbaImage, value: &mut Value) {
     let measured = read_box(&value["balloon"]["box"])
         .zip(read_box(&value["box"]))
-        .and_then(|(balloon, text)| pixel_inner_box(clean, balloon, text));
+        .and_then(|(balloon, text)| balloon_interior(clean, balloon, text));
     match measured {
-        Some(measured) => {
-            value["balloon"]["inner_box"] = json!(measured);
+        Some(interior) => {
+            value["balloon"]["inner_box"] = json!(interior.inner_box);
+            value["balloon"]["interior"] = json!({
+                "box": interior.bounds,
+                "centre": interior.centre,
+            });
             value["balloon"]["measured"] = json!("pixels");
+            if let Some(drawn) = read_box(&value["rendered"]["text_box"]) {
+                // How far the drawn block's centre sits from the lobe's
+                // centroid, and the narrowest gap between a line and the
+                // balloon's inside at that line's height.
+                value["balloon"]["off_centre"] = json!([
+                    (drawn[0] + drawn[2] / 2.0 - interior.centre[0]).round(),
+                    (drawn[1] + drawn[3] / 2.0 - interior.centre[1]).round(),
+                ]);
+                let lines = value["rendered"]["lines"]
+                    .as_array()
+                    .map(|lines| {
+                        lines
+                            .iter()
+                            .filter_map(|line| line["width"].as_f64())
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                let alignment = value["typography"]["alignment"]
+                    .as_str()
+                    .unwrap_or("Center");
+                let vertical = value["typography"]["writing_mode"] == json!("Vertical");
+                if !lines.is_empty() && !vertical {
+                    let step = drawn[3] / lines.len() as f64;
+                    let gap = lines
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(index, width)| {
+                            let y = drawn[1] + step * (index as f64 + 0.5);
+                            let (start, end) = match alignment {
+                                "Start" => (drawn[0], drawn[0] + width),
+                                "End" => (drawn[0] + drawn[2] - width, drawn[0] + drawn[2]),
+                                _ => {
+                                    let middle = drawn[0] + drawn[2] / 2.0;
+                                    (middle - width / 2.0, middle + width / 2.0)
+                                }
+                            };
+                            let (left, right) = interior.row(y)?;
+                            Some((start - left).min(right - end))
+                        })
+                        .fold(f64::INFINITY, f64::min);
+                    if gap.is_finite() {
+                        value["balloon"]["edge_gap"] = json!(gap.round());
+                    }
+                }
+            }
         }
         None if value["balloon"].is_object() => {
             value["balloon"]["measured"] = json!("outline");
@@ -626,11 +691,11 @@ pub(super) async fn preview_layers(
     let mut layers = layers;
     let scale = arguments.scale.unwrap_or(1.0).clamp(0.1, 4.0);
     let mut image = rasterize(desktop, &frame).await?;
+    let clean = render_image(desktop, &without_text(&trial, page)?, page).await?;
+    for value in &mut layers {
+        measure_balloon(&clean, value);
+    }
     if arguments.outline {
-        let clean = render_image(desktop, &without_text(&trial, page)?, page).await?;
-        for value in &mut layers {
-            measure_balloon(&clean, value);
-        }
         draw_outlines(&mut image, &trial, &frame, &clean, page, &changed, scale)?;
     }
     let source = if arguments.compare {
@@ -654,6 +719,117 @@ pub(super) async fn preview_layers(
         }),
         png,
     ))
+}
+
+impl TrialTypography {
+    pub(super) fn into_typography(self) -> Typography {
+        Typography {
+            preferred_font: self.preferred_font,
+            font_weight: self.font_weight,
+            font_style: self.font_style.map(Into::into),
+            size: self.size,
+            auto_fit: self.auto_fit,
+            color: self.color,
+            stroke_color: self.stroke_color,
+            stroke_width: self.stroke_width,
+            alignment: self.alignment.map(Into::into),
+            writing_mode: self.writing_mode.map(Into::into),
+            line_breaking: self.line_breaking.map(Into::into),
+        }
+    }
+}
+
+/// The typography of a layer `add_text_layer` makes: the given one, black
+/// text by default, or white where the page under the region is dark (black
+/// ovals, night panels).
+pub(super) async fn new_layer_typography(
+    desktop: &Desktop,
+    snapshot: &Snapshot,
+    page: EntityId,
+    [x, y, width, height]: [f64; 4],
+    typography: Option<TrialTypography>,
+) -> Result<Typography> {
+    let mut typography = typography.map_or(
+        Typography {
+            preferred_font: None,
+            font_weight: None,
+            font_style: None,
+            size: None,
+            auto_fit: true,
+            color: None,
+            stroke_color: None,
+            stroke_width: None,
+            alignment: None,
+            writing_mode: None,
+            line_breaking: None,
+        },
+        TrialTypography::into_typography,
+    );
+    if typography.color.is_none() {
+        let clean = render_image(desktop, &without_text(snapshot, page)?, page).await?;
+        let (image_width, image_height) = clean.dimensions();
+        let mut levels = Vec::new();
+        for py in (y.max(0.0) as u32)..((y + height) as u32).min(image_height) {
+            for px in (x.max(0.0) as u32)..((x + width) as u32).min(image_width) {
+                let pixel = clean.get_pixel(px, py);
+                levels.push(
+                    (u32::from(pixel[0]) * 299
+                        + u32::from(pixel[1]) * 587
+                        + u32::from(pixel[2]) * 114)
+                        / 1000,
+                );
+            }
+        }
+        let dark = !levels.is_empty() && {
+            let middle = levels.len() / 2;
+            *levels.select_nth_unstable(middle).1 < 100
+        };
+        typography.color = Some(if dark {
+            [255, 255, 255, 255]
+        } else {
+            [0, 0, 0, 255]
+        });
+    }
+    Ok(typography)
+}
+
+/// Drops `layer`'s own box and binds it to the balloon that holds it, so the
+/// renderer lays it out in the balloon's shape.
+fn balloon_flow_step(snapshot: &Snapshot, layer: EntityId) -> Result<EditStep> {
+    let text = snapshot.text_layer(layer)?;
+    let balloon = match text.balloon_target()? {
+        Some(balloon) => balloon.id(),
+        None => {
+            let page = owning_page(snapshot, layer)?;
+            let geometry = text
+                .content()?
+                .source_region()?
+                .map(|region| region.geometry())
+                .transpose()?
+                .or(text.frame()?)
+                .with_context(|| format!("{layer} has no box to find its balloon by"))?;
+            Project::containing_bubble(snapshot, page, &geometry)?
+                .with_context(|| format!("no detected balloon holds {layer}"))?
+        }
+    };
+    let bound = text.balloon_target()?.is_some();
+    let fits = snapshot
+        .relations_from_as::<koharu_scene::FitsTo>(layer)
+        .map(|relation| relation.id())
+        .collect::<Vec<_>>();
+    let content = text.content()?.id();
+    Ok(Box::new(move |edit| {
+        edit.promote_entity_to_user(layer)?;
+        edit.promote_entity_to_user(content)?;
+        edit.remove::<Geometry>(layer)?;
+        for relation in fits {
+            edit.remove_relation(relation)?;
+        }
+        if !bound {
+            edit.relate::<koharu_scene::FlowsIn>(layer, balloon)?;
+        }
+        Ok(())
+    }))
 }
 
 /// The elements the changes name, in order.
@@ -683,6 +859,12 @@ pub(super) fn steps(
         }
         if let Some(source) = change.source {
             steps.push(Project::source_step(snapshot, layer, source)?);
+        }
+        if change.flow == Some(TrialFlow::Balloon) {
+            if change.region.is_some() {
+                bail!("give {layer} either a region or flow balloon, not both");
+            }
+            steps.push(balloon_flow_step(snapshot, layer)?);
         }
         if let Some(angle) = change.angle {
             let [x, y, width, height] = change
@@ -723,19 +905,7 @@ pub(super) fn steps(
             )?);
         }
         if let Some(typography) = change.typography {
-            let typography = Typography {
-                preferred_font: typography.preferred_font,
-                font_weight: typography.font_weight,
-                font_style: typography.font_style.map(Into::into),
-                size: typography.size,
-                auto_fit: typography.auto_fit,
-                color: typography.color,
-                stroke_color: typography.stroke_color,
-                stroke_width: typography.stroke_width,
-                alignment: typography.alignment.map(Into::into),
-                writing_mode: typography.writing_mode.map(Into::into),
-                line_breaking: typography.line_breaking.map(Into::into),
-            };
+            let typography = typography.into_typography();
             steps.push(Project::typography_step(
                 snapshot,
                 vec![TypographyUpdate { layer, typography }],
@@ -781,9 +951,11 @@ pub(super) async fn report(
     let mut values = Vec::new();
     for (page, members) in pages {
         let frame = desktop.renderer().render(snapshot, page).await?;
+        let clean = render_image(desktop, &without_text(snapshot, page)?, page).await?;
         let numbers = numbering(snapshot, page)?;
         for layer in members {
             let mut value = layer_value(snapshot, &frame, layer, numbers(layer))?;
+            measure_balloon(&clean, &mut value);
             if !full {
                 value = compact_layer(&value);
             }
@@ -863,6 +1035,11 @@ fn layer_value(
         "translated_text": content.translation()?.map(|translation| translation.text.value),
         "box": frame_box,
         "angle": angle,
+        "flow": if snapshot.component::<Geometry>(layer)?.is_none() && balloon.is_some() {
+            "balloon"
+        } else {
+            "box"
+        },
         "balloon": balloon.as_ref().map(|geometry| json!({
             "box": extent(geometry),
             "inner_box": inner_box(geometry),
@@ -874,6 +1051,7 @@ fn layer_value(
                 "font": rendered.post_script_fonts.first(),
                 "font_size": (f64::from(rendered.font_size) * 10.0).round() / 10.0,
                 "auto_fit_max": rendered.auto_fit_ceiling.map(|size| (f64::from(size) * 10.0).round() / 10.0),
+                "fits_up_to": rendered.fits_up_to.map(|size| (f64::from(size) * 10.0).round() / 10.0),
                 "small": f64::from(rendered.font_size) < page_width * SMALL_TEXT_SHARE,
                 "text_box": rendered_box(frame, layer),
                 "layout_box": ([bounds.x, bounds.y, bounds.width, bounds.height]
@@ -940,6 +1118,11 @@ fn compact_layer(value: &Value) -> Value {
         ("auto_fit_max", &rendered["auto_fit_max"]),
         ("warning", &rendered["warning"]),
         ("overflow", &rendered["overflow"]),
+        ("flow", &value["flow"]),
+        ("inner_box", &value["balloon"]["inner_box"]),
+        ("off_centre", &value["balloon"]["off_centre"]),
+        ("edge_gap", &value["balloon"]["edge_gap"]),
+        ("fits_up_to", &rendered["fits_up_to"]),
     ] {
         if !field.is_null() {
             compact.insert(key.to_owned(), field.clone());
@@ -1127,12 +1310,101 @@ fn inner_box(geometry: &Geometry) -> Option<[f64; 4]> {
     )
 }
 
-/// The largest axis-aligned rectangle inside the balloon as drawn on the
-/// clean page: the light area flooded from the light pixel nearest the text
-/// box's centre, its holes filled, kept a margin from the outline. `None`
-/// when the flood leaks out of the balloon's box (an open balloon) or finds
-/// no light pixel, so the detected outline decides instead.
+/// The largest axis-aligned rectangle inside the balloon around the text, as
+/// drawn on the clean page; see `balloon_interior`.
 fn pixel_inner_box(clean: &RgbaImage, balloon: [f64; 4], text: [f64; 4]) -> Option<[f64; 4]> {
+    balloon_interior(clean, balloon, text).map(|interior| interior.inner_box)
+}
+
+/// The inside of a balloon as drawn on the clean page, for the text whose
+/// box is given.
+struct Interior {
+    /// Largest rectangle in the lobe holding its centre, kept a margin from
+    /// the outline.
+    inner_box: [f64; 4],
+    /// Bounds and centroid of the lobe without its tail and bumps.
+    bounds: [f64; 4],
+    centre: [f64; 2],
+    left: u32,
+    top: u32,
+    width: usize,
+    lobe: Vec<bool>,
+}
+
+impl Interior {
+    /// The lobe's leftmost and rightmost pixel on page row `y`.
+    fn row(&self, y: f64) -> Option<(f64, f64)> {
+        let row = (y - f64::from(self.top)).round();
+        if row < 0.0 {
+            return None;
+        }
+        let start = row as usize * self.width;
+        let cells = self.lobe.get(start..start + self.width)?;
+        let first = cells.iter().position(|inside| *inside)?;
+        let last = cells.iter().rposition(|inside| *inside)?;
+        Some((
+            f64::from(self.left) + first as f64,
+            f64::from(self.left) + last as f64 + 1.0,
+        ))
+    }
+}
+
+/// Chamfer (3-4) distance, in thirds of a pixel, from each pixel to the
+/// nearest `source` pixel.
+fn chamfer(sources: &[bool], width: usize, height: usize) -> Vec<u32> {
+    const FAR: u32 = u32::MAX / 2;
+    let mut distance = sources
+        .iter()
+        .map(|source| if *source { 0 } else { FAR })
+        .collect::<Vec<_>>();
+    for y in 0..height {
+        for x in 0..width {
+            let at = y * width + x;
+            let mut best = distance[at];
+            if x > 0 {
+                best = best.min(distance[at - 1] + 3);
+            }
+            if y > 0 {
+                best = best.min(distance[at - width] + 3);
+                if x > 0 {
+                    best = best.min(distance[at - width - 1] + 4);
+                }
+                if x + 1 < width {
+                    best = best.min(distance[at - width + 1] + 4);
+                }
+            }
+            distance[at] = best;
+        }
+    }
+    for y in (0..height).rev() {
+        for x in (0..width).rev() {
+            let at = y * width + x;
+            let mut best = distance[at];
+            if x + 1 < width {
+                best = best.min(distance[at + 1] + 3);
+            }
+            if y + 1 < height {
+                best = best.min(distance[at + width] + 3);
+                if x + 1 < width {
+                    best = best.min(distance[at + width + 1] + 4);
+                }
+                if x > 0 {
+                    best = best.min(distance[at + width - 1] + 4);
+                }
+            }
+            distance[at] = best;
+        }
+    }
+    distance
+}
+
+/// The light area flooded from the light pixel nearest the text box's
+/// centre, its holes filled. An opening by 15% of its shorter side takes off
+/// the tail and small bumps and parts the lobes of a joined balloon at their
+/// neck; the lobe holding (or nearest) the text is measured. `None` when the
+/// flood leaks out of the balloon's box (an open balloon) or finds no light
+/// pixel, so the detected outline decides instead.
+fn balloon_interior(clean: &RgbaImage, balloon: [f64; 4], text: [f64; 4]) -> Option<Interior> {
     const LIGHT: u32 = 200;
     let (page_width, page_height) = clean.dimensions();
     let grow = |value: f64| value * 0.15;
@@ -1230,6 +1502,97 @@ fn pixel_inner_box(clean: &RgbaImage, balloon: [f64; 4], text: [f64; 4]) -> Opti
             }
         }
     }
+    // Open the inside and keep the lobe of the text.
+    let inside = outside.iter().map(|outside| !outside).collect::<Vec<_>>();
+    let (inside_min_x, inside_max_x, inside_min_y, inside_max_y) = (0..width * height)
+        .filter(|at| inside[*at])
+        .fold((width, 0, height, 0), |(a, b, c, d), at| {
+            let (x, y) = (at % width, at / width);
+            (a.min(x), b.max(x), c.min(y), d.max(y))
+        });
+    if inside_max_x <= inside_min_x || inside_max_y <= inside_min_y {
+        return None;
+    }
+    let radius = (((inside_max_x - inside_min_x).min(inside_max_y - inside_min_y) as f64 * 0.15)
+        .max(2.0)
+        * 3.0) as u32;
+    let to_outside = chamfer(&outside, width, height);
+    let eroded = to_outside
+        .iter()
+        .map(|distance| *distance > radius)
+        .collect::<Vec<_>>();
+    let to_eroded = chamfer(&eroded, width, height);
+    let opened = (0..width * height)
+        .map(|at| inside[at] && to_eroded[at] <= radius)
+        .collect::<Vec<_>>();
+    let mut component = vec![usize::MAX; width * height];
+    let mut components = Vec::<Vec<usize>>::new();
+    for start in 0..width * height {
+        if !opened[start] || component[start] != usize::MAX {
+            continue;
+        }
+        let index = components.len();
+        let mut pixels = vec![start];
+        component[start] = index;
+        let mut cursor = 0;
+        while cursor < pixels.len() {
+            let at = pixels[cursor];
+            cursor += 1;
+            let (x, y) = (at % width, at / width);
+            for (nx, ny) in [
+                (x.wrapping_sub(1), y),
+                (x + 1, y),
+                (x, y.wrapping_sub(1)),
+                (x, y + 1),
+            ] {
+                if nx < width && ny < height {
+                    let next = ny * width + nx;
+                    if opened[next] && component[next] == usize::MAX {
+                        component[next] = index;
+                        pixels.push(next);
+                    }
+                }
+            }
+        }
+        components.push(pixels);
+    }
+    let seed_at = seed.1 * width + seed.0;
+    let lobe_pixels = if components.is_empty() {
+        (0..width * height)
+            .filter(|at| inside[*at])
+            .collect::<Vec<_>>()
+    } else if component[seed_at] != usize::MAX {
+        components.swap_remove(component[seed_at])
+    } else {
+        let nearest = components
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, pixels)| {
+                pixels
+                    .iter()
+                    .map(|at| {
+                        let (x, y) = (at % width, at / width);
+                        x.abs_diff(seed.0).pow(2) + y.abs_diff(seed.1).pow(2)
+                    })
+                    .min()
+                    .unwrap_or(usize::MAX)
+            })
+            .map(|(index, _)| index)?;
+        components.swap_remove(nearest)
+    };
+    let mut lobe = vec![false; width * height];
+    for at in &lobe_pixels {
+        lobe[*at] = true;
+    }
+    let count = lobe_pixels.len().max(1) as f64;
+    let (sum_x, sum_y) = lobe_pixels.iter().fold((0.0, 0.0), |(sx, sy), at| {
+        (sx + (at % width) as f64, sy + (at / width) as f64)
+    });
+    let centroid = (
+        (sum_x / count).round() as usize,
+        (sum_y / count).round() as usize,
+    );
+    let outside = lobe.iter().map(|inside| !inside).collect::<Vec<_>>();
     // Keep a margin: a pixel stays when no outside pixel lies within it.
     let (min_x, max_x, min_y, max_y) = (0..width * height).filter(|at| !outside[*at]).fold(
         (width, 0, height, 0),
@@ -1261,9 +1624,8 @@ fn pixel_inner_box(clean: &RgbaImage, balloon: [f64; 4], text: [f64; 4]) -> Opti
             && x + margin < width
             && y + margin < height
     };
-    // In a joined balloon the largest rectangle sits in one lobe or the
-    // overlap; the text's own lobe is the largest rectangle holding the
-    // light pixel nearest its centre, when one does.
+    // The largest rectangle holding the lobe's centroid, when one does: the
+    // text centres on the lobe, not on where the source lettering sat.
     let mut heights = vec![0usize; width];
     let mut best = (0usize, 0usize, 0usize, 0usize, 0usize);
     let mut around_seed = (0usize, 0usize, 0usize, 0usize, 0usize);
@@ -1285,8 +1647,8 @@ fn pixel_inner_box(clean: &RgbaImage, balloon: [f64; 4], text: [f64; 4]) -> Opti
                 if area > best.0 {
                     best = rect;
                 }
-                let holds_seed =
-                    (start..x).contains(&seed.0) && (y + 1 - heights[last]..=y).contains(&seed.1);
+                let holds_seed = (start..x).contains(&centroid.0)
+                    && (y + 1 - heights[last]..=y).contains(&centroid.1);
                 if holds_seed && area > around_seed.0 {
                     around_seed = rect;
                 }
@@ -1298,13 +1660,31 @@ fn pixel_inner_box(clean: &RgbaImage, balloon: [f64; 4], text: [f64; 4]) -> Opti
         best = around_seed;
     }
     let (area, x, y, rect_width, rect_height) = best;
-    (area > 0).then(|| {
-        [
-            f64::from(left) + x as f64,
-            f64::from(top) + y as f64,
+    if area == 0 {
+        return None;
+    }
+    let (left_f, top_f) = (f64::from(left), f64::from(top));
+    Some(Interior {
+        inner_box: [
+            left_f + x as f64,
+            top_f + y as f64,
             rect_width as f64,
             rect_height as f64,
-        ]
+        ],
+        bounds: [
+            left_f + min_x as f64,
+            top_f + min_y as f64,
+            (max_x - min_x + 1) as f64,
+            (max_y - min_y + 1) as f64,
+        ],
+        centre: [
+            (left_f + sum_x / count).round(),
+            (top_f + sum_y / count).round(),
+        ],
+        left,
+        top,
+        width,
+        lobe,
     })
 }
 

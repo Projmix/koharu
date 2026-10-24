@@ -1320,6 +1320,7 @@ fn build_node(
                     color: rendered.metadata.color,
                     lines: rendered.metadata.lines.into(),
                     auto_fit_ceiling: rendered.metadata.auto_fit_ceiling,
+                    fits_up_to: rendered.metadata.fits_up_to,
                 }),
                 diagnostics: rendered.diagnostics.into(),
             })
@@ -1363,6 +1364,7 @@ fn assemble_frame(
                     angle_degrees,
                     lines: metadata.lines.clone(),
                     auto_fit_ceiling: metadata.auto_fit_ceiling,
+                    fits_up_to: metadata.fits_up_to,
                 })
             }
         };

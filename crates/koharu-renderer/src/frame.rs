@@ -383,6 +383,9 @@ pub struct TextMetadata {
     /// The largest size auto-fit could choose for this text, when it fits
     /// automatically.
     pub auto_fit_ceiling: Option<f32>,
+    /// The largest size the box would take when auto-fit stopped at its
+    /// ceiling.
+    pub fits_up_to: Option<f32>,
 }
 
 /// One drawn line of a text layer, as the line breaker set it.
@@ -495,6 +498,7 @@ pub(crate) struct LocalTextMetadata {
     pub(crate) color: [u8; 4],
     pub(crate) lines: Arc<[RenderedLine]>,
     pub(crate) auto_fit_ceiling: Option<f32>,
+    pub(crate) fits_up_to: Option<f32>,
 }
 
 pub(crate) fn prepare_frame(
