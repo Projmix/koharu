@@ -143,7 +143,7 @@ async fn image_edit_preview_approval_preserves_edited_prompt_verbatim() {
     let input = scene_input(false)
         .await
         .with_image_edit_reviewer(Some(reviewer.clone()));
-    let prepared = prepare(&input, true, false).await.unwrap();
+    let prepared = prepare(&input, true, false, false).await.unwrap();
     let result = reviewed_prompt(
         &input,
         InpaintingProvider::Fal,
@@ -173,7 +173,7 @@ async fn image_edit_preview_cancel_stops_the_run() {
     let input = scene_input(false)
         .await
         .with_image_edit_reviewer(Some(Reviewer::new(None)));
-    let prepared = prepare(&input, true, false).await.unwrap();
+    let prepared = prepare(&input, true, false, false).await.unwrap();
     let result = reviewed_prompt(
         &input,
         InpaintingProvider::OpenRouter,
@@ -193,7 +193,7 @@ async fn image_edit_preview_rejects_empty_and_nul_prompts() {
         let input = scene_input(false)
             .await
             .with_image_edit_reviewer(Some(Reviewer::new(Some(prompt))));
-        let prepared = prepare(&input, true, false).await.unwrap();
+        let prepared = prepare(&input, true, false, false).await.unwrap();
         let result = reviewed_prompt(
             &input,
             InpaintingProvider::Fal,
@@ -222,7 +222,7 @@ async fn image_edit_preview_stop_interrupts_a_reviewer_that_never_returns() {
         .with_image_edit_reviewer(Some(reviewer));
     let stop = input.stop.clone();
     let task = tokio::spawn(async move {
-        let prepared = prepare(&input, true, false).await.unwrap();
+        let prepared = prepare(&input, true, false, false).await.unwrap();
         reviewed_prompt(
             &input,
             InpaintingProvider::Fal,
@@ -323,7 +323,7 @@ async fn image_edit_preview_sends_approved_prompt_and_pixels_to_each_http_bounda
         let input = scene_input(true)
             .await
             .with_image_edit_reviewer(Some(reviewer));
-        let prepared = prepare(&input, true, true).await.unwrap();
+        let prepared = prepare(&input, true, true, false).await.unwrap();
         let prompt = reviewed_prompt(
             &input,
             provider,
@@ -389,7 +389,7 @@ async fn image_edit_preview_sends_approved_prompt_and_pixels_to_each_http_bounda
 #[tokio::test]
 async fn image_edit_preview_stopped_run_skips_review_and_disabled_review_preserves_prompt() {
     let input = scene_input(false).await;
-    let prepared = prepare(&input, true, false).await.unwrap();
+    let prepared = prepare(&input, true, false, false).await.unwrap();
     assert_eq!(
         reviewed_prompt(
             &input,

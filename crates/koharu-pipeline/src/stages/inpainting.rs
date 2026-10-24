@@ -19,7 +19,8 @@ use koharu_ml::{
 };
 use koharu_scene::{
     AssetInput, AssetMetadata, AssetRole, At, BubbleRegion, EntityId, Geometry, Origin,
-    RasterLayer, RasterLayerKind, Region, RegionSpec, TextRegion, Visibility,
+    RasterLayer, RasterLayerKind, RecognizedFrom, Region, RegionSpec, TextRegion, TextRole,
+    Visibility,
 };
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -267,7 +268,13 @@ impl Model {
                 self,
                 Self::Fal { .. } | Self::OpenRouter { .. } | Self::Replicate { .. }
             );
-        let mut prepared = prepare(&input, include_paint, restore).await?;
+        // Automatic local cleaning leaves sound effects for the owner.
+        let keep_sound_effects = intent.is_none()
+            && !matches!(
+                self,
+                Self::Fal { .. } | Self::OpenRouter { .. } | Self::Replicate { .. }
+            );
+        let mut prepared = prepare(&input, include_paint, restore, keep_sound_effects).await?;
         if !full_page && prepared.mask.as_raw().iter().all(|value| *value == 0) {
             return finish(input.scene.edit());
         }
@@ -750,6 +757,79 @@ struct FlatFillRegion {
     polygon: Vec<(f32, f32)>,
 }
 
+/// Removes from the mask each lettering blob lying mostly inside a text region
+/// whose text is a sound effect.
+fn drop_sound_effects(
+    input: &StageInput,
+    mask: &mut GrayImage,
+    text_mask: &mut GrayImage,
+) -> Result<()> {
+    let (width, height) = mask.dimensions();
+    let mut effect = vec![false; width as usize * height as usize];
+    let mut any = false;
+    for entity in input.scene.descendants(input.page()?)? {
+        let content = entity.id();
+        if !input
+            .scene
+            .component::<TextRole>(content)?
+            .is_some_and(|role| role.role == super::detection::ONOMATOPOEIA_ROLE)
+        {
+            continue;
+        }
+        let Some(relation) = input.scene.relation_from::<RecognizedFrom>(content)? else {
+            continue;
+        };
+        let Some(geometry) = input.scene.component::<Geometry>(relation.value().target)? else {
+            continue;
+        };
+        let polygon = geometry
+            .points
+            .iter()
+            .map(|point| (point.x as f32, point.y as f32))
+            .collect::<Vec<_>>();
+        let Some((left, top, right, bottom)) = crate::scope::geometry_extents(&geometry) else {
+            continue;
+        };
+        let bounds = [
+            left.floor().clamp(0.0, f64::from(width)) as u32,
+            top.floor().clamp(0.0, f64::from(height)) as u32,
+            right.ceil().clamp(0.0, f64::from(width)) as u32,
+            bottom.ceil().clamp(0.0, f64::from(height)) as u32,
+        ];
+        if polygon.len() < 3 || bounds[2] <= bounds[0] || bounds[3] <= bounds[1] {
+            continue;
+        }
+        let inside = polygon_interior(&FlatFillRegion { bounds, polygon });
+        for y in bounds[1]..bounds[3] {
+            for x in bounds[0]..bounds[2] {
+                if inside.contains(x, y) {
+                    effect[y as usize * width as usize + x as usize] = true;
+                    any = true;
+                }
+            }
+        }
+    }
+    if !any {
+        return Ok(());
+    }
+    let (labels, components) = mask_components(mask);
+    let mut counts = vec![[0u32; 2]; components.len() + 1];
+    for (at, label) in labels.as_raw().iter().enumerate() {
+        if *label != 0 {
+            counts[*label as usize][usize::from(effect[at])] += 1;
+        }
+    }
+    for (at, label) in labels.as_raw().iter().enumerate() {
+        let [outside, inside] = counts[*label as usize];
+        if *label != 0 && inside > outside {
+            let (x, y) = (at as u32 % width, at as u32 / width);
+            mask.put_pixel(x, y, Luma([0]));
+            text_mask.put_pixel(x, y, Luma([0]));
+        }
+    }
+    Ok(())
+}
+
 fn flat_fill_regions(input: &StageInput, width: u32, height: u32) -> Result<Vec<FlatFillRegion>> {
     let mut regions = Vec::new();
     for entity in input.scene.descendants(input.page()?)? {
@@ -805,10 +885,14 @@ struct InpaintInput {
     restore_bounds: Option<[u32; 4]>,
 }
 
+/// `keep_sound_effects` leaves lettering of sound-effect regions out of the
+/// mask: a local fill or model makes a ragged half-erased effect of it, and
+/// the owner cleans those by hand or through an image-edit model.
 async fn prepare(
     input: &StageInput,
     include_paint: bool,
     include_cleanup: bool,
+    keep_sound_effects: bool,
 ) -> Result<InpaintInput> {
     let page = input.page()?;
     let original = input
@@ -900,6 +984,9 @@ async fn prepare(
                 }
             }
         }
+    }
+    if keep_sound_effects {
+        drop_sound_effects(input, &mut mask, &mut text_mask)?;
     }
     if let Some(bounds) = input.region {
         for (x, y, pixel) in mask.enumerate_pixels_mut() {
@@ -2174,10 +2261,10 @@ mod tests {
                 || StageInput::new(base.clone(), page, None, None, Arc::clone(&images), None);
             // Warms the image cache, so both timings below leave decoding out.
             let started = Instant::now();
-            prepare(&input(), false, false).await.unwrap();
+            prepare(&input(), false, false, false).await.unwrap();
             let first = started.elapsed().as_secs_f64() * 1000.0;
             let started = Instant::now();
-            let prepared = prepare(&input(), false, false).await.unwrap();
+            let prepared = prepare(&input(), false, false, false).await.unwrap();
             let prepare_ms = started.elapsed().as_secs_f64() * 1000.0;
             let started = Instant::now();
             let tiles = inpaint_tiles(&prepared.unfilled_mask).1;
@@ -2310,7 +2397,7 @@ mod tests {
             }),
         );
 
-        let prepared = prepare(&input, false, false).await.unwrap();
+        let prepared = prepare(&input, false, false, false).await.unwrap();
         assert_eq!(prepared.mask.get_pixel(3, 4), &Luma([255]));
         assert_eq!(prepared.mask.get_pixel(0, 0), &Luma([0]));
         assert_eq!(prepared.unfilled_mask, prepared.mask);
@@ -2397,7 +2484,7 @@ mod tests {
             None,
         );
 
-        let prepared = prepare(&input, true, false).await.unwrap();
+        let prepared = prepare(&input, true, false, false).await.unwrap();
         assert_eq!(
             prepared.image.to_rgba8().get_pixel(0, 0),
             &Rgba([200, 0, 0, 255])
@@ -2412,7 +2499,7 @@ mod tests {
         assert_eq!(cleanup.get_pixel(0, 0), &Rgba([1, 2, 3, 0]));
         assert_eq!(cleanup.get_pixel(1, 0), &Rgba([1, 2, 3, 255]));
 
-        let without_paint = prepare(&input, false, false).await.unwrap();
+        let without_paint = prepare(&input, false, false, false).await.unwrap();
         assert_eq!(
             without_paint.image.to_rgba8().get_pixel(0, 0),
             &Rgba([10, 20, 30, 255])
@@ -2509,7 +2596,7 @@ mod tests {
             None,
         );
 
-        let prepared = prepare(&input, true, true).await.unwrap();
+        let prepared = prepare(&input, true, true, false).await.unwrap();
         assert_eq!(
             prepared.image.to_rgba8().get_pixel(0, 0),
             &Rgba([52, 4, 107, 254])
@@ -2579,7 +2666,7 @@ mod tests {
                 intent: InpaintingIntent::Restore,
             }),
         );
-        let prepared = prepare(&input, true, true).await.unwrap();
+        let prepared = prepare(&input, true, true, false).await.unwrap();
         let crop = &prepared.image;
         assert_eq!(crop.dimensions(), (3, 3));
         assert_eq!(crop.get_pixel(0, 0), Rgba([2, 1, 0, 255]));
@@ -2776,7 +2863,7 @@ mod tests {
         assert!(!processor.skip(&automatic).unwrap());
         assert!(!processor.skip(&manual).unwrap());
         assert_eq!(
-            prepare(&automatic, false, false)
+            prepare(&automatic, false, false, false)
                 .await
                 .unwrap()
                 .image
@@ -2784,7 +2871,7 @@ mod tests {
             (8, 8)
         );
         assert_eq!(
-            prepare(&manual, false, false)
+            prepare(&manual, false, false, false)
                 .await
                 .unwrap()
                 .image

@@ -89,7 +89,7 @@ async fn removal_scene() -> (koharu_scene::Session, StageInput) {
 #[tokio::test]
 async fn removal_uses_visible_raster_layers_in_order_with_opacity() {
     let (_, input) = removal_scene().await;
-    let prepared = prepare(&input, false, false).await.unwrap();
+    let prepared = prepare(&input, false, false, false).await.unwrap();
     assert_eq!(
         prepared.image.to_rgba8().as_raw(),
         &[
@@ -118,7 +118,7 @@ async fn removal_results_stack_above_rasters_and_preserve_existing_layers_and_un
         let mut mask = GrayImage::new(4, 1);
         mask.put_pixel(x, 0, Luma([255]));
         input.inpainting_mask.as_mut().unwrap().png = png(DynamicImage::ImageLuma8(mask));
-        let prepared = prepare(&input, false, false).await.unwrap();
+        let prepared = prepare(&input, false, false, false).await.unwrap();
         let target = CleanupTarget {
             dimensions: prepared.original.dimensions(),
             mask: prepared.mask,
@@ -155,7 +155,7 @@ async fn removal_results_stack_above_rasters_and_preserve_existing_layers_and_un
         assert_eq!(children.last(), Some(&text_group));
     }
 
-    let prepared = prepare(&input, false, false).await.unwrap();
+    let prepared = prepare(&input, false, false, false).await.unwrap();
     assert_eq!(
         prepared.image.to_rgba8().as_raw(),
         &[9, 8, 7, 255, 10, 20, 30, 255, 6, 5, 4, 255, 10, 20, 30, 255],
@@ -224,7 +224,7 @@ async fn removal_respects_group_visibility_and_opacity() {
             })
             .unwrap();
         input.scene = session.commit(patch).await.unwrap().snapshot;
-        let prepared = prepare(&input, false, false).await.unwrap();
+        let prepared = prepare(&input, false, false, false).await.unwrap();
         let actual = prepared.image.get_pixel(0, 0);
         for (actual, expected) in actual.0[..3].iter().zip(expected) {
             assert!(
@@ -266,7 +266,7 @@ async fn repeated_automatic_cleanup_is_visible_and_preserves_layers_before_manua
     input.scene = session.commit(patch).await.unwrap().snapshot;
     input.inpainting_mask = None;
     for color in [[9, 8, 7, 255], [6, 5, 4, 255]] {
-        let prepared = prepare(&input, true, false).await.unwrap();
+        let prepared = prepare(&input, true, false, false).await.unwrap();
         let target = CleanupTarget {
             dimensions: prepared.original.dimensions(),
             mask: prepared.mask,
@@ -290,7 +290,10 @@ async fn repeated_automatic_cleanup_is_visible_and_preserves_layers_before_manua
             png: png(DynamicImage::ImageLuma8(GrayImage::new(4, 1))),
             intent: InpaintingIntent::Remove,
         });
-        let composite = prepare(&removal_input, false, false).await.unwrap().image;
+        let composite = prepare(&removal_input, false, false, false)
+            .await
+            .unwrap()
+            .image;
         assert_eq!(composite.get_pixel(1, 0), Rgba(color));
         assert_eq!(composite.get_pixel(3, 0), Rgba(color));
         assert_eq!(composite.get_pixel(0, 0), Rgba([52, 4, 107, 254]));
@@ -319,7 +322,7 @@ async fn repeated_automatic_cleanup_is_visible_and_preserves_layers_before_manua
         png: png(DynamicImage::ImageLuma8(mask)),
         intent: InpaintingIntent::Remove,
     });
-    let prepared = prepare(&input, false, false).await.unwrap();
+    let prepared = prepare(&input, false, false, false).await.unwrap();
     let target = CleanupTarget {
         dimensions: prepared.original.dimensions(),
         mask: prepared.mask,
@@ -337,7 +340,7 @@ async fn repeated_automatic_cleanup_is_visible_and_preserves_layers_before_manua
         )
         .unwrap();
     input.scene = session.commit(patch).await.unwrap().snapshot;
-    let composite = prepare(&input, false, false).await.unwrap().image;
+    let composite = prepare(&input, false, false, false).await.unwrap().image;
     assert_eq!(composite.get_pixel(0, 0), Rgba([3, 2, 1, 255]));
     assert_eq!(composite.get_pixel(1, 0), Rgba([6, 5, 4, 255]));
     assert_eq!(composite.get_pixel(2, 0), Rgba([40, 50, 60, 255]));
