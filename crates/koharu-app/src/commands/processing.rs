@@ -483,10 +483,9 @@ pub(crate) async fn start_job(
                     let projects = self.handle.state::<CurrentProject>();
                     let mut projects = projects.project.lock().await;
                     let project = projects.as_mut().context("no project is open")?;
-                    let Some(commit) = project.commit_rebased(output.patch).await? else {
+                    let Some(commit) = project.commit_stage_output(output).await? else {
                         return Ok(project.snapshot());
                     };
-                    project.record_commit(&commit);
                     let page = project.active_page();
                     (commit, page)
                 };

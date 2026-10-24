@@ -9,9 +9,9 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use image::{DynamicImage, ImageFormat, RgbaImage};
 use koharu_desktop::Frame;
 use koharu_scene::{
-    AssetInput, AssetMetadata, AssetRole, At, Authored, BubbleRegion, Character, CharacterId,
-    CharacterList, CleanupDone, Commit, EntityId, EntityOrigin, FitsTo, FlowsIn, Gender,
-    Geometry as SceneGeometry, Group as SceneGroup, Inside, Origin, PageDraft, PageMarkup,
+    AssetInput, AssetMetadata, AssetRole, At, Authored, BlobId, BubbleRegion, Character,
+    CharacterId, CharacterList, CleanupDone, Commit, EntityId, EntityOrigin, FitsTo, FlowsIn,
+    Gender, Geometry as SceneGeometry, Group as SceneGroup, Inside, Origin, PageDraft, PageMarkup,
     PageMarkupMissing, PageMarkupStatus, Point as ScenePoint, Presents,
     RasterLayer as SceneRasterLayer, RasterLayerKind, RecognizedFrom, Region as SceneRegion,
     RegionSpec, RemovePolicy, Revision, Session, Snapshot, SourceText as SceneSourceText,
@@ -2509,110 +2509,188 @@ impl Project {
         Ok(composite)
     }
 
-    /// Maps the visible cleanup and paint layers of `pages` through the tone
-    /// change scan enhancement made to each page: a per-channel table from
-    /// the page source to its visible enhancement layer (median per source
-    /// level, made monotonic). A fill sampled from the grey source before the
-    /// page was enhanced then matches the white paper and black ink it now
-    /// sits on. A layer already matched to the current enhancement is left
-    /// alone, so running it twice changes nothing.
-    pub(crate) async fn match_layers_to_enhancement(
+    /// Commits a pipeline stage's output. When scan enhancement changed a
+    /// page, the page's cleanup and paint layers are retoned to the new base
+    /// in the same undo step, so a layer made on the source or on an earlier
+    /// enhancement keeps matching the page it sits on.
+    pub(crate) async fn commit_stage_output(
         &mut self,
-        pages: Vec<EntityId>,
-    ) -> Result<Commit> {
+        output: koharu_pipeline::StageOutput,
+    ) -> Result<Option<Commit>> {
+        let page = (output.stage == koharu_pipeline::Stage::Enhancement)
+            .then(|| output.target.page())
+            .flatten();
+        // The enhancement being replaced leaves storage with this commit, so
+        // its image is read first.
+        let snapshot = self.snapshot();
+        let previous = match page.map(|page| Self::visible_enhancement_blob(&snapshot, page)) {
+            Some(Ok(Some(blob))) => {
+                let image = image::load_from_memory(&snapshot.read_blob(blob).await?)?.to_rgb8();
+                Some((blob, std::sync::Arc::new(image)))
+            }
+            Some(Err(error)) => return Err(error),
+            _ => None,
+        };
+        let Some(commit) = self.commit_rebased(output.patch).await? else {
+            return Ok(None);
+        };
+        let mut revisions = vec![commit.revision];
+        let mut last = commit;
+        if let Some(page) = page
+            && let Some(retoned) = self.retone_layers(page, previous).await?
+        {
+            revisions.push(retoned.revision);
+            last = retoned;
+        }
+        self.record(revisions);
+        Ok(Some(last))
+    }
+
+    fn visible_enhancement_blob(snapshot: &Snapshot, page: EntityId) -> Result<Option<BlobId>> {
+        let source_role = AssetRole::new("source")?;
+        for entity in snapshot.descendants(page)? {
+            let entity = entity.id();
+            if snapshot
+                .component::<SceneRasterLayer>(entity)?
+                .is_some_and(|raster| raster.kind == RasterLayerKind::Enhancement)
+                && Self::layer_visibility(snapshot, entity)?.visible
+            {
+                return Ok(snapshot
+                    .asset(entity, &source_role)?
+                    .map(|asset| asset.blob));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Retones `page`'s visible cleanup and paint layers to the base now under
+    /// them: the visible enhancement, or the page source. A layer records the
+    /// base its pixels were made on (`TONE_MATCH_ATTRIBUTE`, the enhancement
+    /// image's blob); a layer without the record was made on `previous`, the
+    /// base that showed before this change, since every change retones and
+    /// records. Partial layers go through a per-channel table from their base
+    /// to the new one; a cleaned page a model returned whole hides the
+    /// enhancement and takes the page's tone curve on its own luminance.
+    async fn retone_layers(
+        &mut self,
+        page: EntityId,
+        previous: Option<(BlobId, std::sync::Arc<image::RgbImage>)>,
+    ) -> Result<Option<Commit>> {
         let snapshot = self.snapshot();
         let source_role = AssetRole::new("source")?;
         let unmasked_role = AssetRole::new(UNMASKED_ROLE)?;
-        let mut updates = Vec::new();
-        for page in pages {
-            let mut enhancement = None;
-            let mut layers = Vec::new();
-            for entity in snapshot.descendants(page)? {
-                let entity = entity.id();
-                let Some(raster) = snapshot.component::<SceneRasterLayer>(entity)? else {
-                    continue;
-                };
-                if !Self::layer_visibility(&snapshot, entity)?.visible {
-                    continue;
-                }
-                match raster.kind {
-                    RasterLayerKind::Enhancement => enhancement = Some(entity),
-                    RasterLayerKind::Cleanup | RasterLayerKind::Paint => {
-                        layers.push((entity, raster))
-                    }
-                }
-            }
-            let Some(enhancement) = enhancement else {
+        let target = Self::visible_enhancement_blob(&snapshot, page)?;
+        let mut pending = Vec::new();
+        for entity in snapshot.descendants(page)? {
+            let entity = entity.id();
+            let Some(raster) = snapshot.component::<SceneRasterLayer>(entity)? else {
                 continue;
             };
-            let enhanced_asset = snapshot
-                .asset(enhancement, &source_role)?
-                .context("the scan enhancement layer has no image")?;
-            let marker = enhanced_asset.blob.to_string();
-            let pending = layers
-                .into_iter()
-                .filter_map(|(layer, raster)| {
-                    let asset = snapshot.asset(layer, &source_role).ok()??;
-                    (asset.metadata.attributes.get(TONE_MATCH_ATTRIBUTE) != Some(&marker))
-                        .then_some((layer, raster))
-                })
-                .collect::<Vec<_>>();
-            if pending.is_empty() {
+            if raster.kind == RasterLayerKind::Enhancement
+                || !Self::layer_visibility(&snapshot, entity)?.visible
+            {
                 continue;
             }
-            let source = snapshot
-                .asset(page, &source_role)?
-                .context("the page has no source image")?;
-            let source =
-                image::load_from_memory(&snapshot.read_blob(source.blob).await?)?.to_rgb8();
-            let enhanced =
-                image::load_from_memory(&snapshot.read_blob(enhanced_asset.blob).await?)?.to_rgb8();
-            if source.dimensions() != enhanced.dimensions() {
-                bail!("the scan enhancement layer must match the page source");
+            let Some(asset) = snapshot.asset(entity, &source_role)? else {
+                continue;
+            };
+            let base = match asset.metadata.attributes.get(TONE_MATCH_ATTRIBUTE) {
+                Some(marker) => Some(marker.parse::<BlobId>()?),
+                None => previous.as_ref().map(|(blob, _)| *blob),
+            };
+            if base != target {
+                pending.push((entity, raster, base));
             }
-            let tables = tokio_rayon::spawn(move || tone_tables(&source, &enhanced)).await;
-            for (layer, raster) in pending {
-                for role in [&source_role, &unmasked_role] {
-                    let Some(asset) = snapshot.asset(layer, role)? else {
-                        continue;
+        }
+        if pending.is_empty() {
+            return Ok(None);
+        }
+        let mut images = HashMap::<Option<BlobId>, std::sync::Arc<image::RgbImage>>::new();
+        if let Some((blob, image)) = previous {
+            images.insert(Some(blob), image);
+        }
+        let mut tables = HashMap::<Option<BlobId>, [[u8; 256]; 3]>::new();
+        let mut updates = Vec::new();
+        for (layer, raster, base) in pending {
+            let mut readable = true;
+            for blob in [base, target] {
+                if !images.contains_key(&blob) {
+                    let blob_id = match blob {
+                        Some(blob) => blob,
+                        None => {
+                            snapshot
+                                .asset(page, &source_role)?
+                                .context("the page has no source image")?
+                                .blob
+                        }
                     };
-                    let mut image =
-                        image::load_from_memory(&snapshot.read_blob(asset.blob).await?)?.to_rgba8();
-                    // A cleaned page a model returned whole hides the
-                    // enhancement: it takes the page's tone curve on its own.
-                    let opaque = image.pixels().filter(|pixel| pixel[3] == 255).count();
-                    if opaque * 100 >= image.pixels().len() * 99 {
-                        image = tokio_rayon::spawn(move || {
-                            koharu_pipeline::tone_cleaned_page(&mut image);
-                            image
-                        })
-                        .await;
-                    } else {
-                        for pixel in image.pixels_mut() {
-                            for channel in 0..3 {
-                                pixel[channel] = tables[channel][usize::from(pixel[channel])];
-                            }
+                    // A base older than the enhancement just replaced (a layer
+                    // hidden through a change) may be gone: such a layer is
+                    // left as it is rather than guessed.
+                    let Ok(bytes) = snapshot.read_blob(blob_id).await else {
+                        tracing::warn!(%layer, "the base a layer was drawn on is gone");
+                        readable = false;
+                        break;
+                    };
+                    let image = image::load_from_memory(&bytes)?;
+                    images.insert(blob, std::sync::Arc::new(image.to_rgb8()));
+                }
+            }
+            if !readable {
+                continue;
+            }
+            if !tables.contains_key(&base) {
+                let (from, to) = (images[&base].clone(), images[&target].clone());
+                if from.dimensions() != to.dimensions() {
+                    bail!("the scan enhancement layer must match the page source");
+                }
+                tables.insert(
+                    base,
+                    tokio_rayon::spawn(move || tone_tables(&from, &to)).await,
+                );
+            }
+            let table = tables[&base];
+            for role in [&source_role, &unmasked_role] {
+                let Some(asset) = snapshot.asset(layer, role)? else {
+                    continue;
+                };
+                let mut image =
+                    image::load_from_memory(&snapshot.read_blob(asset.blob).await?)?.to_rgba8();
+                let opaque = image.pixels().filter(|pixel| pixel[3] == 255).count();
+                if target.is_some() && opaque * 100 >= image.pixels().len() * 99 {
+                    image = tokio_rayon::spawn(move || {
+                        koharu_pipeline::tone_cleaned_page(&mut image);
+                        image
+                    })
+                    .await;
+                } else {
+                    for pixel in image.pixels_mut() {
+                        for channel in 0..3 {
+                            pixel[channel] = table[channel][usize::from(pixel[channel])];
                         }
                     }
-                    let mut metadata = asset.metadata.clone();
-                    metadata
-                        .attributes
-                        .insert(TONE_MATCH_ATTRIBUTE.to_owned(), marker.clone());
-                    updates.push((
-                        layer,
-                        raster.clone(),
-                        role.clone(),
-                        AssetInput::new(
-                            png(DynamicImage::ImageRgba8(image))?,
-                            "image/png",
-                            metadata,
-                        ),
-                    ));
                 }
+                let mut metadata = asset.metadata.clone();
+                match target {
+                    Some(blob) => {
+                        metadata
+                            .attributes
+                            .insert(TONE_MATCH_ATTRIBUTE.to_owned(), blob.to_string());
+                    }
+                    None => {
+                        metadata.attributes.remove(TONE_MATCH_ATTRIBUTE);
+                    }
+                }
+                updates.push((
+                    layer,
+                    raster.clone(),
+                    role.clone(),
+                    AssetInput::new(png(DynamicImage::ImageRgba8(image))?, "image/png", metadata),
+                ));
             }
         }
         if updates.is_empty() {
-            bail!("no visible cleanup or paint layer needs matching to the scan enhancement");
+            return Ok(None);
         }
         let patch = snapshot.patch(|edit| {
             for (layer, mut raster, role, input) in updates {
@@ -2623,7 +2701,7 @@ impl Project {
             }
             Ok(())
         })?;
-        self.commit(patch).await
+        Ok(Some(self.commit(patch).await?))
     }
 
     pub(crate) async fn import_cleanup_image(
@@ -3470,6 +3548,112 @@ mod tests {
             Project::typography_view(typography).writing_mode,
             Some(WritingMode::Vertical)
         );
+    }
+
+    #[tokio::test]
+    async fn layers_follow_each_enhancement_from_the_base_they_were_drawn_on() {
+        let grey = |values: &[u8]| {
+            let image = image::GrayImage::from_raw(values.len() as u32, 1, values.to_vec())
+                .expect("one row");
+            page_png(
+                png(DynamicImage::ImageLuma8(image)).unwrap(),
+                values.len() as u32,
+                1,
+            )
+        };
+        let source_role = AssetRole::new("source").unwrap();
+        let mut session = Session::memory().await.unwrap();
+        let mut setup = session.snapshot().edit();
+        let page = setup
+            .add_page(PageDraft::new("page", 3.0, 1.0), At::End)
+            .unwrap();
+        setup
+            .set_asset(page, &source_role, grey(&[40, 100, 250]))
+            .unwrap();
+        let cleanup = |edit: &mut koharu_scene::Edit, value: u8| {
+            let layer = edit.add_entity(page, At::End).unwrap();
+            edit.set(
+                layer,
+                &SceneRasterLayer {
+                    origin: Origin::User,
+                    name: "Cleanup".to_owned(),
+                    kind: RasterLayerKind::Cleanup,
+                },
+            )
+            .unwrap();
+            let image = RgbaImage::from_fn(3, 1, |x, _| {
+                image::Rgba([value, value, value, if x == 0 { 255 } else { 0 }])
+            });
+            edit.set_asset(
+                layer,
+                &AssetRole::new("source").unwrap(),
+                page_png(png(DynamicImage::ImageRgba8(image)).unwrap(), 3, 1),
+            )
+            .unwrap();
+            layer
+        };
+        let before = cleanup(&mut setup, 40);
+        session.commit(setup.finish().unwrap()).await.unwrap();
+        let mut project = Project::new(session, "test".to_owned());
+        let enhance = |project: &Project, values: &'static [u8]| {
+            let snapshot = project.snapshot();
+            let patch = snapshot
+                .patch(|edit| {
+                    for entity in snapshot.children(page)? {
+                        if snapshot
+                            .component::<SceneRasterLayer>(entity)?
+                            .is_some_and(|raster| raster.kind == RasterLayerKind::Enhancement)
+                        {
+                            edit.remove_entity(entity, koharu_scene::RemovePolicy::Cascade)?;
+                        }
+                    }
+                    let layer = edit.add_entity(page, At::Start)?;
+                    edit.set(
+                        layer,
+                        &SceneRasterLayer {
+                            origin: Origin::User,
+                            name: "Scan enhancement".to_owned(),
+                            kind: RasterLayerKind::Enhancement,
+                        },
+                    )?;
+                    edit.set_asset(layer, &AssetRole::new("source").unwrap(), grey(values))
+                })
+                .unwrap();
+            koharu_pipeline::StageOutput {
+                target: koharu_pipeline::StageTarget::Page(page),
+                stage: koharu_pipeline::Stage::Enhancement,
+                patch,
+            }
+        };
+        let level = |project: &Project, layer: EntityId| -> u8 {
+            let snapshot = project.snapshot();
+            let asset = snapshot.asset(layer, &source_role).unwrap().unwrap();
+            let bytes = futures::executor::block_on(snapshot.read_blob(asset.blob)).unwrap();
+            image::load_from_memory(&bytes)
+                .unwrap()
+                .to_rgba8()
+                .get_pixel(0, 0)[0]
+        };
+
+        // Cleaned first, enhanced after: the patch drawn on the source follows.
+        let output = enhance(&project, &[0, 128, 255]);
+        project.commit_stage_output(output).await.unwrap();
+        assert_eq!(level(&project, before), 0);
+
+        // A patch drawn on that enhancement, then the enhancement changes:
+        // it moves from the old enhancement, not from the source.
+        let mut edit = project.snapshot().edit();
+        let after = cleanup(&mut edit, 128);
+        project.commit(edit.finish().unwrap()).await.unwrap();
+        let output = enhance(&project, &[0, 140, 255]);
+        project.commit_stage_output(output).await.unwrap();
+        assert_eq!(level(&project, after), 140);
+        assert_eq!(level(&project, before), 0);
+
+        // Running the same enhancement again changes no layer.
+        let output = enhance(&project, &[0, 140, 255]);
+        project.commit_stage_output(output).await.unwrap();
+        assert_eq!(level(&project, after), 140);
     }
 
     #[tokio::test]

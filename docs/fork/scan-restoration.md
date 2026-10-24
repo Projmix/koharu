@@ -69,17 +69,23 @@ original and the run says why.
    with its luminance, so the ink's darkest brown becomes black, paper
    white, and mid-tones keep the sepia. Per-channel black points crushed a
    dark page's blue into yellow.
-   Cleanup and paint layers made before a page was enhanced were sampled
-   from the grey source and show as grey patches on the white page. "Match
-   cleanup to scan enhancement" (Process menu, selected pages) maps them
-   through a per-channel table from the page source to its visible
-   enhancement layer, as one undoable user edit; a layer already matched to
-   the current enhancement is skipped. A cleaned page a model returned whole
-   (at least 99% opaque) hides the enhancement and is lighter than the
-   source (ink 53-67 against 40-50 on book "2"), so the source's table left
-   its black at 15-40; it takes the page's tone curve on its own luminance
-   instead. Histogram matching against the enhancement darkened a faint
-   watermark and copied the enhancement's colour cast.
+   Cleanup and paint layers keep matching the page under them. When scan
+   enhancement changes a page, its visible cleanup and paint layers are
+   retoned in the same undo step, from the base each was drawn on to the
+   new one: the enhancement image recorded on the layer's asset
+   (`dev.koharu.enhancement.tone-match`), or, without a record, the base
+   that showed before the change (the replaced enhancement, read before it
+   leaves storage, or the source). Every retone records the new base, so a
+   layer drawn later sits on the current enhancement and running the same
+   enhancement again changes nothing. Partial layers go through a
+   per-channel table from base to base (the median target level per source
+   level, made monotonic). A cleaned page a model returned whole (at least
+   99% opaque) hides the enhancement and is lighter than the source (ink
+   53-67 against 40-50 on book "2"); it takes the page's tone curve on its
+   own luminance. Histogram matching against the enhancement darkened a
+   faint watermark and copied the enhancement's colour cast. The manual
+   "Match cleanup" command is gone: on book "2" it retoned patches drawn
+   on the enhancement a second time.
    A monochrome page with too little ink to measure (a light page of a
    washed scan, Shanpankouru 2 pages 30 and 82) takes the chapter's black:
    the median ink edge of up to eight evenly spaced other monochrome pages,
