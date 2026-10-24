@@ -170,7 +170,7 @@ export function Inspector() {
         <h2 className='text-[10px] font-semibold'>{t('inspector.type')}</h2>
       </div>
 
-      <section className='h-48 min-w-0 shrink-0 overflow-hidden border-b'>
+      <section className='h-58 min-w-0 shrink-0 overflow-hidden border-b'>
         <TypeInspector />
       </section>
 
