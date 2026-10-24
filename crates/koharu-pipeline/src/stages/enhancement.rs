@@ -30,8 +30,12 @@ use crate::{EnhancementConfig, ModelCell};
 
 const PRODUCER: &str = "dev.koharu.pipeline.enhancement";
 /// Bumped whenever the analysis, filters or checks change what a page gets.
-const REVISION: &str = "3";
+const REVISION: &str = "5";
 const LAYER_NAME: &str = "Scan enhancement";
+/// Paper grain of a physical scan (1.1-1.8 on the owner's scans) rather than
+/// a digital release (0.02-0.13). Only scanned colour pages get Auto Color:
+/// on a digital cover the tints are the design.
+const SCANNED_GRAIN: f32 = 0.5;
 
 /// The page's scan enhancement layer, when it has one.
 pub(crate) fn enhancement_layer(scene: &Snapshot, page: EntityId) -> Result<Option<EntityId>> {
@@ -266,6 +270,9 @@ impl StageProcessor for Processor {
             };
             let (rgb, before, after) = (rgb.clone(), before.clone(), after.clone());
             tokio_rayon::spawn(move || scan::tone(&rgb, &before, &after, chapter_ink)).await
+        } else if self.config.tone && analysis.paper_grain >= SCANNED_GRAIN {
+            let (rgb, after) = (rgb.clone(), after.clone());
+            tokio_rayon::spawn(move || scan::colour_levels(&rgb, &after)).await
         } else {
             None
         };

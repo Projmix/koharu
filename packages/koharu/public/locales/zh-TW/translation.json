@@ -370,7 +370,8 @@
     "inspectorPanel": "側邊面板",
     "duplicateLayer": "複製圖層",
     "mergeLayers": "合併圖層",
-    "mergeDown": "向下合併"
+    "mergeDown": "向下合併",
+    "matchCleanupToEnhancement": "使清理符合掃描增強"
   },
   "versions": {
     "delete": "刪除",

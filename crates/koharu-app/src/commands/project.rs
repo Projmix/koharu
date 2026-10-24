@@ -2161,10 +2161,16 @@ impl Project {
     /// shows the layer whole again (Photoshop's Layer Mask > Hide All and
     /// Delete). The masked pixels are what `source` holds, so every consumer
     /// of the layer sees the layer as it shows.
-    pub(crate) async fn set_reveal_mask(&mut self, layer: EntityId, enabled: bool) -> Result<Commit> {
+    pub(crate) async fn set_reveal_mask(
+        &mut self,
+        layer: EntityId,
+        enabled: bool,
+    ) -> Result<Commit> {
         let snapshot = self.snapshot();
         let mut raster = Self::editable_raster(&snapshot, layer)?;
-        let page_value = snapshot.page(Self::containing_page(&snapshot, layer)?)?.page()?;
+        let page_value = snapshot
+            .page(Self::containing_page(&snapshot, layer)?)?
+            .page()?;
         let (width, height) = (
             page_value.width.round() as u32,
             page_value.height.round() as u32,
@@ -2270,7 +2276,10 @@ impl Project {
     /// Merges paint and cleanup layers into the lowest of them as they show,
     /// each at its opacity (Photoshop's Merge Layers). One layer merges down
     /// into the raster layer right below it. Reveal masks are applied.
-    pub(crate) async fn merge_layers(&mut self, layers: Vec<EntityId>) -> Result<(Commit, EntityId)> {
+    pub(crate) async fn merge_layers(
+        &mut self,
+        layers: Vec<EntityId>,
+    ) -> Result<(Commit, EntityId)> {
         let snapshot = self.snapshot();
         let first = *layers.first().context("select the layers to merge")?;
         let parent = snapshot
@@ -2286,9 +2295,7 @@ impl Project {
             let below = position
                 .checked_sub(1)
                 .map(|index| siblings[index])
-                .filter(|below| {
-                    Self::editable_raster(&snapshot, *below).is_ok()
-                })
+                .filter(|below| Self::editable_raster(&snapshot, *below).is_ok())
                 .context("there is no paint or cleanup layer right below to merge into")?;
             merged.push(below);
         }
@@ -2308,7 +2315,9 @@ impl Project {
         merged.sort_by_key(|layer| siblings.iter().position(|candidate| candidate == layer));
         let target = merged[0];
         let mut target_raster = Self::editable_raster(&snapshot, target)?;
-        let page_value = snapshot.page(Self::containing_page(&snapshot, target)?)?.page()?;
+        let page_value = snapshot
+            .page(Self::containing_page(&snapshot, target)?)?
+            .page()?;
         let (width, height) = (
             page_value.width.round() as u32,
             page_value.height.round() as u32,
@@ -2415,6 +2424,112 @@ impl Project {
             image::imageops::overlay(&mut composite, &image, 0, 0);
         }
         Ok(composite)
+    }
+
+    /// Maps the visible cleanup and paint layers of `pages` through the tone
+    /// change scan enhancement made to each page: a per-channel table from
+    /// the page source to its visible enhancement layer (median per source
+    /// level, made monotonic). A fill sampled from the grey source before the
+    /// page was enhanced then matches the white paper and black ink it now
+    /// sits on. A layer already matched to the current enhancement is left
+    /// alone, so running it twice changes nothing.
+    pub(crate) async fn match_layers_to_enhancement(
+        &mut self,
+        pages: Vec<EntityId>,
+    ) -> Result<Commit> {
+        let snapshot = self.snapshot();
+        let source_role = AssetRole::new("source")?;
+        let unmasked_role = AssetRole::new(UNMASKED_ROLE)?;
+        let mut updates = Vec::new();
+        for page in pages {
+            let mut enhancement = None;
+            let mut layers = Vec::new();
+            for entity in snapshot.descendants(page)? {
+                let entity = entity.id();
+                let Some(raster) = snapshot.component::<SceneRasterLayer>(entity)? else {
+                    continue;
+                };
+                if !Self::layer_visibility(&snapshot, entity)?.visible {
+                    continue;
+                }
+                match raster.kind {
+                    RasterLayerKind::Enhancement => enhancement = Some(entity),
+                    RasterLayerKind::Cleanup | RasterLayerKind::Paint => {
+                        layers.push((entity, raster))
+                    }
+                }
+            }
+            let Some(enhancement) = enhancement else {
+                continue;
+            };
+            let enhanced_asset = snapshot
+                .asset(enhancement, &source_role)?
+                .context("the scan enhancement layer has no image")?;
+            let marker = enhanced_asset.blob.to_string();
+            let pending = layers
+                .into_iter()
+                .filter_map(|(layer, raster)| {
+                    let asset = snapshot.asset(layer, &source_role).ok()??;
+                    (asset.metadata.attributes.get(TONE_MATCH_ATTRIBUTE) != Some(&marker))
+                        .then_some((layer, raster))
+                })
+                .collect::<Vec<_>>();
+            if pending.is_empty() {
+                continue;
+            }
+            let source = snapshot
+                .asset(page, &source_role)?
+                .context("the page has no source image")?;
+            let source =
+                image::load_from_memory(&snapshot.read_blob(source.blob).await?)?.to_rgb8();
+            let enhanced =
+                image::load_from_memory(&snapshot.read_blob(enhanced_asset.blob).await?)?.to_rgb8();
+            if source.dimensions() != enhanced.dimensions() {
+                bail!("the scan enhancement layer must match the page source");
+            }
+            let tables = tokio_rayon::spawn(move || tone_tables(&source, &enhanced)).await;
+            for (layer, raster) in pending {
+                for role in [&source_role, &unmasked_role] {
+                    let Some(asset) = snapshot.asset(layer, role)? else {
+                        continue;
+                    };
+                    let mut image =
+                        image::load_from_memory(&snapshot.read_blob(asset.blob).await?)?.to_rgba8();
+                    for pixel in image.pixels_mut() {
+                        for channel in 0..3 {
+                            pixel[channel] = tables[channel][usize::from(pixel[channel])];
+                        }
+                    }
+                    let mut metadata = asset.metadata.clone();
+                    metadata
+                        .attributes
+                        .insert(TONE_MATCH_ATTRIBUTE.to_owned(), marker.clone());
+                    updates.push((
+                        layer,
+                        raster.clone(),
+                        role.clone(),
+                        AssetInput::new(
+                            png(DynamicImage::ImageRgba8(image))?,
+                            "image/png",
+                            metadata,
+                        ),
+                    ));
+                }
+            }
+        }
+        if updates.is_empty() {
+            bail!("no visible cleanup or paint layer needs matching to the scan enhancement");
+        }
+        let patch = snapshot.patch(|edit| {
+            for (layer, mut raster, role, input) in updates {
+                edit.promote_entity_to_user(layer)?;
+                raster.origin = Origin::User;
+                edit.set(layer, &raster)?;
+                edit.set_asset(layer, &role, input)?;
+            }
+            Ok(())
+        })?;
+        self.commit(patch).await
     }
 
     pub(crate) async fn import_cleanup_image(
@@ -2743,7 +2858,9 @@ impl Project {
                 image: Self::asset_id(snapshot, layer, "source")?,
                 name: raster.name,
                 kind: raster.kind,
-                masked: snapshot.asset(layer, &AssetRole::new(MASK_ROLE)?)?.is_some(),
+                masked: snapshot
+                    .asset(layer, &AssetRole::new(MASK_ROLE)?)?
+                    .is_some(),
             });
         }
         let geometry = snapshot
@@ -3045,6 +3162,53 @@ fn validate_project_name(name: &str) -> Result<String> {
 /// layer's pixels before it. `source` holds the masked result.
 pub(crate) const MASK_ROLE: &str = "mask";
 pub(crate) const UNMASKED_ROLE: &str = "unmasked";
+
+/// On a cleanup or paint layer's image: the blob of the scan enhancement it
+/// was last matched to.
+const TONE_MATCH_ATTRIBUTE: &str = "dev.koharu.enhancement.tone-match";
+
+/// Per channel, what each source level became in the enhanced page: the
+/// median over the page, interpolated across levels the page lacks, held at
+/// the ends, and made monotonic.
+fn tone_tables(source: &image::RgbImage, enhanced: &image::RgbImage) -> [[u8; 256]; 3] {
+    std::array::from_fn(|channel| {
+        let mut counts = vec![[0u32; 256]; 256];
+        for (from, to) in source.pixels().zip(enhanced.pixels()) {
+            counts[usize::from(from[channel])][usize::from(to[channel])] += 1;
+        }
+        let known = counts
+            .iter()
+            .enumerate()
+            .filter_map(|(level, row)| {
+                let total = row.iter().sum::<u32>();
+                let mut seen = 0;
+                row.iter()
+                    .position(|count| {
+                        seen += count;
+                        total > 0 && seen * 2 >= total
+                    })
+                    .map(|median| (level, median as f32))
+            })
+            .collect::<Vec<_>>();
+        let mut table = [0u8; 256];
+        let mut floor = 0u8;
+        for (level, entry) in table.iter_mut().enumerate() {
+            let value = match known.iter().position(|(known, _)| *known >= level) {
+                None => known.last().map_or(level as f32, |(_, value)| *value),
+                Some(0) => known[0].1,
+                Some(index) => {
+                    let (low, low_value) = known[index - 1];
+                    let (high, high_value) = known[index];
+                    low_value
+                        + (high_value - low_value) * (level - low) as f32 / (high - low) as f32
+                }
+            };
+            floor = floor.max(value.round().clamp(0.0, 255.0) as u8);
+            *entry = floor;
+        }
+        table
+    })
+}
 
 fn png(image: DynamicImage) -> Result<Vec<u8>> {
     let mut bytes = Cursor::new(Vec::new());
@@ -3757,6 +3921,31 @@ mod tests {
         );
     }
 
+    #[test]
+    fn tone_tables_follow_the_enhancement_and_stay_monotonic() {
+        // A grey scan (ink 80, paper 238) stretched to black and white, with
+        // no source pixel between 100 and 200.
+        let levels =
+            |value: u8| ((f32::from(value) - 80.0) * 255.0 / 158.0).clamp(0.0, 255.0) as u8;
+        let values = (60..=100).chain(200..=250).collect::<Vec<u8>>();
+        let source = image::RgbImage::from_fn(values.len() as u32, 1, |x, _| {
+            image::Rgb([values[x as usize]; 3])
+        });
+        let enhanced = image::RgbImage::from_fn(values.len() as u32, 1, |x, _| {
+            image::Rgb([levels(values[x as usize]); 3])
+        });
+        let tables = tone_tables(&source, &enhanced);
+        for table in tables {
+            assert_eq!(table[80], 0);
+            assert_eq!(table[238], 255);
+            assert!(
+                table[150] > table[100] && table[150] < table[200],
+                "the gap is interpolated"
+            );
+            assert!(table.windows(2).all(|pair| pair[0] <= pair[1]));
+        }
+    }
+
     #[tokio::test]
     async fn reveal_mask_strokes_then_duplicate_and_merge_show_what_was_revealed() {
         let mut session = Session::memory().await.unwrap();
@@ -3791,7 +3980,12 @@ mod tests {
 
         let commit = project.set_reveal_mask(cleanup, true).await.unwrap();
         project.record_commit(&commit);
-        assert!(pixels(&project, cleanup).await.pixels().all(|pixel| pixel[3] == 0));
+        assert!(
+            pixels(&project, cleanup)
+                .await
+                .pixels()
+                .all(|pixel| pixel[3] == 0)
+        );
 
         // The Eraser reveals the layer's own pixels; the Brush hides them again.
         let stroke = |mode, x| (mode, vec![ScenePoint { x, y: 4.5 }]);
@@ -3815,10 +4009,17 @@ mod tests {
         let (commit, copy) = project.duplicate_layer(cleanup).await.unwrap();
         project.record_commit(&commit);
         assert_eq!(pixels(&project, copy).await, masked);
-        let siblings = project.snapshot().children(page).unwrap().collect::<Vec<_>>();
+        let siblings = project
+            .snapshot()
+            .children(page)
+            .unwrap()
+            .collect::<Vec<_>>();
         assert_eq!(
             siblings.iter().position(|layer| *layer == copy),
-            siblings.iter().position(|layer| *layer == cleanup).map(|index| index + 1),
+            siblings
+                .iter()
+                .position(|layer| *layer == cleanup)
+                .map(|index| index + 1),
             "the copy goes right above its layer"
         );
 

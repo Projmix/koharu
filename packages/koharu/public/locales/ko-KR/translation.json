@@ -370,7 +370,8 @@
     "inspectorPanel": "사이드 패널",
     "duplicateLayer": "레이어 복제",
     "mergeLayers": "레이어 병합",
-    "mergeDown": "아래 레이어와 병합"
+    "mergeDown": "아래 레이어와 병합",
+    "matchCleanupToEnhancement": "정리를 스캔 보정에 맞추기"
   },
   "versions": {
     "delete": "삭제",

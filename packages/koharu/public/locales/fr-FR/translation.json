@@ -370,7 +370,8 @@
     "inspectorPanel": "Panneau latéral",
     "duplicateLayer": "Dupliquer le calque",
     "mergeLayers": "Fusionner les calques",
-    "mergeDown": "Fusionner avec le calque inférieur"
+    "mergeDown": "Fusionner avec le calque inférieur",
+    "matchCleanupToEnhancement": "Accorder le nettoyage à l’amélioration du scan"
   },
   "versions": {
     "delete": "Supprimer",

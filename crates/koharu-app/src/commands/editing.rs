@@ -437,6 +437,28 @@ pub(crate) async fn delete_layers(
     Ok(())
 }
 
+/// Maps the visible cleanup and paint layers of `pages` through the tone
+/// change scan enhancement made to each page.
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn match_layers_to_enhancement(
+    pages: Vec<EntityId>,
+    desktop: State<'_, Desktop>,
+    project: State<'_, CurrentProject>,
+    canvas_channel: State<'_, CanvasChannel>,
+) -> Result<(), Error> {
+    let (commit, page) = {
+        let mut project = project.project.lock().await;
+        let project = project.as_mut().context("no project is open")?;
+        let commit = project.match_layers_to_enhancement(pages).await?;
+        project.record_commit(&commit);
+        (commit, project.active_page())
+    };
+    let canvas = synchronize_canvas(&desktop, &commit, page).await?;
+    canvas_channel.channel.publish(canvas);
+    Ok(())
+}
+
 /// Adds a reveal mask that hides the whole layer, or removes it.
 #[tauri::command]
 #[specta::specta]

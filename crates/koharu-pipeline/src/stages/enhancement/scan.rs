@@ -387,6 +387,9 @@ pub(crate) struct Levels {
     /// At or above: 255. The mirror ramp leaves the identity at
     /// `255 - 2 * (255 - white)`.
     pub(crate) white: f32,
+    /// A plain linear Levels from `black` to `white`, for a washed-out scan
+    /// whose ink and paper ramps would leave no mid-tone band between them.
+    pub(crate) linear: bool,
 }
 
 impl Levels {
@@ -397,6 +400,9 @@ impl Levels {
     /// The luminance-masked Levels that Color Range + Levels produces: only
     /// values near ink and paper move; mid-tones are untouched.
     pub(crate) fn apply(self, value: f32) -> f32 {
+        if self.linear {
+            return ((value - self.black) * 255.0 / (self.white - self.black)).clamp(0.0, 255.0);
+        }
         let (low, high) = self.identity_band();
         if value <= self.black {
             0.0
@@ -426,20 +432,37 @@ fn histogram(values: impl Iterator<Item = f32>) -> ([u64; 256], u64) {
     (histogram, total)
 }
 
-/// The paper's dark edge: the tallest bin in 160..=255 holding at least 5% of
-/// the page, extended down while bins stay above a tenth of it (at most 40
-/// levels). `None` when no bright tone dominates.
+/// The paper's dark edge: the tallest 5-level window in 160..=255 holding at
+/// least 5% of the page, extended down while windows stay above half of it
+/// and keep falling, at most 24 levels: the grain around the paper's peak and
+/// no further. Windows rather than bins, as for the ink: grain on scanned
+/// paper spreads it over 20-30 levels at 1-5% each, often combed by
+/// resampling, so no single level reaches 5% and the grey paper stayed grey.
+/// Half height and a falling histogram, because a tenth of the peak reached
+/// down into light screentone and hair and washed the art out. `None` when
+/// no bright tone dominates.
 fn paper_edge(histogram: &[u64; 256], total: u64) -> Option<f32> {
-    let peak = (160..=255).max_by_key(|&value| (histogram[value], value))?;
-    if histogram[peak] * 20 < total {
+    let window = |value: usize| {
+        histogram[value.saturating_sub(2)..=(value + 2).min(255)]
+            .iter()
+            .sum::<u64>()
+    };
+    let peak = (160..=255).max_by_key(|&value| (window(value), value))?;
+    if window(peak) * 20 < total {
         return None;
     }
-    let floor = histogram[peak] / 10;
+    let floor = window(peak) / 2;
     let mut edge = peak;
-    while edge > peak.saturating_sub(40) && edge > 160 && histogram[edge - 1] >= floor {
+    while edge > peak.saturating_sub(24)
+        && edge > 160
+        && window(edge - 1) >= floor
+        && window(edge - 1) <= window(edge)
+    {
         edge -= 1;
     }
-    Some(edge as f32)
+    // A window reaches two levels past its centre, so the paper's own bins
+    // start two levels above the last window that still holds it.
+    Some((edge + 2).min(peak) as f32)
 }
 
 /// The ink's light edge: the darkest 5-level window in 0..=112 that holds at
@@ -484,15 +507,14 @@ fn levels_of(histogram: &[u64; 256], total: u64, chapter_ink: Option<f32>) -> Le
     let mut levels = Levels {
         black: ink_edge(histogram, total).or(chapter_ink).unwrap_or(0.0),
         white: paper_edge(histogram, total).unwrap_or(255.0),
+        linear: false,
     };
-    // Keep a real mid-tone band between the two ramps: the paper ramp
-    // shortens first, then the ink ramp gives up only what the band needs.
+    // Without a real mid-tone band between the two ramps the whole tonal
+    // range is compressed, as on a washed-out print scan: stretch it like a
+    // scanlation Levels step. Shortening the ramps instead kept its black at
+    // 25-40 next to the solid black a cleaner paints.
     let (low, high) = levels.identity_band();
-    if high - low < 64.0 {
-        levels.white = levels.white.max(223.0);
-        let (_, high) = levels.identity_band();
-        levels.black = levels.black.min(((high - 64.0) / 2.0).max(32.0));
-    }
+    levels.linear = high - low < 64.0;
     levels
 }
 
@@ -508,17 +530,65 @@ pub(crate) fn tone(
     chapter_ink: Option<f32>,
 ) -> Option<[Levels; 3]> {
     let (histogram_luma, total) = histogram(after.data.iter().copied());
-    let black = levels_of(&histogram_luma, total, chapter_ink).black;
+    let luma = levels_of(&histogram_luma, total, chapter_ink);
     let levels: [Levels; 3] = std::array::from_fn(|channel| {
         let (histogram, total) = histogram(image.pixels().enumerate().map(|(index, pixel)| {
             f32::from(pixel[channel]) + after.data[index] - before.data[index]
         }));
         Levels {
-            black,
+            black: luma.black,
             white: levels_of(&histogram, total, None).white,
+            linear: luma.linear,
         }
     });
     (!levels.iter().all(|levels| levels.is_identity())).then_some(levels)
+}
+
+/// Photoshop's Auto Color with "find dark & light colors", for a scanned
+/// colour page: the mean colour of its darkest and of its brightest 0.5%
+/// becomes black and white, channel by channel, which also takes out the
+/// scan's colour cast. `None` when a channel's range is too short to stretch
+/// or nothing would change.
+pub(crate) fn colour_levels(image: &RgbImage, luma: &Plane) -> Option<[Levels; 3]> {
+    let (histogram, total) = histogram(luma.data.iter().copied());
+    let share = (total / 200).max(1);
+    let mut seen = 0;
+    let dark_cut = (0..=255).find(|&level| {
+        seen += histogram[level];
+        seen >= share
+    })? as f32;
+    seen = 0;
+    let light_cut = (0..=255).rev().find(|&level| {
+        seen += histogram[level];
+        seen >= share
+    })? as f32;
+    let (mut dark, mut light) = ([0f64; 3], [0f64; 3]);
+    let (mut dark_count, mut light_count) = (0f64, 0f64);
+    for (pixel, value) in image.pixels().zip(&luma.data) {
+        let value = to_u8(*value) as f32;
+        if value <= dark_cut {
+            dark_count += 1.0;
+            for channel in 0..3 {
+                dark[channel] += f64::from(pixel[channel]);
+            }
+        }
+        if value >= light_cut {
+            light_count += 1.0;
+            for channel in 0..3 {
+                light[channel] += f64::from(pixel[channel]);
+            }
+        }
+    }
+    let levels: [Levels; 3] = std::array::from_fn(|channel| Levels {
+        black: (dark[channel] / dark_count) as f32,
+        white: (light[channel] / light_count) as f32,
+        linear: true,
+    });
+    (levels
+        .iter()
+        .all(|levels| levels.white - levels.black >= 64.0)
+        && !levels.iter().all(|levels| levels.is_identity()))
+    .then_some(levels)
 }
 
 /// Thresholds a de-artifacted luminance must meet against the source.
@@ -757,6 +827,7 @@ mod tests {
         let levels = Levels {
             black: 30.0,
             white: 230.0,
+            linear: false,
         };
         assert_eq!(levels.apply(20.0), 0.0);
         assert_eq!(levels.apply(240.0), 255.0);
@@ -791,6 +862,57 @@ mod tests {
             levels.black
         );
         assert_eq!(levels.white, 255.0);
+    }
+
+    #[test]
+    fn grainy_scanned_paper_becomes_white() {
+        // The green channel of a print scan (Give me more, p. 20): paper
+        // around 238 spread over 225-248 in combed bins, none near 5% of the
+        // page, above light screentone and washed-out ink.
+        let paper = [
+            12, 13, 11, 14, 11, 12, 16, 14, 25, 14, 17, 33, 17, 38, 12, 11, 23, 6, 10, 3, 2, 6, 1,
+            2,
+        ];
+        let mut histogram = [0u64; 256];
+        for (offset, permille) in paper.iter().enumerate() {
+            histogram[225 + offset] = permille * 100;
+        }
+        for value in 100..225 {
+            histogram[value] = 300;
+        }
+        for value in 66..100 {
+            histogram[value] = 400;
+        }
+        let total = histogram.iter().sum();
+        let levels = levels_of(&histogram, total, None);
+        assert_eq!(levels.apply(238.0), 255.0, "paper at {}", levels.white);
+        assert!(
+            levels.white >= 225.0,
+            "screentone stays grey: {}",
+            levels.white
+        );
+        assert_eq!(
+            levels.apply(80.0),
+            0.0,
+            "solid black becomes black: {levels:?}"
+        );
+    }
+
+    #[test]
+    fn a_scanned_colour_cover_gets_black_and_white() {
+        // A washed cover: black printed as (46, 38, 50), white as (250, 244,
+        // 246), magenta in between.
+        let image = RgbImage::from_fn(100, 100, |x, _| match x {
+            0..10 => image::Rgb([46, 38, 50]),
+            10..20 => image::Rgb([250, 244, 246]),
+            _ => image::Rgb([200, 40, 120]),
+        });
+        let luma = Plane::luma(&image);
+        let levels = colour_levels(&image, &luma).expect("a washed scan is stretched");
+        for (channel, levels) in levels.iter().enumerate() {
+            assert_eq!(levels.apply(f32::from([46u8, 38, 50][channel])), 0.0);
+            assert_eq!(levels.apply(f32::from([250u8, 244, 246][channel])), 255.0);
+        }
     }
 
     #[test]

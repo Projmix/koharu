@@ -78,6 +78,11 @@ export const commands = {
 	setGeometry: (updates: GeometryUpdate[]) => __TAURI_INVOKE<null>("set_geometry", { updates: updates.map(i=>({...i,points:i.points==null?i.points:i.points.map(i=>i)})) }),
 	setVisibility: (layers: EntityId[], visible: boolean | null, opacity: number | null) => __TAURI_INVOKE<null>("set_visibility", { layers, visible, opacity: opacity==null?opacity:opacity }),
 	deleteLayers: (layers: EntityId[]) => __TAURI_INVOKE<null>("delete_layers", { layers }),
+	/**
+	 *  Maps the visible cleanup and paint layers of `pages` through the tone
+	 *  change scan enhancement made to each page.
+	 */
+	matchLayersToEnhancement: (pages: EntityId[]) => __TAURI_INVOKE<null>("match_layers_to_enhancement", { pages }),
 	/**  Adds a reveal mask that hides the whole layer, or removes it. */
 	setRevealMask: (layer: EntityId, enabled: boolean) => __TAURI_INVOKE<null>("set_reveal_mask", { layer, enabled }),
 	/**  Copies a paint or cleanup layer above itself; returns the copy. */

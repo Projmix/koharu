@@ -370,7 +370,8 @@
     "inspectorPanel": "サイドパネル",
     "duplicateLayer": "レイヤーを複製",
     "mergeLayers": "レイヤーを結合",
-    "mergeDown": "下のレイヤーと結合"
+    "mergeDown": "下のレイヤーと結合",
+    "matchCleanupToEnhancement": "クリーンアップをスキャン補正に合わせる"
   },
   "versions": {
     "delete": "削除",

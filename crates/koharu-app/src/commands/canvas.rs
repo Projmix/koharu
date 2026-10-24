@@ -318,7 +318,10 @@ pub(crate) async fn get_unmasked_layer(
         .context("no project is open")?
         .snapshot();
     let asset = snapshot
-        .asset(layer, &koharu_scene::AssetRole::new(super::project::UNMASKED_ROLE)?)?
+        .asset(
+            layer,
+            &koharu_scene::AssetRole::new(super::project::UNMASKED_ROLE)?,
+        )?
         .context("the layer has no reveal mask")?;
     Ok(super::output::ImageBytes(
         snapshot.read_blob(asset.blob).await?.to_vec(),

@@ -370,7 +370,8 @@
     "inspectorPanel": "Painel lateral",
     "duplicateLayer": "Duplicar camada",
     "mergeLayers": "Mesclar camadas",
-    "mergeDown": "Mesclar para baixo"
+    "mergeDown": "Mesclar para baixo",
+    "matchCleanupToEnhancement": "Ajustar a limpeza à melhoria da digitalização"
   },
   "versions": {
     "delete": "Excluir",

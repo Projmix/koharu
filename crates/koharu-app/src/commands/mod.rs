@@ -101,6 +101,7 @@ pub fn bindings() -> tauri_specta::Builder<tauri_runtime_cef::CefRuntime> {
             editing::set_geometry,
             editing::set_visibility,
             editing::delete_layers,
+            editing::match_layers_to_enhancement,
             editing::set_reveal_mask,
             editing::duplicate_layer,
             editing::merge_layers,

@@ -46,9 +46,29 @@ original and the run says why.
    half the peak, at most 16 levels (a tenth let the anti-aliased tail of
    clean ink run 30-60 levels into dark tone): a print scan
    (Shanpankouru 2) spreads its black over 70-110 with dark screentone just
-   above, so no single bin reached the old 2% and the ink stayed grey. When
-   the ramps would squeeze the mid-tones below 64 levels, the paper ramp
-   shortens first and black is lowered only as far as the band needs.
+   above, so no single bin reached the old 2% and the ink stayed grey. Paper
+   is the tallest 5-level window in 160..=255 holding 5% of the page, its
+   edge going down while windows keep falling and stay above half the peak,
+   at most 24 levels: scanned paper grain spreads over 20-30 combed levels
+   at 1-5% each (Give me more), so a single bin never reached 5% and the
+   paper stayed grey, or turned pink where only some channels found it; a
+   tenth of the peak reached into light screentone and hair and washed the
+   art out. When the ramps would leave less than 64 mid-tone levels, the
+   page is a washed-out scan and gets a plain linear Levels from black to
+   white: paper is 255 and solid black 0. Shortening the ramps instead left
+   that black at 25-40 next to the 0 a cleaner paints.
+   A colour page with the paper grain of a physical scan (>= 0.5; digital
+   releases measure 0.02-0.13) gets Photoshop's Auto Color with "find dark
+   & light colors": the mean colour of its darkest and brightest 0.5%
+   becomes black and white per channel, which also removes the scan's
+   cast (Give me more covers: black printed as 46-56). Digital colour pages
+   are left alone; their tints are the design.
+   Cleanup and paint layers made before a page was enhanced were sampled
+   from the grey source and show as grey patches on the white page. "Match
+   cleanup to scan enhancement" (Process menu, selected pages) maps them
+   through a per-channel table from the page source to its visible
+   enhancement layer, as one undoable user edit; a layer already matched to
+   the current enhancement is skipped.
    A monochrome page with too little ink to measure (a light page of a
    washed scan, Shanpankouru 2 pages 30 and 82) takes the chapter's black:
    the median ink edge of up to eight evenly spaced other monochrome pages,

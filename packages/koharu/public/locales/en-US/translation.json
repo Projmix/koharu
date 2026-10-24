@@ -370,7 +370,8 @@
     "inspectorPanel": "Side panel",
     "duplicateLayer": "Duplicate layer",
     "mergeLayers": "Merge layers",
-    "mergeDown": "Merge down"
+    "mergeDown": "Merge down",
+    "matchCleanupToEnhancement": "Match cleanup to scan enhancement"
   },
   "versions": {
     "delete": "Delete",

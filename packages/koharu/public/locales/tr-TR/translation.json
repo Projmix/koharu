@@ -370,7 +370,8 @@
     "inspectorPanel": "Yan panel",
     "duplicateLayer": "Katmanı çoğalt",
     "mergeLayers": "Katmanları birleştir",
-    "mergeDown": "Aşağı birleştir"
+    "mergeDown": "Aşağı birleştir",
+    "matchCleanupToEnhancement": "Temizliği tarama iyileştirmesine uydur"
   },
   "versions": {
     "delete": "Sil",

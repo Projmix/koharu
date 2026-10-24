@@ -284,6 +284,16 @@ export function TitleBar() {
               >
                 {t('menu.processLayers')}
               </MenubarItem>
+              <MenubarItem
+                disabled={selectedPages.length === 0}
+                onClick={() =>
+                  void call(commands.matchLayersToEnhancement, selectedPages)
+                    .then(() => refresh(projectKey, pagesKey, pageKey))
+                    .catch(() => undefined)
+                }
+              >
+                {t('menu.matchCleanupToEnhancement')}
+              </MenubarItem>
               <MenubarSeparator />
               {(
                 [

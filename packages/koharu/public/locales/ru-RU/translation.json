@@ -370,7 +370,8 @@
     "inspectorPanel": "Боковая панель",
     "duplicateLayer": "Дублировать слой",
     "mergeLayers": "Объединить слои",
-    "mergeDown": "Объединить с нижним"
+    "mergeDown": "Объединить с нижним",
+    "matchCleanupToEnhancement": "Подогнать очистку под улучшение скана"
   },
   "versions": {
     "delete": "Удалить",
