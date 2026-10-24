@@ -445,11 +445,6 @@ export type ImageEditPreview = {
 	restoration: boolean,
 };
 
-export type InpaintingApplyMode = "full-page" | "mask";
-
-export type InpaintingConfig = {
-	method: InpaintingMethod,
-	preview_before_send: boolean,
 /**
  *  What an import takes from the file. Text is the translations, OCR
  *  corrections, added and removed blocks and corrected layer translations;
@@ -457,6 +452,11 @@ export type InpaintingConfig = {
  */
 export type ImportScope = "text" | "typesetting";
 
+export type InpaintingApplyMode = "full-page" | "mask";
+
+export type InpaintingConfig = {
+	method: InpaintingMethod,
+	preview_before_send: boolean,
 	local_model: LocalInpaintingModel,
 	manual_model: LocalInpaintingModel,
 	api: ApiInpaintingConfig,
