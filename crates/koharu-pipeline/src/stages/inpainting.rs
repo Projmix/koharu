@@ -1113,6 +1113,12 @@ const FLAT_FILL_MAX_DEVIATION: f64 = 5.0;
 /// A lettering pixel needs known surroundings on at least a sixth of its
 /// neighbourhood (`window / FLAT_FILL_MIN_SHARE` pixels).
 const FLAT_FILL_MIN_SHARE: u32 = 6;
+/// Brightness distance from a balloon's own colour within which a pixel
+/// counts as that balloon: the ends of letters a mask missed fall outside.
+const FLAT_FILL_INLIER_RANGE: u8 = 24;
+/// Share of a neighbourhood's unmasked pixels that must be the balloon's own
+/// colour for a flat fill: a few stray letter ends pass, hatching does not.
+const FLAT_FILL_MIN_INLIERS: f64 = 0.6;
 /// Side of the page tiles lettering is grouped by for the fill.
 const FLAT_FILL_TILE: u32 = 128;
 /// Passes that grow the fill inward, one neighbourhood radius each.
@@ -1314,17 +1320,51 @@ fn fill_flat_lettering(
                 (right + reach).min(crop[2]),
                 (bottom + reach).min(crop[3]),
             ];
-            let seen = WindowSums::new(output, crop, |x, y| {
-                original[index(x, y)] && balloon[index(x, y)] == label
-            });
+            // Lettering inside a balloon reads only that balloon; lettering
+            // outside every detected balloon (often a traced outline that
+            // missed part of the text) reads anything around it.
+            let same = |at: usize| label == 0 || balloon[at] == label;
+            let include = |x: u32, y: u32| original[index(x, y)] && same(index(x, y));
+            // The balloon's (or the paper's) own colour: the median of its
+            // unmasked pixels here. Pixels far from it, such as the ends of
+            // letters the mask missed, do not count against a flat fill.
+            let mut histogram = [0u32; 256];
+            for y in crop[1]..crop[3] {
+                for x in crop[0]..crop[2] {
+                    if include(x, y) {
+                        histogram[usize::from(luma(output.get_pixel(x, y)))] += 1;
+                    }
+                }
+            }
+            let half = histogram.iter().sum::<u32>().div_ceil(2);
+            let mut seen_so_far = 0;
+            let reference = histogram
+                .iter()
+                .position(|count| {
+                    seen_so_far += count;
+                    seen_so_far >= half
+                })
+                .unwrap_or(0) as u8;
+            let seen = WindowSums::new(output, crop, include, reference);
             for (x, y) in members {
                 let (count, color) = seen.flat_mean(x, y, radius);
                 if count >= minimum {
                     if let Some(color) = color {
                         fills.push((x, y, color, label));
                     }
-                } else if let (_, Some(context)) = seen.flat_mean(x, y, 3 * radius) {
-                    deep.push((x, y, label, context, crop));
+                } else {
+                    // The unmasked pixels three radii around, or when a large
+                    // mask leaves none that close, the whole crop's.
+                    let context = match seen.flat_mean(x, y, 3 * radius) {
+                        (0, _) => {
+                            seen.flat_mean(x, y, crop[2] - crop[0] + crop[3] - crop[1])
+                                .1
+                        }
+                        (_, context) => context,
+                    };
+                    if let Some(context) = context {
+                        deep.push((x, y, label, context, crop, reference));
+                    }
                 }
             }
         }
@@ -1334,7 +1374,7 @@ fn fill_flat_lettering(
     for _ in 1..FLAT_FILL_PASSES {
         let mut fills = Vec::new();
         let mut tables = Vec::<([u32; 4], u16, WindowSums)>::new();
-        deep.retain(|&(x, y, label, context, crop)| {
+        deep.retain(|&(x, y, label, context, crop, reference)| {
             let near = match tables
                 .iter()
                 .position(|(seen_crop, seen_label, _)| *seen_crop == crop && *seen_label == label)
@@ -1344,9 +1384,14 @@ fn fill_flat_lettering(
                     tables.push((
                         crop,
                         label,
-                        WindowSums::new(output, crop, |x, y| {
-                            known[index(x, y)] && balloon[index(x, y)] == label
-                        }),
+                        WindowSums::new(
+                            output,
+                            crop,
+                            |x, y| {
+                                known[index(x, y)] && (label == 0 || balloon[index(x, y)] == label)
+                            },
+                            reference,
+                        ),
                     ));
                     &tables[tables.len() - 1].2
                 }
@@ -1411,34 +1456,45 @@ fn fill_flat_lettering(
     filled
 }
 
-/// Pixel counts and per-channel sums and squares over a crop, as an integral
-/// image, for the pixels `include` accepts.
+/// Over a crop, as an integral image: how many pixels `include` accepts, and
+/// how many of those lie within `FLAT_FILL_INLIER_RANGE` of the `reference`
+/// brightness, with their per-channel sums and squares.
 struct WindowSums {
     crop: [u32; 4],
     stride: usize,
-    table: Vec<[u64; 7]>,
+    table: Vec<[u64; 8]>,
 }
 
 impl WindowSums {
-    fn new(image: &RgbImage, crop: [u32; 4], include: impl Fn(u32, u32) -> bool) -> Self {
+    fn new(
+        image: &RgbImage,
+        crop: [u32; 4],
+        include: impl Fn(u32, u32) -> bool,
+        reference: u8,
+    ) -> Self {
         let [left, top, right, bottom] = crop;
         let stride = (right - left + 1) as usize;
-        let mut table = vec![[0u64; 7]; stride * (bottom - top + 1) as usize];
+        let mut table = vec![[0u64; 8]; stride * (bottom - top + 1) as usize];
         for y in top..bottom {
-            let mut row = [0u64; 7];
+            let mut row = [0u64; 8];
             for x in left..right {
                 if include(x, y) {
                     let pixel = image.get_pixel(x, y);
                     row[0] += 1;
-                    for channel in 0..3 {
-                        let value = u64::from(pixel[channel]);
-                        row[1 + channel] += value;
-                        row[4 + channel] += value * value;
+                    if luma(pixel).abs_diff(reference) <= FLAT_FILL_INLIER_RANGE {
+                        row[1] += 1;
+                        for channel in 0..3 {
+                            let value = u64::from(pixel[channel]);
+                            row[2 + channel] += value;
+                            row[5 + channel] += value * value;
+                        }
                     }
                 }
                 let at = (y - top + 1) as usize * stride + (x - left + 1) as usize;
                 let above = table[at - stride];
-                table[at] = std::array::from_fn(|value| above[value] + row[value]);
+                for value in 0..8 {
+                    table[at][value] = above[value] + row[value];
+                }
             }
         }
         Self {
@@ -1448,8 +1504,10 @@ impl WindowSums {
         }
     }
 
-    /// How many accepted pixels lie within `reach` of (x, y), and their mean
-    /// colour when every channel deviates at most `FLAT_FILL_MAX_DEVIATION`.
+    /// How many pixels near the reference lie within `reach` of (x, y), and
+    /// their mean colour when they are most of the accepted pixels there
+    /// (`FLAT_FILL_MIN_INLIERS`) and every channel deviates at most
+    /// `FLAT_FILL_MAX_DEVIATION`.
     fn flat_mean(&self, x: u32, y: u32, reach: u32) -> (u64, Option<Rgb<u8>>) {
         let [left, top, right, bottom] = self.crop;
         let (x0, y0) = (
@@ -1457,25 +1515,36 @@ impl WindowSums {
             y.saturating_sub(reach).max(top),
         );
         let (x1, y1) = ((x + reach + 1).min(right), (y + reach + 1).min(bottom));
-        let at =
-            |x: u32, y: u32| &self.table[(y - top) as usize * self.stride + (x - left) as usize];
-        let sums: [u64; 7] = std::array::from_fn(|value| {
-            at(x1, y1)[value] + at(x0, y0)[value] - at(x0, y1)[value] - at(x1, y0)[value]
-        });
-        let count = sums[0];
+        let row = |y: u32| (y - top) as usize * self.stride;
+        let (a, b, c, d) = (
+            &self.table[row(y1) + (x1 - left) as usize],
+            &self.table[row(y0) + (x0 - left) as usize],
+            &self.table[row(y1) + (x0 - left) as usize],
+            &self.table[row(y0) + (x1 - left) as usize],
+        );
+        let mut sums = [0u64; 8];
+        for value in 0..8 {
+            sums[value] = a[value] + b[value] - c[value] - d[value];
+        }
+        let (all, count) = (sums[0], sums[1]);
         if count == 0 {
             return (0, None);
         }
-        let flat = (0..3).all(|channel| {
-            let mean = sums[1 + channel] as f64 / count as f64;
-            sums[4 + channel] as f64 / count as f64 - mean * mean
-                <= FLAT_FILL_MAX_DEVIATION * FLAT_FILL_MAX_DEVIATION
-        });
-        let mean = Rgb(std::array::from_fn(|channel| {
-            (sums[1 + channel] as f64 / count as f64).round() as u8
-        }));
+        let flat = count as f64 >= FLAT_FILL_MIN_INLIERS * all as f64
+            && (0..3).all(|channel| {
+                let mean = sums[2 + channel] as f64 / count as f64;
+                sums[5 + channel] as f64 / count as f64 - mean * mean
+                    <= FLAT_FILL_MAX_DEVIATION * FLAT_FILL_MAX_DEVIATION
+            });
+        let mean =
+            Rgb([0, 1, 2].map(|channel| (sums[2 + channel] as f64 / count as f64).round() as u8));
         (count, flat.then_some(mean))
     }
+}
+
+fn luma(pixel: &Rgb<u8>) -> u8 {
+    ((u32::from(pixel[0]) * 299 + u32::from(pixel[1]) * 587 + u32::from(pixel[2]) * 114) / 1000)
+        as u8
 }
 
 /// The neighbourhood a lettering pixel reads its fill colour from: 6 px on a
