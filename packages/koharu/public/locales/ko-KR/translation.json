@@ -108,7 +108,8 @@
     "unboxedText": "감지되지 않았을 수 있는 텍스트: {{count}}개",
     "unboxedText_one": "감지되지 않았을 수 있는 텍스트: {{count}}개",
     "unboxedText_other": "감지되지 않았을 수 있는 텍스트: {{count}}개",
-    "exportAnyway": "그래도 내보내기"
+    "exportAnyway": "그래도 내보내기",
+    "hiddenText": "숨김: 내보내지지 않음"
   },
   "common": {
     "back": "뒤로",

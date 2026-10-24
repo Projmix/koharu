@@ -108,7 +108,8 @@
     "unboxedText": "Algılanmamış olabilecek metin: {{count}}",
     "unboxedText_one": "Algılanmamış olabilecek metin: {{count}}",
     "unboxedText_other": "Algılanmamış olabilecek metin: {{count}}",
-    "exportAnyway": "Yine de dışa aktar"
+    "exportAnyway": "Yine de dışa aktar",
+    "hiddenText": "Gizli: dışa aktarılmayacak"
   },
   "common": {
     "back": "Geri",

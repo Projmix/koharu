@@ -108,7 +108,8 @@
     "unboxedText": "Possível texto não detectado: {{count}}",
     "unboxedText_one": "Possível texto não detectado: {{count}}",
     "unboxedText_other": "Possível texto não detectado: {{count}}",
-    "exportAnyway": "Exportar mesmo assim"
+    "exportAnyway": "Exportar mesmo assim",
+    "hiddenText": "Oculto: não será exportado"
   },
   "common": {
     "back": "Voltar",

@@ -108,7 +108,8 @@
     "unboxedText": "可能漏检的文字：{{count}} 处",
     "unboxedText_one": "可能漏检的文字：{{count}} 处",
     "unboxedText_other": "可能漏检的文字：{{count}} 处",
-    "exportAnyway": "仍然导出"
+    "exportAnyway": "仍然导出",
+    "hiddenText": "已隐藏：不会导出"
   },
   "common": {
     "back": "返回",

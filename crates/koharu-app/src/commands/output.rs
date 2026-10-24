@@ -185,6 +185,9 @@ pub struct ChapterIssue {
     pub ocr_unverified: bool,
     /// Cloud cleaning left this text's lettering on the page.
     pub cleaning_unverified: bool,
+    /// The block has a translation but does not show: it or its text group
+    /// is hidden, so it would export without it.
+    pub hidden: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Type)]
@@ -217,20 +220,52 @@ pub(crate) async fn check_chapter(
         .as_ref()
         .context("no project is open")?
         .snapshot();
+    Ok(chapter_check(&snapshot, &desktop, source_language, target_language).await?)
+}
+
+/// The chapter check of `snapshot`, for the command and the Agent alike.
+pub(crate) async fn chapter_check(
+    snapshot: &Snapshot,
+    desktop: &Desktop,
+    source_language: Language,
+    target_language: Language,
+) -> Result<ChapterCheck> {
+    let snapshot = snapshot.clone();
     let fit = desktop.chapter_text_fit_warnings(&snapshot).await?;
     let mut issues = Vec::new();
     for (page, warnings) in fit {
         let Some(group) = snapshot.page(page)?.text_group()? else {
             continue;
         };
+        let shown = |entity| -> Result<bool> {
+            Ok(snapshot
+                .component::<Visibility>(entity)?
+                .is_none_or(|visibility| visibility.visible && visibility.opacity > 0.0))
+        };
+        let group_shown = shown(group.id())?;
         for layer in group.text_layers()? {
-            if snapshot
-                .component::<Visibility>(layer.id())?
-                .is_some_and(|visibility| !visibility.visible || visibility.opacity <= 0.0)
-            {
+            let content = layer.content()?;
+            if !(group_shown && shown(layer.id())?) {
+                // Hidden text matters only when it would have shown a
+                // translation; an empty or deliberately removed block stays out.
+                if let Some(translation) = content
+                    .translation()?
+                    .map(|translation| translation.text.value)
+                    .filter(|text| !text.trim().is_empty())
+                {
+                    issues.push(ChapterIssue {
+                        page,
+                        element: layer.id(),
+                        text: translation,
+                        translation: None,
+                        fit: None,
+                        ocr_unverified: false,
+                        cleaning_unverified: false,
+                        hidden: true,
+                    });
+                }
                 continue;
             }
-            let content = layer.content()?;
             let source = content.source()?.map(|source| source.text.value);
             let translation = content
                 .translation()?
@@ -271,6 +306,7 @@ pub(crate) async fn check_chapter(
                     fit,
                     ocr_unverified,
                     cleaning_unverified,
+                    hidden: false,
                 });
             }
         }

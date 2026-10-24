@@ -108,7 +108,8 @@
     "unboxedText": "未検出の可能性がある文字: {{count}}",
     "unboxedText_one": "未検出の可能性がある文字: {{count}}",
     "unboxedText_other": "未検出の可能性がある文字: {{count}}",
-    "exportAnyway": "このまま書き出す"
+    "exportAnyway": "このまま書き出す",
+    "hiddenText": "非表示：書き出されません"
   },
   "common": {
     "back": "戻る",

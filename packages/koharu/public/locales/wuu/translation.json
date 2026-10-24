@@ -108,7 +108,8 @@
     "unboxedText": "可能漏脱个文字：{{count}} 处",
     "unboxedText_one": "可能漏脱个文字：{{count}} 处",
     "unboxedText_other": "可能漏脱个文字：{{count}} 处",
-    "exportAnyway": "照样导出"
+    "exportAnyway": "照样导出",
+    "hiddenText": "隐藏：勿会导出"
   },
   "common": {
     "back": "返回",

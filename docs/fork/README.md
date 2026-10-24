@@ -164,12 +164,16 @@ Known gaps after the rebuild:
   and works on the open project through the same host: the same project
   lock and undo history as the app. Besides the editing tools it has
   `page_layers` (a page's text layers in numbered order with box, balloon
-  box and the largest box inside the balloon, typography and what the
-  renderer drew: fonts, final size, text box, fit warning), `crop` (a PNG of
-  part of a page, typeset, without text, or as imported) and
-  `preview_layers` (a trial render of text, box and typography changes that
-  commits nothing; a fit is a trial with auto-fit in the intended box). A
-  second running Koharu finds the port taken and runs without the server.
+  box and the largest box inside the balloon, measured on the page's pixels
+  without text when the balloon is closed, typography and what the renderer
+  drew: fonts, final size, text box, fit warning), `crop` (a PNG of part of
+  a page, typeset, without text, or as imported), `preview_layers` (a trial
+  render of text, box and typography changes that commits nothing; a fit is
+  a trial with auto-fit in the intended box), `apply_layers` (the same
+  changes plus visibility, on any pages, committed as one undo step and
+  answered with what the renderer drew) and `check_chapter`. Every edit an
+  agent commits refreshes the app's project, pages and layers. A second
+  running Koharu finds the port taken and runs without the server.
 - Paint and cleanup layers can be duplicated (Ctrl+J), merged down or
   merged together as they show (Ctrl+E; masks and opacity are baked in,
   hidden layers are refused), and given a reveal mask, Photoshop's Layer
@@ -207,7 +211,8 @@ Known gaps after the rebuild:
 - Choosing an export format first runs a chapter check (`check_chapter`):
   one list of visible text blocks with an empty translation, kana (or kanji
   outside a Chinese target) left in the translation, or a fit warning from
-  the export render. Selecting a row opens that page and layer; a clean
+  the export render, and of translated text hidden by its layer or text
+  group, which the export leaves out. Selecting a row opens that page and layer; a clean
   chapter exports at once, otherwise "Export anyway" proceeds.
 
 

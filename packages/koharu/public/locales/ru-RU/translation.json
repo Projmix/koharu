@@ -108,7 +108,8 @@
     "unboxedText": "Возможно пропущенный текст: {{count}}",
     "unboxedText_one": "Возможно пропущенный текст: {{count}}",
     "unboxedText_other": "Возможно пропущенный текст: {{count}}",
-    "exportAnyway": "Всё равно экспортировать"
+    "exportAnyway": "Всё равно экспортировать",
+    "hiddenText": "Скрыт: не попадёт в экспорт"
   },
   "common": {
     "back": "Назад",

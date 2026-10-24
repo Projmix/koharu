@@ -20,7 +20,7 @@ use crate::commands::{
     canvas::Point,
     editing::{GeometryUpdate, TypographyUpdate},
     output,
-    project::{Project, Typography},
+    project::{EditStep, Project, Typography},
 };
 
 use super::host::{AgentFontStyle, AgentTextAlignment, AgentWritingMode, entity};
@@ -81,6 +81,14 @@ pub(super) struct TrialChange {
     /// Whole new typography, as set_typography takes it.
     #[serde(default)]
     typography: Option<TrialTypography>,
+    /// Show or hide the layer.
+    #[serde(default)]
+    visible: Option<bool>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub(super) struct ApplyLayers {
+    pub(super) changes: Vec<TrialChange>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -101,10 +109,30 @@ pub(super) async fn page_layers(
     page: EntityId,
 ) -> Result<Value> {
     let frame = desktop.renderer().render(snapshot, page).await?;
+    // Balloons are measured on the page as it shows without its text.
+    let clean = render_image(desktop, &without_text(snapshot, page)?, page).await?;
     let mut layers = Vec::new();
     if let Some(group) = snapshot.page(page)?.text_group()? {
         for (index, layer) in group.text_layers()?.enumerate() {
-            layers.push(layer_value(snapshot, &frame, layer.id(), index + 1)?);
+            let mut value = layer_value(snapshot, &frame, layer.id(), index + 1)?;
+            let measured = value["balloon"]["box"]
+                .as_array()
+                .zip(value["box"].as_array())
+                .and_then(|(balloon, text)| {
+                    let read = |values: &Vec<Value>| -> Option<[f64; 4]> {
+                        let values = values
+                            .iter()
+                            .map(Value::as_f64)
+                            .collect::<Option<Vec<_>>>()?;
+                        values.try_into().ok()
+                    };
+                    pixel_inner_box(&clean, read(balloon)?, read(text)?)
+                });
+            if let Some(measured) = measured {
+                value["balloon"]["inner_box"] = json!(measured);
+                value["balloon"]["measured"] = json!("pixels");
+            }
+            layers.push(value);
         }
     }
     let size = snapshot.page(page)?.page()?;
@@ -149,57 +177,20 @@ pub(super) async fn preview_layers(
     arguments: PreviewLayers,
 ) -> Result<(Value, String)> {
     let page = entity(&arguments.page)?;
-    let mut trial = snapshot.clone();
-    let mut changed = Vec::new();
-    for change in arguments.changes {
-        let layer = entity(&change.element)?;
-        if trial.page(layer).is_ok() || owning_page(&trial, layer)? != page {
+    let changed = elements(&arguments.changes)?;
+    for layer in &changed {
+        if snapshot.page(*layer).is_ok() || owning_page(snapshot, *layer)? != page {
             bail!("element {layer} is not a layer of page {page}");
         }
-        if let Some(text) = change.text {
-            let patch = Project::translation_patch(&trial, layer, Some(text))?;
-            trial = trial.preview([&patch])?;
-        }
-        if let Some([x, y, width, height]) = change.region {
-            let points = [
-                (x, y),
-                (x + width, y),
-                (x + width, y + height),
-                (x, y + height),
-            ]
-            .map(|(x, y)| Point { x, y })
-            .to_vec();
-            let patch = Project::geometry_patch(
-                &trial,
-                vec![GeometryUpdate {
-                    layer,
-                    points: Some(points),
-                }],
-            )?;
-            trial = trial.preview([&patch])?;
-        }
-        if let Some(typography) = change.typography {
-            let typography = Typography {
-                preferred_font: typography.preferred_font,
-                font_weight: typography.font_weight,
-                font_style: typography.font_style.map(Into::into),
-                size: typography.size,
-                auto_fit: typography.auto_fit,
-                color: typography.color,
-                stroke_color: typography.stroke_color,
-                stroke_width: typography.stroke_width,
-                alignment: typography.alignment.map(Into::into),
-                writing_mode: typography.writing_mode.map(Into::into),
-            };
-            let patch = Project::typography_patch(
-                &trial,
-                vec![TypographyUpdate { layer, typography }],
-                |_| None,
-            )?;
-            trial = trial.preview([&patch])?;
-        }
-        changed.push(layer);
     }
+    let steps = steps(snapshot, arguments.changes, |_| None)?;
+    let patch = snapshot.patch(|edit| {
+        for step in steps {
+            step(edit)?;
+        }
+        Ok(())
+    })?;
+    let trial = snapshot.preview([&patch])?;
     let frame = desktop.renderer().render(&trial, page).await?;
     let numbers = numbering(&trial, page)?;
     let layers = changed
@@ -236,6 +227,111 @@ pub(super) async fn preview_layers(
         json!({ "page": page, "region": region, "layers": layers }),
         png,
     ))
+}
+
+/// The elements the changes name, in order.
+pub(super) fn elements(changes: &[TrialChange]) -> Result<Vec<EntityId>> {
+    changes
+        .iter()
+        .map(|change| entity(&change.element))
+        .collect()
+}
+
+/// The changes as checked edit steps against `snapshot`: the same steps the
+/// trial render previews and `apply_layers` commits as one edit.
+pub(super) fn steps(
+    snapshot: &Snapshot,
+    changes: Vec<TrialChange>,
+    laid_out_size: impl Fn(EntityId) -> Option<f32>,
+) -> Result<Vec<EditStep>> {
+    let mut steps = Vec::new();
+    for change in changes {
+        let layer = entity(&change.element)?;
+        if let Some(text) = change.text {
+            steps.push(Project::translation_step(snapshot, layer, Some(text))?);
+        }
+        if let Some([x, y, width, height]) = change.region {
+            let points = [
+                (x, y),
+                (x + width, y),
+                (x + width, y + height),
+                (x, y + height),
+            ]
+            .map(|(x, y)| Point { x, y })
+            .to_vec();
+            steps.push(Project::geometry_step(
+                snapshot,
+                vec![GeometryUpdate {
+                    layer,
+                    points: Some(points),
+                }],
+            )?);
+        }
+        if let Some(typography) = change.typography {
+            let typography = Typography {
+                preferred_font: typography.preferred_font,
+                font_weight: typography.font_weight,
+                font_style: typography.font_style.map(Into::into),
+                size: typography.size,
+                auto_fit: typography.auto_fit,
+                color: typography.color,
+                stroke_color: typography.stroke_color,
+                stroke_width: typography.stroke_width,
+                alignment: typography.alignment.map(Into::into),
+                writing_mode: typography.writing_mode.map(Into::into),
+            };
+            steps.push(Project::typography_step(
+                snapshot,
+                vec![TypographyUpdate { layer, typography }],
+                &laid_out_size,
+            )?);
+        }
+        if let Some(visible) = change.visible {
+            let opacity = snapshot
+                .component::<Visibility>(layer)?
+                .map_or(1.0, |visibility| visibility.opacity);
+            steps.push(Box::new(move |edit| {
+                edit.promote_entity_to_user(layer)?;
+                edit.set(
+                    layer,
+                    &Visibility {
+                        origin: Origin::User,
+                        visible,
+                        opacity,
+                    },
+                )
+            }));
+        }
+    }
+    Ok(steps)
+}
+
+/// What the renderer drew for each of `layers`, page by page, once committed.
+pub(super) async fn report(
+    desktop: &Desktop,
+    snapshot: &Snapshot,
+    layers: &[EntityId],
+) -> Result<Value> {
+    let mut pages = Vec::<(EntityId, Vec<EntityId>)>::new();
+    for layer in layers {
+        let page = owning_page(snapshot, *layer)?;
+        match pages.iter_mut().find(|(candidate, _)| *candidate == page) {
+            Some((_, members)) if !members.contains(layer) => members.push(*layer),
+            Some(_) => {}
+            None => pages.push((page, vec![*layer])),
+        }
+    }
+    let mut values = Vec::new();
+    for (page, members) in pages {
+        let frame = desktop.renderer().render(snapshot, page).await?;
+        let numbers = numbering(snapshot, page)?;
+        for layer in members {
+            let mut value = layer_value(snapshot, &frame, layer, numbers(layer))?;
+            value["page"] = json!(page);
+            values.push(value);
+        }
+    }
+    Ok(Value::Array(values))
 }
 
 pub(super) fn image_url(png: String) -> String {
@@ -430,6 +526,174 @@ fn inner_box(geometry: &Geometry) -> Option<[f64; 4]> {
     )
 }
 
+/// The largest axis-aligned rectangle inside the balloon as drawn on the
+/// clean page: the light area flooded from the light pixel nearest the text
+/// box's centre, its holes filled, kept a margin from the outline. `None`
+/// when the flood leaks out of the balloon's box (an open balloon) or finds
+/// no light pixel, so the detected outline decides instead.
+fn pixel_inner_box(clean: &RgbaImage, balloon: [f64; 4], text: [f64; 4]) -> Option<[f64; 4]> {
+    const LIGHT: u32 = 200;
+    let (page_width, page_height) = clean.dimensions();
+    let grow = |value: f64| value * 0.15;
+    let left = (balloon[0] - grow(balloon[2])).max(0.0).floor() as u32;
+    let top = (balloon[1] - grow(balloon[3])).max(0.0).floor() as u32;
+    let right = (balloon[0] + balloon[2] * 1.15)
+        .min(f64::from(page_width))
+        .ceil() as u32;
+    let bottom = (balloon[1] + balloon[3] * 1.15)
+        .min(f64::from(page_height))
+        .ceil() as u32;
+    if right <= left + 4 || bottom <= top + 4 {
+        return None;
+    }
+    let (width, height) = ((right - left) as usize, (bottom - top) as usize);
+    let light = |x: usize, y: usize| {
+        let pixel = clean.get_pixel(left + x as u32, top + y as u32);
+        (u32::from(pixel[0]) * 299 + u32::from(pixel[1]) * 587 + u32::from(pixel[2]) * 114) / 1000
+            >= LIGHT
+    };
+    // The light pixel nearest the text box's centre.
+    let centre = (
+        (text[0] + text[2] / 2.0 - f64::from(left)).clamp(0.0, width as f64 - 1.0) as usize,
+        (text[1] + text[3] / 2.0 - f64::from(top)).clamp(0.0, height as f64 - 1.0) as usize,
+    );
+    let reach = (text[2].min(text[3]) / 2.0).max(4.0) as usize;
+    let seed = (0..=reach).find_map(|radius| {
+        let (x0, y0) = (
+            centre.0.saturating_sub(radius),
+            centre.1.saturating_sub(radius),
+        );
+        let (x1, y1) = (
+            (centre.0 + radius).min(width - 1),
+            (centre.1 + radius).min(height - 1),
+        );
+        (y0..=y1)
+            .flat_map(|y| (x0..=x1).map(move |x| (x, y)))
+            .find(|&(x, y)| light(x, y))
+    })?;
+    let mut region = vec![false; width * height];
+    let mut stack = vec![seed];
+    region[seed.1 * width + seed.0] = true;
+    let mut leaked = false;
+    while let Some((x, y)) = stack.pop() {
+        if x == 0 || y == 0 || x == width - 1 || y == height - 1 {
+            leaked = true;
+        }
+        let neighbours = [
+            (x.wrapping_sub(1), y),
+            (x + 1, y),
+            (x, y.wrapping_sub(1)),
+            (x, y + 1),
+        ];
+        for (nx, ny) in neighbours {
+            if nx < width && ny < height && !region[ny * width + nx] && light(nx, ny) {
+                region[ny * width + nx] = true;
+                stack.push((nx, ny));
+            }
+        }
+    }
+    if leaked {
+        return None;
+    }
+    // Fill holes (specks and leftover lettering): whatever the outside
+    // cannot reach through non-region pixels belongs to the balloon.
+    let mut outside = vec![false; width * height];
+    let mut stack = Vec::new();
+    for x in 0..width {
+        for y in [0, height - 1] {
+            if !region[y * width + x] && !outside[y * width + x] {
+                outside[y * width + x] = true;
+                stack.push((x, y));
+            }
+        }
+    }
+    for y in 0..height {
+        for x in [0, width - 1] {
+            if !region[y * width + x] && !outside[y * width + x] {
+                outside[y * width + x] = true;
+                stack.push((x, y));
+            }
+        }
+    }
+    while let Some((x, y)) = stack.pop() {
+        let neighbours = [
+            (x.wrapping_sub(1), y),
+            (x + 1, y),
+            (x, y.wrapping_sub(1)),
+            (x, y + 1),
+        ];
+        for (nx, ny) in neighbours {
+            if nx < width && ny < height && !region[ny * width + nx] && !outside[ny * width + nx] {
+                outside[ny * width + nx] = true;
+                stack.push((nx, ny));
+            }
+        }
+    }
+    // Keep a margin: a pixel stays when no outside pixel lies within it.
+    let (min_x, max_x, min_y, max_y) = (0..width * height).filter(|at| !outside[*at]).fold(
+        (width, 0, height, 0),
+        |(a, b, c, d), at| {
+            let (x, y) = (at % width, at / width);
+            (a.min(x), b.max(x), c.min(y), d.max(y))
+        },
+    );
+    if max_x <= min_x || max_y <= min_y {
+        return None;
+    }
+    let margin = ((max_x - min_x).min(max_y - min_y) / 14).max(4);
+    let stride = width + 1;
+    let mut table = vec![0u32; stride * (height + 1)];
+    for y in 0..height {
+        let mut row = 0;
+        for x in 0..width {
+            row += u32::from(outside[y * width + x]);
+            table[(y + 1) * stride + x + 1] = table[y * stride + x + 1] + row;
+        }
+    }
+    let clear = |x: usize, y: usize| {
+        let (x0, y0) = (x.saturating_sub(margin), y.saturating_sub(margin));
+        let (x1, y1) = ((x + margin + 1).min(width), (y + margin + 1).min(height));
+        table[y1 * stride + x1] + table[y0 * stride + x0]
+            == table[y0 * stride + x1] + table[y1 * stride + x0]
+            && x >= margin
+            && y >= margin
+            && x + margin < width
+            && y + margin < height
+    };
+    let mut heights = vec![0usize; width];
+    let mut best = (0usize, 0usize, 0usize, 0usize, 0usize);
+    for y in 0..height {
+        for (x, column) in heights.iter_mut().enumerate() {
+            *column = if clear(x, y) { *column + 1 } else { 0 };
+        }
+        let mut stack: Vec<usize> = Vec::new();
+        for x in 0..=width {
+            let current = if x < width { heights[x] } else { 0 };
+            while let Some(&last) = stack.last() {
+                if heights[last] <= current {
+                    break;
+                }
+                stack.pop();
+                let start = stack.last().map_or(0, |previous| previous + 1);
+                let area = heights[last] * (x - start);
+                if area > best.0 {
+                    best = (area, start, y + 1 - heights[last], x - start, heights[last]);
+                }
+            }
+            stack.push(x);
+        }
+    }
+    let (area, x, y, rect_width, rect_height) = best;
+    (area > 0).then(|| {
+        [
+            f64::from(left) + x as f64,
+            f64::from(top) + y as f64,
+            rect_width as f64,
+            rect_height as f64,
+        ]
+    })
+}
+
 /// A preview of the project with the page's text group hidden.
 fn without_text(snapshot: &Snapshot, page: EntityId) -> Result<Snapshot> {
     let Some(group) = snapshot.page(page)?.text_group()? else {
@@ -497,6 +761,47 @@ mod tests {
     use koharu_scene::Point as ScenePoint;
 
     use super::*;
+
+    #[test]
+    fn a_balloon_is_measured_on_its_pixels_with_its_letters_filled() {
+        // A white disc of radius 80 with a black outline on grey, with dark
+        // "letters" across its middle.
+        let page = RgbaImage::from_fn(300, 300, |x, y| {
+            let distance = (f64::from(x) - 150.0).hypot(f64::from(y) - 150.0);
+            let value = if distance < 80.0 {
+                if (130..170).contains(&y) && (110..190).contains(&x) && x % 6 < 3 {
+                    20
+                } else {
+                    255
+                }
+            } else if distance < 84.0 {
+                0
+            } else {
+                120
+            };
+            image::Rgba([value, value, value, 255])
+        });
+        let [x, y, width, height] = pixel_inner_box(
+            &page,
+            [66.0, 66.0, 168.0, 168.0],
+            [110.0, 130.0, 80.0, 40.0],
+        )
+        .unwrap();
+        // The inscribed square is 113 px; the margin is a fourteenth of 160.
+        assert!((85.0..=100.0).contains(&width), "width {width}");
+        assert!((85.0..=100.0).contains(&height), "height {height}");
+        assert!((x + width / 2.0 - 150.0).abs() <= 3.0 && (y + height / 2.0 - 150.0).abs() <= 3.0);
+        // An open balloon leaks into the page and is left to the outline.
+        let open = RgbaImage::from_pixel(300, 300, image::Rgba([255, 255, 255, 255]));
+        assert!(
+            pixel_inner_box(
+                &open,
+                [66.0, 66.0, 168.0, 168.0],
+                [110.0, 130.0, 80.0, 40.0]
+            )
+            .is_none()
+        );
+    }
 
     #[test]
     fn the_inner_box_of_a_round_balloon_is_its_inscribed_square_inset() {

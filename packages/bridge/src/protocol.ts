@@ -250,6 +250,11 @@ export type ChapterIssue = {
 	ocr_unverified: boolean,
 	/**  Cloud cleaning left this text's lettering on the page. */
 	cleaning_unverified: boolean,
+	/**
+	 *  The block has a translation but does not show: it or its text group
+	 *  is hidden, so it would export without it.
+	 */
+	hidden: boolean,
 };
 
 export type Character = {

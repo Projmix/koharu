@@ -108,7 +108,8 @@
     "unboxedText": "Posible texto sin detectar: {{count}}",
     "unboxedText_one": "Posible texto sin detectar: {{count}}",
     "unboxedText_other": "Posible texto sin detectar: {{count}}",
-    "exportAnyway": "Exportar de todos modos"
+    "exportAnyway": "Exportar de todos modos",
+    "hiddenText": "Oculto: no se exportará"
   },
   "common": {
     "back": "Atrás",

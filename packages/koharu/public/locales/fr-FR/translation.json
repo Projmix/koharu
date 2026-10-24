@@ -108,7 +108,8 @@
     "unboxedText": "Texte peut-être oublié : {{count}}",
     "unboxedText_one": "Texte peut-être oublié : {{count}}",
     "unboxedText_other": "Texte peut-être oublié : {{count}}",
-    "exportAnyway": "Exporter quand même"
+    "exportAnyway": "Exporter quand même",
+    "hiddenText": "Masqué : ne sera pas exporté"
   },
   "common": {
     "back": "Retour",

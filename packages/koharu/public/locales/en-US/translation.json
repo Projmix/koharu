@@ -108,7 +108,8 @@
     "unboxedText": "Possible missed text: {{count}}",
     "unboxedText_one": "Possible missed text: {{count}}",
     "unboxedText_other": "Possible missed text: {{count}}",
-    "exportAnyway": "Export anyway"
+    "exportAnyway": "Export anyway",
+    "hiddenText": "Hidden: will not export"
   },
   "common": {
     "back": "Back",

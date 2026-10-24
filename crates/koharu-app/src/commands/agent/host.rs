@@ -19,6 +19,7 @@ use crate::commands::{
     canvas::{CanvasChannel, Point},
     editing::{GeometryUpdate, TypographyUpdate},
     image_edit_preview::DesktopImageEditReviewer,
+    lifecycle::ProjectChannel,
     output,
     preferences::Preferences,
     processing::{JobId, Processing},
@@ -103,6 +104,12 @@ impl KoharuHost {
         };
         let revision = commit.revision;
         self.synchronize(commit, page).await?;
+        // The UI refreshes its project, pages and layers from this, whichever
+        // client (the panel or an MCP agent) made the edit.
+        self.handle
+            .state::<ProjectChannel>()
+            .channel
+            .publish(Some(project.clone()));
         Invocation::changed(json!({
             "revision": revision,
             "project": project,
@@ -248,6 +255,14 @@ impl Host for KoharuHost {
                     definition::<typesetting::PreviewLayers>(
                         "preview_layers",
                         "Trial-render text, box and typography changes to layers of one page without committing anything. Returns what the renderer drew for each changed layer and a PNG of the area. To fit text, try auto_fit in the intended box and read the final size.",
+                    ),
+                    definition::<typesetting::ApplyLayers>(
+                        "apply_layers",
+                        "Apply text, box, typography and visibility changes to any layers as one edit, one undo step. Returns what the renderer drew for each changed layer, with fit warnings.",
+                    ),
+                    definition::<CheckChapter>(
+                        "check_chapter",
+                        "Run the pre-export chapter check: blocks with no translation, Japanese left in a translation, fit warnings, unverified OCR or cleaning, translated text that is hidden, and pages with lettering outside every text region.",
                     ),
                     definition::<RunPipeline>(
                         "run_pipeline",
@@ -501,6 +516,51 @@ impl Host for KoharuHost {
                         .with_image("Trial render", typesetting::image_url(png)),
                 )
             }
+            "apply_layers" => {
+                let arguments: typesetting::ApplyLayers = arguments(&call)?;
+                let layers = typesetting::elements(&arguments.changes)?;
+                let desktop = self.handle.state::<Desktop>();
+                let sizes = layers
+                    .iter()
+                    .map(|layer| (*layer, desktop.presented_font_size(*layer)))
+                    .collect::<Vec<_>>();
+                let mut invocation = self
+                    .mutate(|project| {
+                        Box::pin(async move {
+                            let snapshot = project.snapshot();
+                            let steps =
+                                typesetting::steps(&snapshot, arguments.changes, |layer| {
+                                    sizes
+                                        .iter()
+                                        .find(|(candidate, _)| *candidate == layer)
+                                        .and_then(|(_, size)| *size)
+                                })?;
+                            Ok((
+                                project.apply_steps(steps).await?,
+                                json!({ "changed": true }),
+                            ))
+                        })
+                    })
+                    .await?;
+                let snapshot = self.snapshot().await?;
+                invocation.value["layers"] =
+                    typesetting::report(&desktop, &snapshot, &layers).await?;
+                Ok(invocation)
+            }
+            "check_chapter" => {
+                let _: CheckChapter = arguments(&call)?;
+                let (source, target) = {
+                    let config = koharu_pipeline::PipelineConfig::load()?;
+                    let config = config.read()?;
+                    (
+                        config.translation.source_language,
+                        config.translation.target_language,
+                    )
+                };
+                let snapshot = self.snapshot().await?;
+                let desktop = self.handle.state::<Desktop>();
+                Invocation::read(output::chapter_check(&snapshot, &desktop, source, target).await?)
+            }
             "run_pipeline" => self.run_pipeline(arguments(&call)?, control).await,
             name => bail!("unknown Koharu tool {name}"),
         }
@@ -554,6 +614,9 @@ fn entities(values: &[String]) -> Result<Vec<EntityId>> {
 
 #[derive(Deserialize, JsonSchema)]
 struct InspectProject {}
+
+#[derive(Deserialize, JsonSchema)]
+struct CheckChapter {}
 
 #[derive(Deserialize, JsonSchema)]
 struct ViewPage {

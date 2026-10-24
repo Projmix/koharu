@@ -145,6 +145,7 @@ export function ChapterCheckDialog({
                           issue.fit && t(fitIssueLabels[issue.fit]),
                           issue.ocr_unverified && t('layers.ocrUnverified'),
                           issue.cleaning_unverified && t('layers.cleaningUnverified'),
+                          issue.hidden && t('chapterCheck.hiddenText'),
                         ]
                           .filter(Boolean)
                           .join(' · ')}

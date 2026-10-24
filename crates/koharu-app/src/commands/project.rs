@@ -29,6 +29,10 @@ use super::{
     editing::{GeometryUpdate, TypographyUpdate},
 };
 
+/// A checked change to apply inside a larger edit, so several commit as one.
+pub(crate) type EditStep =
+    Box<dyn FnOnce(&mut koharu_scene::Edit) -> koharu_scene::Result<()> + Send>;
+
 const FREE_TEXT_ROLE: &str = "dev.koharu.text.free-text";
 const DIALOGUE_ROLE: &str = "dev.koharu.text.dialogue";
 const ONOMATOPOEIA_ROLE: &str = "dev.koharu.text.onomatopoeia";
@@ -1397,6 +1401,17 @@ impl Project {
         layer: EntityId,
         text: Option<String>,
     ) -> Result<koharu_scene::Patch> {
+        let step = Self::translation_step(snapshot, layer, text)?;
+        Ok(snapshot.patch(step)?)
+    }
+
+    /// `set_translation`'s change, checked against `snapshot`, as a step of
+    /// a larger edit.
+    pub(crate) fn translation_step(
+        snapshot: &Snapshot,
+        layer: EntityId,
+        text: Option<String>,
+    ) -> Result<EditStep> {
         let content = Self::text_content(snapshot, layer)?;
         let language = snapshot
             .component::<SceneTranslation>(content)?
@@ -1404,7 +1419,7 @@ impl Project {
         let reviewed = snapshot
             .component::<SceneTranslationReview>(content)?
             .is_some();
-        let patch = snapshot.patch(|edit| {
+        Ok(Box::new(move |edit| {
             edit.promote_entity_to_user(layer)?;
             edit.promote_entity_to_user(content)?;
             // Writing the translation by hand is the review's answer, including
@@ -1422,8 +1437,7 @@ impl Project {
                 ),
                 None => edit.remove::<SceneTranslation>(content),
             }
-        })?;
-        Ok(patch)
+        }))
     }
 
     pub(crate) fn characters(snapshot: &Snapshot) -> Result<Vec<Character>> {
@@ -1628,6 +1642,16 @@ impl Project {
         updates: Vec<TypographyUpdate>,
         laid_out_size: impl Fn(EntityId) -> Option<f32>,
     ) -> Result<koharu_scene::Patch> {
+        let step = Self::typography_step(snapshot, updates, laid_out_size)?;
+        Ok(snapshot.patch(step)?)
+    }
+
+    /// `set_typography`'s change, checked against `snapshot`, as a step.
+    pub(crate) fn typography_step(
+        snapshot: &Snapshot,
+        updates: Vec<TypographyUpdate>,
+        laid_out_size: impl Fn(EntityId) -> Option<f32>,
+    ) -> Result<EditStep> {
         let updates = updates
             .into_iter()
             .map(|mut update| {
@@ -1648,7 +1672,7 @@ impl Project {
                 Ok((update, content))
             })
             .collect::<Result<Vec<_>>>()?;
-        let patch = snapshot.patch(|edit| {
+        Ok(Box::new(move |edit| {
             for (update, content) in updates {
                 edit.promote_entity_to_user(update.layer)?;
                 edit.promote_entity_to_user(content)?;
@@ -1671,8 +1695,7 @@ impl Project {
                 )?;
             }
             Ok(())
-        })?;
-        Ok(patch)
+        }))
     }
 
     pub(crate) async fn set_geometry(&mut self, updates: Vec<GeometryUpdate>) -> Result<Commit> {
@@ -1685,6 +1708,15 @@ impl Project {
         snapshot: &Snapshot,
         updates: Vec<GeometryUpdate>,
     ) -> Result<koharu_scene::Patch> {
+        let step = Self::geometry_step(snapshot, updates)?;
+        Ok(snapshot.patch(step)?)
+    }
+
+    /// `set_geometry`'s change, checked against `snapshot`, as a step.
+    pub(crate) fn geometry_step(
+        snapshot: &Snapshot,
+        updates: Vec<GeometryUpdate>,
+    ) -> Result<EditStep> {
         let updates = updates
             .into_iter()
             .map(|update| {
@@ -1709,7 +1741,7 @@ impl Project {
                 Ok((update, Some((content, layout))))
             })
             .collect::<Result<Vec<_>>>()?;
-        let patch = snapshot.patch(|edit| {
+        Ok(Box::new(move |edit| {
             for (update, text) in updates {
                 edit.promote_entity_to_user(update.layer)?;
                 if let Some((content, mut layout)) = text {
@@ -1736,8 +1768,18 @@ impl Project {
                 }
             }
             Ok(())
+        }))
+    }
+
+    /// Commits several checked steps as one edit: one undo step.
+    pub(crate) async fn apply_steps(&mut self, steps: Vec<EditStep>) -> Result<Commit> {
+        let patch = self.snapshot().patch(|edit| {
+            for step in steps {
+                step(edit)?;
+            }
+            Ok(())
         })?;
-        Ok(patch)
+        self.commit(patch).await
     }
 
     pub(crate) async fn set_visibility(

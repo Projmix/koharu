@@ -305,7 +305,6 @@ export function AgentPanel() {
           setActivity(t('agent.applying'))
           break
         case 'tool_finished':
-          if (event.changed) void refresh(projectKey, pagesKey, pageKey)
           setActivity(t('agent.working'))
           break
         case 'completed':
