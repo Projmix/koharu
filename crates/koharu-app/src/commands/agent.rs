@@ -1,4 +1,6 @@
 mod host;
+pub(crate) mod mcp;
+mod typesetting;
 
 use std::{collections::HashMap, sync::Arc};
 

@@ -386,7 +386,7 @@ pub(crate) async fn rendered_preview(
     .await
 }
 
-async fn rasterize(
+pub(crate) async fn rasterize(
     rasterizer: Arc<Rasterizer>,
     frame: &Frame,
     options: RasterOptions,

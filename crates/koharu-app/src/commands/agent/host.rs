@@ -13,6 +13,7 @@ use serde_json::{Value, json};
 use tauri::{AppHandle, Manager as _};
 use tauri_runtime_cef::CefRuntime;
 
+use super::typesetting;
 use crate::commands::{
     ChannelExt as _,
     canvas::{CanvasChannel, Point},
@@ -107,6 +108,18 @@ impl KoharuHost {
             "project": project,
             "result": value,
         }))
+    }
+
+    async fn snapshot(&self) -> Result<Snapshot> {
+        Ok(self
+            .handle
+            .state::<CurrentProject>()
+            .project
+            .lock()
+            .await
+            .as_ref()
+            .context("no project is open")?
+            .snapshot())
     }
 
     async fn synchronize(&self, commit: Commit, page: Option<EntityId>) -> Result<()> {
@@ -223,6 +236,18 @@ impl Host for KoharuHost {
                     definition::<MoveElement>(
                         "move_element",
                         "Move an element under a page or element at a zero-based index.",
+                    ),
+                    definition::<typesetting::PageLayers>(
+                        "page_layers",
+                        "List a page's text layers in their numbered order: text, role, box, balloon box and the largest box inside the balloon, typography, and what the renderer drew (fonts, final size, text box, overflow / below_readable_size / low_contrast warning).",
+                    ),
+                    definition::<typesetting::Crop>(
+                        "crop",
+                        "Return a PNG of part of a page as it shows: typeset (with text), clean (without its text layers) or source (as imported).",
+                    ),
+                    definition::<typesetting::PreviewLayers>(
+                        "preview_layers",
+                        "Trial-render text, box and typography changes to layers of one page without committing anything. Returns what the renderer drew for each changed layer and a PNG of the area. To fit text, try auto_fit in the intended box and read the final size.",
                     ),
                     definition::<RunPipeline>(
                         "run_pipeline",
@@ -451,6 +476,31 @@ impl Host for KoharuHost {
                 })
                 .await
             }
+            "page_layers" => {
+                let arguments: typesetting::PageLayers = arguments(&call)?;
+                let page = entity(&arguments.page)?;
+                let snapshot = self.snapshot().await?;
+                let desktop = self.handle.state::<Desktop>();
+                Invocation::read(typesetting::page_layers(&desktop, &snapshot, page).await?)
+            }
+            "crop" => {
+                let arguments: typesetting::Crop = arguments(&call)?;
+                let snapshot = self.snapshot().await?;
+                let desktop = self.handle.state::<Desktop>();
+                let (value, png) = typesetting::crop(&desktop, &snapshot, &arguments).await?;
+                Ok(Invocation::read(value)?.with_image("Page crop", typesetting::image_url(png)))
+            }
+            "preview_layers" => {
+                let arguments: typesetting::PreviewLayers = arguments(&call)?;
+                let snapshot = self.snapshot().await?;
+                let desktop = self.handle.state::<Desktop>();
+                let (value, png) =
+                    typesetting::preview_layers(&desktop, &snapshot, arguments).await?;
+                Ok(
+                    Invocation::read(value)?
+                        .with_image("Trial render", typesetting::image_url(png)),
+                )
+            }
             "run_pipeline" => self.run_pipeline(arguments(&call)?, control).await,
             name => bail!("unknown Koharu tool {name}"),
         }
@@ -493,7 +543,7 @@ fn arguments<T: for<'de> Deserialize<'de>>(call: &ToolCall) -> Result<T> {
         .with_context(|| format!("invalid arguments for {}", call.name))
 }
 
-fn entity(value: &str) -> Result<EntityId> {
+pub(super) fn entity(value: &str) -> Result<EntityId> {
     serde_json::from_value(Value::String(value.to_owned()))
         .with_context(|| format!("invalid entity ID {value}"))
 }
@@ -552,7 +602,7 @@ struct SetTranslation {
 
 #[derive(Clone, Copy, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
-enum AgentTextAlignment {
+pub(super) enum AgentTextAlignment {
     Start,
     Center,
     End,
@@ -572,14 +622,14 @@ impl From<AgentTextAlignment> for koharu_scene::TextAlignment {
 
 #[derive(Clone, Copy, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
-enum AgentWritingMode {
+pub(super) enum AgentWritingMode {
     Horizontal,
     Vertical,
 }
 
 #[derive(Clone, Copy, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
-enum AgentFontStyle {
+pub(super) enum AgentFontStyle {
     Normal,
     Italic,
     Oblique,

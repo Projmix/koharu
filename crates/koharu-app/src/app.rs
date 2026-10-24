@@ -130,6 +130,9 @@ pub fn run(context: tauri::Context<CefRuntime>) -> Result<()> {
             let handle = application.handle().clone();
             application.manage(koharu_desktop::Desktop::new()?);
             application.manage(AgentState::new(handle.clone())?);
+            drop(tauri::async_runtime::spawn(
+                crate::commands::agent::mcp::serve(handle.clone()),
+            ));
 
             let window_config = application
                 .config()

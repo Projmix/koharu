@@ -1386,8 +1386,18 @@ impl Project {
         layer: EntityId,
         text: Option<String>,
     ) -> Result<Commit> {
-        let snapshot = self.snapshot();
-        let content = Self::text_content(&snapshot, layer)?;
+        let patch = Self::translation_patch(&self.snapshot(), layer, text)?;
+        self.commit(patch).await
+    }
+
+    /// The edit `set_translation` commits, against any snapshot; a trial
+    /// render previews it without committing.
+    pub(crate) fn translation_patch(
+        snapshot: &Snapshot,
+        layer: EntityId,
+        text: Option<String>,
+    ) -> Result<koharu_scene::Patch> {
+        let content = Self::text_content(snapshot, layer)?;
         let language = snapshot
             .component::<SceneTranslation>(content)?
             .and_then(|translation| translation.language);
@@ -1413,7 +1423,7 @@ impl Project {
                 None => edit.remove::<SceneTranslation>(content),
             }
         })?;
-        self.commit(patch).await
+        Ok(patch)
     }
 
     pub(crate) fn characters(snapshot: &Snapshot) -> Result<Vec<Character>> {
@@ -1608,7 +1618,16 @@ impl Project {
         updates: Vec<TypographyUpdate>,
         laid_out_size: impl Fn(EntityId) -> Option<f32>,
     ) -> Result<Commit> {
-        let snapshot = self.snapshot();
+        let patch = Self::typography_patch(&self.snapshot(), updates, laid_out_size)?;
+        self.commit(patch).await
+    }
+
+    /// The edit `set_typography` commits, against any snapshot.
+    pub(crate) fn typography_patch(
+        snapshot: &Snapshot,
+        updates: Vec<TypographyUpdate>,
+        laid_out_size: impl Fn(EntityId) -> Option<f32>,
+    ) -> Result<koharu_scene::Patch> {
         let updates = updates
             .into_iter()
             .map(|mut update| {
@@ -1653,11 +1672,19 @@ impl Project {
             }
             Ok(())
         })?;
-        self.commit(patch).await
+        Ok(patch)
     }
 
     pub(crate) async fn set_geometry(&mut self, updates: Vec<GeometryUpdate>) -> Result<Commit> {
-        let snapshot = self.snapshot();
+        let patch = Self::geometry_patch(&self.snapshot(), updates)?;
+        self.commit(patch).await
+    }
+
+    /// The edit `set_geometry` commits, against any snapshot.
+    pub(crate) fn geometry_patch(
+        snapshot: &Snapshot,
+        updates: Vec<GeometryUpdate>,
+    ) -> Result<koharu_scene::Patch> {
         let updates = updates
             .into_iter()
             .map(|update| {
@@ -1710,7 +1737,7 @@ impl Project {
             }
             Ok(())
         })?;
-        self.commit(patch).await
+        Ok(patch)
     }
 
     pub(crate) async fn set_visibility(
@@ -2909,7 +2936,7 @@ impl Project {
         ))
     }
 
-    fn typography_view(typography: SceneTypography) -> Typography {
+    pub(crate) fn typography_view(typography: SceneTypography) -> Typography {
         let writing_mode = if matches!(&typography.origin, Origin::User) {
             typography.writing_mode
         } else {

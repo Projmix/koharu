@@ -157,6 +157,19 @@ Known gaps after the rebuild:
   checker LaMa already continues, it changes nothing.
 - Manual translation, chapter translation presets and unit policy, paste of
   text blocks, page duplication.
+- The in-app Agent's tools are also served over MCP (Streamable HTTP, JSON
+  responses) on `http://127.0.0.1:4100/mcp`, loopback only, always on;
+  requests with a foreign `Origin` are refused. An outside agent connects
+  with `claude mcp add --transport http koharu http://127.0.0.1:4100/mcp`
+  and works on the open project through the same host: the same project
+  lock and undo history as the app. Besides the editing tools it has
+  `page_layers` (a page's text layers in numbered order with box, balloon
+  box and the largest box inside the balloon, typography and what the
+  renderer drew: fonts, final size, text box, fit warning), `crop` (a PNG of
+  part of a page, typeset, without text, or as imported) and
+  `preview_layers` (a trial render of text, box and typography changes that
+  commits nothing; a fit is a trial with auto-fit in the intended box). A
+  second running Koharu finds the port taken and runs without the server.
 - Paint and cleanup layers can be duplicated (Ctrl+J), merged down or
   merged together as they show (Ctrl+E; masks and opacity are baked in,
   hidden layers are refused), and given a reveal mask, Photoshop's Layer
