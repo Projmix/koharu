@@ -165,8 +165,13 @@ impl Analysis {
             total_spread += u64::from(spread);
             strong += u64::from(spread > 24);
         }
+        // A print scan of black ink carries an even cast from the scanner: on
+        // Give me more the mean channel spread was 3.1-5.0 on half the
+        // pages, with no strongly coloured pixel at all (colour covers: 16-34%).
+        // At the former limit of 3 those pages took the colour path, and the
+        // per-channel Levels blew the cast up into green and magenta pages.
         let grayscale =
-            counted == 0 || total_spread as f64 / counted as f64 <= 3.0 && strong * 1000 <= counted;
+            counted == 0 || total_spread as f64 / counted as f64 <= 8.0 && strong * 1000 <= counted;
         let neutral_ink = ink == 0 || ink_spread as f64 / ink as f64 <= 8.0;
         let paper_share = paper.len() as f64 / luma.data.len().max(1) as f64;
         let paper_tint = if paper.is_empty() {
@@ -976,6 +981,19 @@ mod tests {
             assert_eq!(levels.apply(f32::from([46u8, 38, 50][channel])), 0.0);
             assert_eq!(levels.apply(f32::from([250u8, 244, 246][channel])), 255.0);
         }
+    }
+
+    #[test]
+    fn a_scan_with_an_even_cast_is_grey() {
+        // Give me more p. 45: black ink scanned with a faint green cast.
+        let image = RgbImage::from_fn(100, 100, |x, _| match x {
+            0..20 => image::Rgb([30, 35, 33]),
+            20..50 => image::Rgb([145, 150, 148]),
+            _ => image::Rgb([240, 244, 243]),
+        });
+        let luma = Plane::luma(&image);
+        let analysis = Analysis::new(&image, &luma, &[]);
+        assert!(analysis.grayscale && analysis.monochrome);
     }
 
     #[test]

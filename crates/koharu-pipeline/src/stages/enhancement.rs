@@ -30,7 +30,7 @@ use crate::{EnhancementConfig, ModelCell};
 
 const PRODUCER: &str = "dev.koharu.pipeline.enhancement";
 /// Bumped whenever the analysis, filters or checks change what a page gets.
-const REVISION: &str = "7";
+const REVISION: &str = "8";
 const LAYER_NAME: &str = "Scan enhancement";
 /// Paper grain of a physical scan (1.1-1.8 on the owner's scans) rather than
 /// a digital release (0.02-0.13). Only scanned colour pages get Auto Color:

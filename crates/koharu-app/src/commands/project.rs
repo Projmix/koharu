@@ -2720,8 +2720,24 @@ impl Project {
                     image::load_from_memory(&snapshot.read_blob(asset.blob).await?)?.to_rgba8();
                 let opaque = image.pixels().filter(|pixel| pixel[3] == 255).count();
                 if target.is_some() && opaque * 100 >= image.pixels().len() * 99 {
+                    // On a page the enhancement made grey, a whole cleaned
+                    // page drawn on the tinted scan goes grey with it.
+                    let grey = images[&target]
+                        .pixels()
+                        .all(|pixel| pixel[0] == pixel[1] && pixel[1] == pixel[2]);
                     image = tokio_rayon::spawn(move || {
                         koharu_pipeline::tone_cleaned_page(&mut image);
+                        if grey {
+                            for pixel in image.pixels_mut() {
+                                let luma = ((u32::from(pixel[0]) * 299
+                                    + u32::from(pixel[1]) * 587
+                                    + u32::from(pixel[2]) * 114)
+                                    / 1000) as u8;
+                                pixel[0] = luma;
+                                pixel[1] = luma;
+                                pixel[2] = luma;
+                            }
+                        }
                         image
                     })
                     .await;
