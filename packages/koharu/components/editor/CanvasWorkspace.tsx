@@ -41,10 +41,12 @@ import {
 } from '@/lib/queries'
 import { runLayerShortcut } from '@/lib/rasterLayers'
 import {
+  holdCanvasDuring,
   isBrushTool,
   maxBrushDiameter,
   MIN_BRUSH_DIAMETER,
   receiveError,
+  releaseCanvas,
   useKoharuStore,
   type CanvasTool,
 } from '@/lib/store'
@@ -187,6 +189,14 @@ export function CanvasWorkspace() {
   const surface = useRef<HTMLDivElement>(null)
   const [canvasElement, setCanvasElement] = useState<HTMLCanvasElement | null>(null)
   const gesture = useRef<Gesture | null>(null)
+  useEffect(() => {
+    const isStroke = () => {
+      const kind = gesture.current?.kind
+      return kind === 'paint' || kind === 'erase' || kind === 'inpaint' || kind === 'clone'
+    }
+    holdCanvasDuring(isStroke)
+    return () => holdCanvasDuring(() => false)
+  }, [])
   const previousPageIndex = useRef<number | null>(null)
   const spaceHeld = useRef(false)
   const transformActive = useRef(false)
@@ -483,6 +493,7 @@ export function CanvasWorkspace() {
     }
     setDraft(null)
     setPreviews({})
+    releaseCanvas()
   }, [canvas, strokeUpdates, transformUpdates])
 
   const fitCanvas = useCallback(() => {
@@ -1073,8 +1084,10 @@ export function CanvasWorkspace() {
       } catch (error) {
         canvas?.cancelStroke()
         receiveError(errorMessage(error))
+        releaseCanvas()
         return
       }
+      releaseCanvas()
       const operation =
         current.kind === 'paint'
           ? enqueue(() =>
@@ -1285,6 +1298,7 @@ export function CanvasWorkspace() {
                 )
               } catch (error) {
                 gesture.current = null
+                releaseCanvas()
                 receiveError(errorMessage(error))
               }
             } else if (tool === 'eraser') {
@@ -1322,6 +1336,7 @@ export function CanvasWorkspace() {
                 })
               } catch (error) {
                 gesture.current = null
+                releaseCanvas()
                 receiveError(errorMessage(error))
               }
             } else if (tool === 'clone') {
@@ -1373,6 +1388,7 @@ export function CanvasWorkspace() {
                 })
               } catch (error) {
                 gesture.current = null
+                releaseCanvas()
                 receiveError(errorMessage(error))
               }
             } else if (tool === 'color_picker') {

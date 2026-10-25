@@ -36,7 +36,7 @@ pub(crate) async fn serve(handle: AppHandle<CefRuntime>) {
         }
     };
     tracing::info!("MCP server listening on http://{ADDRESS}/mcp");
-    let host = KoharuHost::new(handle);
+    let host = KoharuHost::outside(handle);
     loop {
         let Ok((stream, _)) = listener.accept().await else {
             continue;

@@ -199,7 +199,11 @@ Known gaps after the rebuild:
   numbers, the measured balloon insides and the unboxed lettering; images
   state their scale. Unknown argument fields are refused. A call after the
   project changed outside the agent (the owner editing in the app) starts
-  with a notice to reread. Every edit an
+  with a notice to reread. An agent outside the app edits beside the
+  owner: its edits stay off the owner's undo history, a canvas update from
+  them waits while the owner draws a stroke, and a brush, eraser, clone or
+  inpaint stroke drawn on an older revision lands unless that page's pixels
+  changed since. Every edit an
   agent commits refreshes the app's project, pages and layers. A second
   running Koharu finds the port taken and runs without the server.
 - Text typography has a line-breaking choice (inspector "Line breaks",

@@ -412,10 +412,10 @@ async fn commit_raster_stroke(
     let (commit, page, element) = {
         let mut project = project.project.lock().await;
         let project = project.as_mut().context("no project is open")?;
-        ensure_revision(project.snapshot().revision(), expected_revision)?;
         let page = project
             .active_page()
             .context("the project has no active page")?;
+        project.ensure_pixels_unchanged(page, expected_revision)?;
         let (commit, element) = project
             .apply_raster_stroke(
                 page,
@@ -494,10 +494,10 @@ pub(crate) async fn commit_inpaint(
         let project = project.project.lock().await;
         let project = project.as_ref().context("no project is open")?;
         let snapshot = project.snapshot();
-        ensure_revision(snapshot.revision(), expected_revision)?;
         let page = project
             .active_page()
             .context("the project has no active page")?;
+        project.ensure_pixels_unchanged(page, expected_revision)?;
         let page_value = snapshot.page(page)?.page()?;
         (
             page,
@@ -540,10 +540,10 @@ pub(crate) async fn commit_restore(
         let project = project.project.lock().await;
         let project = project.as_ref().context("no project is open")?;
         let snapshot = project.snapshot();
-        ensure_revision(snapshot.revision(), expected_revision)?;
         let page = project
             .active_page()
             .context("the project has no active page")?;
+        project.ensure_pixels_unchanged(page, expected_revision)?;
         let page_value = snapshot.page(page)?.page()?;
         (
             page,

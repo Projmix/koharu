@@ -29,11 +29,25 @@ use crate::commands::{
 #[derive(Clone)]
 pub(super) struct KoharuHost {
     handle: AppHandle<CefRuntime>,
+    /// An agent outside the app (MCP) rather than the owner's own panel.
+    outside: bool,
 }
 
 impl KoharuHost {
+    /// The host of the owner's Agent panel: its edits are the owner's.
     pub(super) fn new(handle: AppHandle<CefRuntime>) -> Self {
-        Self { handle }
+        Self {
+            handle,
+            outside: false,
+        }
+    }
+
+    /// The host of an agent outside the app, editing beside the owner.
+    pub(super) fn outside(handle: AppHandle<CefRuntime>) -> Self {
+        Self {
+            handle,
+            outside: true,
+        }
     }
 
     async fn project_context(&self) -> Result<Value> {
@@ -98,7 +112,12 @@ impl KoharuHost {
             let mut current = current.project.lock().await;
             let project = current.as_mut().context("no project is open")?;
             let (commit, value) = mutation(project).await?;
-            project.record_commit(&commit);
+            // An agent outside the app edits beside the owner: its edits stay
+            // off the owner's undo history, so the owner's Ctrl+Z takes back
+            // the owner's own last action and keeps their redo.
+            if !self.outside {
+                project.record_commit(&commit);
+            }
             project.reconcile_page();
             (commit, value, project.active_page(), project.info())
         };

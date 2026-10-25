@@ -394,6 +394,13 @@ pub(crate) struct Project {
     pub(crate) active_page: Option<EntityId>,
     pub(crate) undo: Vec<Vec<Revision>>,
     pub(crate) redo: Vec<Vec<Revision>>,
+    /// The revision each page's pixels last changed at (its raster layers,
+    /// their images, visibility and order, or its source), since the project
+    /// opened at `opened_at`. A brush stroke drawn on an older revision still
+    /// lands when only text changed meanwhile, such as an agent writing
+    /// translations while the owner cleans.
+    pixel_revisions: HashMap<EntityId, Revision>,
+    opened_at: Revision,
 }
 
 impl Project {
@@ -412,13 +419,82 @@ impl Project {
     }
 
     fn new(session: Session, name: String) -> Self {
-        let active_page = session.snapshot().pages().next().map(|page| page.id());
+        let snapshot = session.snapshot();
+        let active_page = snapshot.pages().next().map(|page| page.id());
         Self {
+            opened_at: snapshot.revision(),
             session,
             name,
             active_page,
             undo: Vec::new(),
             redo: Vec::new(),
+            pixel_revisions: HashMap::new(),
+        }
+    }
+
+    /// Fails when `page`'s pixels changed after `expected`, the revision a
+    /// canvas stroke was drawn on; changes elsewhere do not stop it.
+    pub(crate) fn ensure_pixels_unchanged(&self, page: EntityId, expected: Revision) -> Result<()> {
+        let changed = self
+            .pixel_revisions
+            .get(&page)
+            .copied()
+            .unwrap_or(self.opened_at);
+        if expected < self.opened_at || changed > expected {
+            bail!(
+                "the page changed under this canvas edit (drawn at {expected}, changed at {changed})"
+            );
+        }
+        Ok(())
+    }
+
+    /// Records which pages' pixels `commit` changed.
+    fn note_pixels(&mut self, before: &Snapshot, commit: &Commit) {
+        let after = &commit.snapshot;
+        let raster = |id: EntityId| {
+            [before, after].into_iter().any(|snapshot| {
+                snapshot
+                    .component::<SceneRasterLayer>(id)
+                    .ok()
+                    .flatten()
+                    .is_some()
+            })
+        };
+        let page_of = |id: EntityId| {
+            [after, before].into_iter().find_map(|snapshot| {
+                let mut current = id;
+                loop {
+                    if snapshot.page(current).is_ok() {
+                        return Some(current);
+                    }
+                    current = snapshot.parent(current).ok().flatten()?;
+                }
+            })
+        };
+        let mut pages = HashSet::new();
+        let changes = &commit.changes;
+        let entities = changes.entities.iter().map(|change| match change {
+            koharu_scene::EntityChange::Inserted(id) | koharu_scene::EntityChange::Removed(id) => {
+                *id
+            }
+        });
+        for id in entities.chain(changes.hierarchy.iter().copied()) {
+            if raster(id) {
+                pages.extend(page_of(id));
+            }
+        }
+        for change in &changes.components {
+            let koharu_scene::ComponentOwner::Entity(id) = change.owner else {
+                continue;
+            };
+            if raster(id) {
+                pages.extend(page_of(id));
+            } else if change.kind == "dev.koharu.assets" && after.page(id).is_ok() {
+                pages.insert(id);
+            }
+        }
+        for page in pages {
+            self.pixel_revisions.insert(page, commit.revision);
         }
     }
 
@@ -2895,6 +2971,7 @@ impl Project {
 
     pub(crate) async fn undo(&mut self) -> Result<Commit> {
         let revisions = self.undo.pop().ok_or_else(|| anyhow!("nothing to undo"))?;
+        let before = self.snapshot();
         let commit = match self.session.undo_many(revisions.iter().copied()).await {
             Ok(commit) => commit,
             Err(error) => {
@@ -2902,12 +2979,14 @@ impl Project {
                 return Err(error.into());
             }
         };
+        self.note_pixels(&before, &commit);
         self.redo.push(vec![commit.revision]);
         Ok(commit)
     }
 
     pub(crate) async fn redo(&mut self) -> Result<Commit> {
         let revisions = self.redo.pop().ok_or_else(|| anyhow!("nothing to redo"))?;
+        let before = self.snapshot();
         let commit = match self.session.undo_many(revisions.iter().copied()).await {
             Ok(commit) => commit,
             Err(error) => {
@@ -2915,6 +2994,7 @@ impl Project {
                 return Err(error.into());
             }
         };
+        self.note_pixels(&before, &commit);
         self.undo.push(vec![commit.revision]);
         Ok(commit)
     }
@@ -2956,7 +3036,10 @@ impl Project {
     }
 
     async fn commit(&mut self, patch: koharu_scene::Patch) -> Result<Commit> {
-        Ok(self.session.commit(patch).await?)
+        let before = self.snapshot();
+        let commit = self.session.commit(patch).await?;
+        self.note_pixels(&before, &commit);
+        Ok(commit)
     }
 
     pub(crate) fn page(snapshot: &Snapshot, page: EntityId) -> Result<Page> {
@@ -3626,6 +3709,60 @@ mod tests {
             Project::typography_view(typography).writing_mode,
             Some(WritingMode::Vertical)
         );
+    }
+
+    #[tokio::test]
+    async fn a_stroke_lands_after_text_edits_but_not_after_pixel_edits() {
+        let mut session = Session::memory().await.unwrap();
+        let mut setup = session.snapshot().edit();
+        let page = setup
+            .add_page(PageDraft::new("page", 4.0, 4.0), At::End)
+            .unwrap();
+        let content = setup.add_text_content(page, At::End).unwrap();
+        let layer = setup.add_entity(page, At::End).unwrap();
+        setup
+            .set(
+                layer,
+                &SceneRasterLayer {
+                    origin: Origin::User,
+                    name: "Cleanup".to_owned(),
+                    kind: RasterLayerKind::Cleanup,
+                },
+            )
+            .unwrap();
+        session.commit(setup.finish().unwrap()).await.unwrap();
+        let mut project = Project::new(session, "test".to_owned());
+        let drawn_at = project.revision();
+
+        // An agent writes a translation: the stroke drawn before still lands.
+        let mut edit = project.snapshot().edit();
+        edit.set(
+            content,
+            &SceneSourceText {
+                text: Authored::user("テスト".to_owned()),
+                language: None,
+            },
+        )
+        .unwrap();
+        project.commit(edit.finish().unwrap()).await.unwrap();
+        project.ensure_pixels_unchanged(page, drawn_at).unwrap();
+
+        // Someone hides the cleanup layer: the page's pixels changed.
+        let mut edit = project.snapshot().edit();
+        edit.set(
+            layer,
+            &SceneVisibility {
+                origin: Origin::User,
+                visible: false,
+                opacity: 1.0,
+            },
+        )
+        .unwrap();
+        project.commit(edit.finish().unwrap()).await.unwrap();
+        assert!(project.ensure_pixels_unchanged(page, drawn_at).is_err());
+        project
+            .ensure_pixels_unchanged(page, project.revision())
+            .unwrap();
     }
 
     #[tokio::test]
