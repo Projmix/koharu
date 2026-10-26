@@ -120,6 +120,10 @@ pub(super) struct TrialChange {
     /// `along_source` lays one horizontal line along the source lettering:
     /// the box of its detected region, turned to its slant, a Japanese column
     /// turned 90 degrees to read top to bottom. Instead of region and angle.
+    /// A drawn line that stretches a sound (a long wavy or straight stroke
+    /// after a kana, OCR'd as 〜 or ー) is art when the clean view still shows
+    /// it: letter only the sound before it, in that kana's place and size,
+    /// and let the line carry the length; never stretch letters along it.
     #[serde(default)]
     orient: Option<TrialOrient>,
     /// Whole new typography, as set_typography takes it.
