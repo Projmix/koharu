@@ -179,9 +179,10 @@ pub(super) struct MergeTextLayers {
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(super) struct CheckChapterArguments {
-    /// Kinds to list: fit, translation, ocr, cleaning, hidden, unboxed,
-    /// cleaned (lettering the cleaning removed with no translated layer
-    /// over it); every kind when absent.
+    /// Kinds to list: fit, translation, ocr, cleaning, hidden, unboxed, and
+    /// cleaned (lettering the cleaning removed with no translated layer over
+    /// it; slow, listed only when asked for); every kind but cleaned when
+    /// absent.
     #[serde(default)]
     pub(super) kinds: Option<Vec<String>>,
     /// JSON instead of one line per issue.
@@ -253,7 +254,7 @@ pub(super) async fn page_layers(
     let frame = desktop.renderer().render(snapshot, page).await?;
     // Balloons are measured on the page as it shows without its text.
     let clean = render_image(desktop, &without_text(snapshot, page)?, page).await?;
-    let source = source_image(snapshot, page).await?;
+    let source = base_image(snapshot, page).await?;
     let reading = reading_order(snapshot, page)?;
     let shapes = koharu_renderer::balloon_flow_shapes(snapshot, page)?;
     let mut layers = Vec::new();
@@ -621,10 +622,13 @@ pub(super) struct AgentCheck {
 }
 
 impl CheckChapterArguments {
+    /// Every kind is listed by default except `cleaned`, which renders and
+    /// compares every page and is asked for by name.
     pub(super) fn wants(&self, kind: &str) -> bool {
-        self.kinds
-            .as_ref()
-            .is_none_or(|kinds| kinds.iter().any(|wanted| wanted == kind))
+        match &self.kinds {
+            Some(kinds) => kinds.iter().any(|wanted| wanted == kind),
+            None => kind != "cleaned",
+        }
     }
 }
 
@@ -635,7 +639,7 @@ pub(super) async fn chapter_cleaned_without_text(
 ) -> Result<Vec<(EntityId, Vec<[f64; 4]>)>> {
     let mut pages = Vec::new();
     for page in snapshot.pages().map(|page| page.id()).collect::<Vec<_>>() {
-        let source = source_image(snapshot, page).await?;
+        let source = base_image(snapshot, page).await?;
         let clean = render_image(desktop, &without_text(snapshot, page)?, page).await?;
         let covered = translated_boxes(snapshot, page)?;
         let places =
@@ -1146,7 +1150,11 @@ pub(super) async fn new_layer_typography(
 /// hidden, which detection no longer sees once it is gone. A pixel counts as
 /// removed lettering when source and clean page differ by more than
 /// enhancement moves a tone (dark to light or light to dark across 90
-/// levels); removed pixels within 6 px join into one place.
+/// levels); removed pixels within 6 px join into one place. Cleaning fills
+/// removed lettering with flat tone, so a place counts only when nine tenths
+/// of the clean page there sits near one tone; a redrawn page differs from
+/// its source everywhere but keeps its texture. A thin strip along the page
+/// edge is the scan border, not lettering.
 pub(super) fn cleaned_without_text(
     source: &RgbaImage,
     clean: &RgbaImage,
@@ -1160,10 +1168,38 @@ pub(super) fn cleaned_without_text(
     let luma = |pixel: &image::Rgba<u8>| {
         (u32::from(pixel[0]) * 299 + u32::from(pixel[1]) * 587 + u32::from(pixel[2]) * 114) / 1000
     };
-    let removed = source
-        .pixels()
-        .zip(clean.pixels())
-        .map(|(before, after)| luma(before).abs_diff(luma(after)) > 90)
+    // A cleaned page a model returned whole is redrawn a pixel or two off the
+    // source, so a pixel counts only when the clean page is far lighter (for
+    // dark lettering) or darker (for light lettering) across its whole 5x5
+    // neighbourhood.
+    let before = source.pixels().map(luma).collect::<Vec<_>>();
+    let after = clean.pixels().map(luma).collect::<Vec<_>>();
+    let window = |values: &[u32], pick: fn(u32, u32) -> u32| {
+        let mut rows = values.to_vec();
+        for y in 0..h {
+            for x in 0..w {
+                let (from, to) = (x.saturating_sub(2), (x + 2).min(w - 1));
+                rows[y * w + x] = (from..=to)
+                    .map(|nx| values[y * w + nx])
+                    .reduce(pick)
+                    .unwrap();
+            }
+        }
+        let mut out = rows.clone();
+        for y in 0..h {
+            for x in 0..w {
+                let (from, to) = (y.saturating_sub(2), (y + 2).min(h - 1));
+                out[y * w + x] = (from..=to).map(|ny| rows[ny * w + x]).reduce(pick).unwrap();
+            }
+        }
+        out
+    };
+    let (lightest_near, darkest_near) = (window(&after, u32::min), window(&after, u32::max));
+    let removed = (0..w * h)
+        .map(|at| {
+            (before[at] < 110 && lightest_near[at] > before[at] + 90)
+                || (before[at] > 150 && darkest_near[at] + 90 < before[at])
+        })
         .collect::<Vec<_>>();
     let near = chamfer(&removed, w, h);
     let joined = near
@@ -1206,6 +1242,30 @@ pub(super) fn cleaned_without_text(
             (bottom - top + 1) as f64,
         ];
         if count < 120 || place[2] < 12.0 || place[3] < 12.0 {
+            continue;
+        }
+        let on_edge = left == 0 || top == 0 || right == w - 1 || bottom == h - 1;
+        if on_edge && place[2].min(place[3]) < 50.0 {
+            continue;
+        }
+        let mut tones = [0usize; 256];
+        for y in top..=bottom {
+            for x in left..=right {
+                tones[after[y * w + x] as usize] += 1;
+            }
+        }
+        let total = (right - left + 1) * (bottom - top + 1);
+        let mut below = 0;
+        let median = (0..256)
+            .find(|tone| {
+                below += tones[*tone];
+                below * 2 >= total
+            })
+            .unwrap_or(0);
+        let flat = tones[median.saturating_sub(23)..=(median + 23).min(255)]
+            .iter()
+            .sum::<usize>();
+        if flat * 10 < total * 9 {
             continue;
         }
         let area = place[2] * place[3];
@@ -2426,6 +2486,26 @@ async fn rasterize(desktop: &Desktop, frame: &Frame) -> Result<RgbaImage> {
             .await?
             .image,
     )
+}
+
+/// The page the cleaning worked on: its visible scan enhancement, or the
+/// imported source. Comparing the clean page with it shows what the cleaning
+/// removed, not what enhancement moved.
+async fn base_image(snapshot: &Snapshot, page: EntityId) -> Result<RgbaImage> {
+    let role = AssetRole::new("source")?;
+    for entity in snapshot.children(page)? {
+        let enhancement = snapshot
+            .component::<koharu_scene::RasterLayer>(entity)?
+            .is_some_and(|layer| layer.kind == koharu_scene::RasterLayerKind::Enhancement);
+        if enhancement && shown(snapshot, entity)? {
+            if let Some(asset) = snapshot.asset(entity, &role)? {
+                return Ok(
+                    image::load_from_memory(&snapshot.read_blob(asset.blob).await?)?.to_rgba8(),
+                );
+            }
+        }
+    }
+    source_image(snapshot, page).await
 }
 
 async fn source_image(snapshot: &Snapshot, page: EntityId) -> Result<RgbaImage> {

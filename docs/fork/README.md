@@ -209,8 +209,10 @@ Known gaps after the rebuild:
   turned to its slant, a Japanese column turned 90 degrees. Layers carry a
   reading order computed from geometry (panels right to left in rows from
   the top, layers inside a panel the same way), and chapter_text lists them
-  in it. page_layers and check_chapter (`cleaned`) report places where the
-  cleaning removed lettering and no shown translated layer covers them. A
+  in it. page_layers and check_chapter (`cleaned`, asked for by kind since it
+  renders every page) report places where the cleaning filled removed
+  lettering with flat tone and no shown translated layer covers them,
+  compared against the visible enhancement when there is one. A
   layer sharing a balloon is measured in its own part of it, the part the
   renderer lays it out in (`balloon_flow_shapes`). A
   short word in a tall free-text box stacks one letter per line only when
