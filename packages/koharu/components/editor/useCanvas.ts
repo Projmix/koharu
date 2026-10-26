@@ -8,6 +8,7 @@ import {
   createCanvas,
   fetchCanvasManifest,
   fetchCanvasResource,
+  holdCanvasPrefetch,
   type Canvas,
 } from '@koharu/bridge/canvas'
 
@@ -123,7 +124,7 @@ export function useCanvas(
       return
 
     const requested = generation
-    cancelCanvasPrefetch()
+    const releasePrefetch = holdCanvasPrefetch()
     const currentRequest = {}
     request.current = currentRequest
     setError(null)
@@ -137,6 +138,7 @@ export function useCanvas(
       revisionRef.current !== null
 
     void prepareFrame(canvas, requested, current)
+      .finally(releasePrefetch)
       .then((activated) => {
         if (!current() || !activated) return
         activeFrame.current = { canvas, generation: requested }

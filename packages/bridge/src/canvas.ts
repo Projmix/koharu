@@ -88,6 +88,9 @@ interface CanvasModule {
 let modulePromise: Promise<CanvasModule> | null = null
 let activeCanvas: Canvas | null = null
 let prefetchGeneration = 0
+// The canvas stages one manifest at a time; while the shown frame is being
+// prepared it owns that slot and a prefetch must not restage it.
+let shownPreparations = 0
 
 export async function createCanvas(
   element: HTMLCanvasElement,
@@ -246,12 +249,24 @@ export function cancelCanvasPrefetch(): void {
   prefetchGeneration++
 }
 
+export function holdCanvasPrefetch(): () => void {
+  prefetchGeneration++
+  shownPreparations++
+  let held = true
+  return () => {
+    if (!held) return
+    held = false
+    shownPreparations--
+  }
+}
+
 export async function prefetchCanvasPages(pages: string[]) {
   const canvas = activeCanvas
-  if (!canvas || pages.length === 0) return []
+  if (!canvas || pages.length === 0 || shownPreparations > 0) return []
   const preparedPages: CanvasPagePreparation[] = []
   const generation = ++prefetchGeneration
-  const current = () => activeCanvas === canvas && prefetchGeneration === generation
+  const current = () =>
+    activeCanvas === canvas && prefetchGeneration === generation && shownPreparations === 0
   for (const page of pages) {
     const prepared = await commands.prepareCanvasPage(page)
     if (!current() || prepared === null) return preparedPages

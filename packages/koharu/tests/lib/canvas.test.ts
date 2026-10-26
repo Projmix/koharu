@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import {
   activateCanvas,
+  holdCanvasPrefetch,
   prefetchCanvasPages,
   previewCanvasOpacity,
   showCanvasPage,
@@ -69,6 +70,21 @@ describe('canvas runtime', () => {
     expect(canvas.cacheFrame).toHaveBeenCalledWith(7, 'page')
     expect(order).toEqual(['resource', 'frame'])
     expect(result).toEqual([prepared])
+  })
+
+  it('leaves the staged frame alone while the shown frame is prepared', async () => {
+    commands.prepareCanvasPage.mockClear()
+    const canvas = { stageManifest: vi.fn() } as unknown as Canvas
+    const deactivate = activateCanvas(canvas)
+    const release = holdCanvasPrefetch()
+
+    const result = await prefetchCanvasPages(['page'])
+    release()
+    deactivate()
+
+    expect(result).toEqual([])
+    expect(commands.prepareCanvasPage).not.toHaveBeenCalled()
+    expect(canvas.stageManifest).not.toHaveBeenCalled()
   })
 
   it('does not expose page data when the frame was rejected by the cache', async () => {

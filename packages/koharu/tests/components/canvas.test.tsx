@@ -48,6 +48,7 @@ vi.mock('@koharu/bridge/canvas', () => ({
     adapter.fetchResource(generation, resource),
   activateCanvas: (canvas: unknown) => adapter.activate(canvas),
   cancelCanvasPrefetch: vi.fn(),
+  holdCanvasPrefetch: vi.fn(() => () => undefined),
 }))
 
 describe('canvas lifecycle', () => {
