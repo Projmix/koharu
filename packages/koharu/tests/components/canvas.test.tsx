@@ -71,7 +71,7 @@ describe('canvas lifecycle', () => {
   it('activates each generation once and clears a closed page without fetching', async () => {
     const element = document.createElement('canvas')
     const { result, rerender } = renderHook(
-      ({ revision, generation }) => useCanvas(element, revision, generation),
+      ({ revision, generation }) => useCanvas(element, revision, generation, 0),
       { initialProps: { revision: 4 as number | null, generation: 7 } },
     )
 
@@ -89,6 +89,24 @@ describe('canvas lifecycle', () => {
     expect(result.current.hasFrame).toBe(false)
   })
 
+  it('drops every frame of the previous project before showing the next one', async () => {
+    const element = document.createElement('canvas')
+    const { result, rerender } = renderHook(
+      ({ revision, generation, epoch }) => useCanvas(element, revision, generation, epoch),
+      { initialProps: { revision: 9, generation: 7, epoch: 1 } },
+    )
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    expect(renderer.clear).not.toHaveBeenCalled()
+
+    // A copy of the project: the same page at an older revision.
+    rerender({ revision: 4, generation: 8, epoch: 2 })
+    await waitFor(() => expect(renderer.activateFrame).toHaveBeenCalledWith(8))
+    expect(renderer.clear).toHaveBeenCalledOnce()
+    expect(renderer.clear.mock.invocationCallOrder[0]).toBeLessThan(
+      renderer.stageManifest.mock.invocationCallOrder.at(-1)!,
+    )
+  })
+
   it('requests and installs only resources reported missing by the canvas', async () => {
     const order: string[] = []
     renderer.stageManifest.mockReturnValue({ token: 7, missing: ['first', 'second'] })
@@ -100,7 +118,7 @@ describe('canvas lifecycle', () => {
       order.push(`install:${resource}`)
     })
     const element = document.createElement('canvas')
-    const { result } = renderHook(() => useCanvas(element, 4, 7))
+    const { result } = renderHook(() => useCanvas(element, 4, 7, 0))
 
     await waitFor(() => expect(result.current.status).toBe('ready'))
     expect(adapter.fetchResource.mock.calls).toEqual([
@@ -116,9 +134,12 @@ describe('canvas lifecycle', () => {
 
   it('accepts an authoritative generation without reactivating its prefetched manifest', async () => {
     const element = document.createElement('canvas')
-    const { result, rerender } = renderHook(({ generation }) => useCanvas(element, 4, generation), {
-      initialProps: { generation: 7 },
-    })
+    const { result, rerender } = renderHook(
+      ({ generation }) => useCanvas(element, 4, generation, 0),
+      {
+        initialProps: { generation: 7 },
+      },
+    )
     await waitFor(() => expect(result.current.status).toBe('ready'))
     renderer.hasActiveManifest.mockImplementation((manifest: Uint8Array) => manifest[0] === 7)
     adapter.fetchManifest.mockResolvedValueOnce(new Uint8Array([7]))
@@ -134,9 +155,12 @@ describe('canvas lifecycle', () => {
   it('lets only the latest requested generation stage and activate', async () => {
     const pending = deferred<Uint8Array<ArrayBuffer>>()
     const element = document.createElement('canvas')
-    const { result, rerender } = renderHook(({ generation }) => useCanvas(element, 4, generation), {
-      initialProps: { generation: 7 },
-    })
+    const { result, rerender } = renderHook(
+      ({ generation }) => useCanvas(element, 4, generation, 0),
+      {
+        initialProps: { generation: 7 },
+      },
+    )
     await waitFor(() => expect(result.current.status).toBe('ready'))
 
     adapter.fetchManifest.mockImplementation(async (generation: number) => {
@@ -159,9 +183,12 @@ describe('canvas lifecycle', () => {
   it('does not install or activate fetched resources after the generation changes', async () => {
     const secondResource = deferred<Uint8Array<ArrayBuffer>>()
     const element = document.createElement('canvas')
-    const { result, rerender } = renderHook(({ generation }) => useCanvas(element, 4, generation), {
-      initialProps: { generation: 7 },
-    })
+    const { result, rerender } = renderHook(
+      ({ generation }) => useCanvas(element, 4, generation, 0),
+      {
+        initialProps: { generation: 7 },
+      },
+    )
     await waitFor(() => expect(result.current.status).toBe('ready'))
 
     renderer.stageManifest.mockImplementation((manifest: Uint8Array) => ({
@@ -187,9 +214,12 @@ describe('canvas lifecycle', () => {
 
   it('retries a failed page load on the live canvas and keeps its prior frame visible', async () => {
     const element = document.createElement('canvas')
-    const { result, rerender } = renderHook(({ generation }) => useCanvas(element, 4, generation), {
-      initialProps: { generation: 7 },
-    })
+    const { result, rerender } = renderHook(
+      ({ generation }) => useCanvas(element, 4, generation, 0),
+      {
+        initialProps: { generation: 7 },
+      },
+    )
     await waitFor(() => expect(result.current.status).toBe('ready'))
 
     adapter.fetchManifest.mockRejectedValueOnce(new Error('manifest unavailable'))
@@ -207,7 +237,7 @@ describe('canvas lifecycle', () => {
 
   it('clears a newly created empty canvas without fetching a manifest', async () => {
     const element = document.createElement('canvas')
-    const { result } = renderHook(() => useCanvas(element, null, 0))
+    const { result } = renderHook(() => useCanvas(element, null, 0, 0))
 
     await waitFor(() => expect(result.current.status).toBe('ready'))
     expect(renderer.clear).toHaveBeenCalledOnce()
@@ -218,7 +248,7 @@ describe('canvas lifecycle', () => {
     const resource = deferred<Uint8Array<ArrayBuffer>>()
     const element = document.createElement('canvas')
     const { result, rerender } = renderHook(
-      ({ revision, generation }) => useCanvas(element, revision, generation),
+      ({ revision, generation }) => useCanvas(element, revision, generation, 0),
       { initialProps: { revision: null as number | null, generation: 0 } },
     )
     await waitFor(() => expect(result.current.status).toBe('ready'))
@@ -238,7 +268,7 @@ describe('canvas lifecycle', () => {
 
   it('recreates the device and reinstalls the current generation after device loss', async () => {
     const element = document.createElement('canvas')
-    const { result } = renderHook(() => useCanvas(element, 4, 7))
+    const { result } = renderHook(() => useCanvas(element, 4, 7, 0))
     await waitFor(() => expect(result.current.status).toBe('ready'))
 
     act(() => adapter.lost?.('device removed'))

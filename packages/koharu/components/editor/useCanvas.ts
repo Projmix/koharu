@@ -27,7 +27,9 @@ export function useCanvas(
   element: HTMLCanvasElement | null,
   revision: number | null,
   generation: number,
+  epoch: number,
 ): CanvasState {
+  const epochRef = useRef(epoch)
   const [canvasAttempt, setCanvasAttempt] = useState(0)
   const [loadAttempt, setLoadAttempt] = useState(0)
   const [canvas, setCanvas] = useState<Canvas | null>(null)
@@ -95,6 +97,16 @@ export function useCanvas(
 
   useEffect(() => {
     if (!canvas) return
+    // Another project's frames can share this one's page ids and revisions
+    // (a copy), so a new epoch drops every frame the canvas holds.
+    if (epochRef.current !== epoch) {
+      epochRef.current = epoch
+      cancelCanvasPrefetch()
+      request.current = null
+      activeFrame.current = null
+      canvas.clear()
+      updateHasFrame(false)
+    }
     if (revision === null) {
       cancelCanvasPrefetch()
       request.current = null
@@ -154,7 +166,7 @@ export function useCanvas(
         setError(toError(reason))
         setStatus('error')
       })
-  }, [canvas, generation, loadAttempt, revision, updateHasFrame])
+  }, [canvas, epoch, generation, loadAttempt, revision, updateHasFrame])
 
   useEffect(() => {
     if (!canvas) return

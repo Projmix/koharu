@@ -116,6 +116,7 @@ const startupState = (): StartupState => ({
   jobs: [],
   image_edit_previews: [],
   canvas: {
+    epoch: 0,
     page: null,
     revision: null,
     generation: 0,

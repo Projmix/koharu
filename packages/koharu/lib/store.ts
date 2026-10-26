@@ -72,6 +72,7 @@ interface KoharuStore {
   jobs: Record<string, Job>
   downloads: Record<string, Download>
   camera: { zoom: number; translation: [number, number]; fitted: boolean }
+  canvasEpoch: number
   canvasPage: EntityId | null
   /** A requested page that was not prepared, shown as its thumbnail until it is. */
   pendingPage: EntityId | null
@@ -154,6 +155,7 @@ export const useKoharuStore = create<KoharuStore>()((set) => ({
   jobs: {},
   downloads: {},
   camera: { zoom: 1, translation: [0, 0], fitted: true },
+  canvasEpoch: 0,
   canvasPage: null,
   pendingPage: null,
   canvasRevision: null,
@@ -309,6 +311,7 @@ export function receiveError(message: string): void {
 
 function canvasSnapshot(canvas: CanvasState) {
   return {
+    canvasEpoch: canvas.epoch,
     canvasPage: canvas.page,
     canvasRevision: canvas.revision,
     canvasGeneration: canvas.generation,

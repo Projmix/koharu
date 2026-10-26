@@ -225,6 +225,13 @@ export type CanvasPagePreparation = {
 };
 
 export type CanvasState = {
+	/**
+	 *  Counts the times the presented project was let go. A frame from an
+	 *  earlier epoch belongs to another project, whose page ids and revisions
+	 *  can repeat in this one (a copy shares them), so the browser drops
+	 *  everything it holds when the epoch changes.
+	 */
+	epoch: number,
 	page: EntityId | null,
 	revision: Revision | null,
 	generation: number,

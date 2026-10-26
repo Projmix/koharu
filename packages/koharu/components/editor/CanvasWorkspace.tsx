@@ -225,6 +225,7 @@ export function CanvasWorkspace() {
   const canvasPage = useKoharuStore((state) => state.canvasPage)
   const canvasRevision = useKoharuStore((state) => state.canvasRevision)
   const canvasGeneration = useKoharuStore((state) => state.canvasGeneration)
+  const canvasEpoch = useKoharuStore((state) => state.canvasEpoch)
   const canvasSize = useKoharuStore((state) => state.canvasSize)
   const fitCanvasRequest = useKoharuStore((state) => state.fitCanvasRequest)
   const layerFrames = useKoharuStore((state) => state.layerFrames)
@@ -237,7 +238,7 @@ export function CanvasWorkspace() {
   const setTool = useKoharuStore((state) => state.setTool)
   const setBrush = useKoharuStore((state) => state.setBrush)
   const requestCanvasFit = useKoharuStore((state) => state.requestCanvasFit)
-  const canvasState = useCanvas(canvasElement, canvasRevision, canvasGeneration)
+  const canvasState = useCanvas(canvasElement, canvasRevision, canvasGeneration, canvasEpoch)
   const canvas = canvasState.canvas
   const pageId = page?.id
   const pageWidth = canvasSize[0] || page?.size.width

@@ -38,6 +38,12 @@ pub struct TransformFrame {
 
 #[derive(Clone, Debug, Serialize, Type)]
 pub struct CanvasState {
+    /// Counts the times the presented project was let go. A frame from an
+    /// earlier epoch belongs to another project, whose page ids and revisions
+    /// can repeat in this one (a copy shares them), so the browser drops
+    /// everything it holds when the epoch changes.
+    #[specta(type = f64)]
+    pub epoch: u64,
     pub page: Option<EntityId>,
     pub revision: Option<Revision>,
     #[specta(type = f64)]
@@ -67,6 +73,7 @@ pub enum TextFitWarningKind {
 
 #[derive(Default)]
 struct PresentationState {
+    epoch: u64,
     generation: u64,
     frame: Option<RenderedFrame>,
     requested_preparation: u64,
@@ -227,6 +234,7 @@ impl Desktop {
         let presentation = self.presentation.read();
         let Some(frame) = presentation.frame.as_ref() else {
             return CanvasState {
+                epoch: presentation.epoch,
                 page: None,
                 revision: None,
                 generation: presentation.generation,
@@ -259,6 +267,7 @@ impl Desktop {
             })
             .collect();
         CanvasState {
+            epoch: presentation.epoch,
             page: Some(frame.page()),
             revision: Some(frame.revision()),
             generation: presentation.generation,
@@ -433,6 +442,8 @@ impl Desktop {
         self.show_page_locked(snapshot, page, request).await
     }
 
+    /// Lets the presented project go: no frame, no cached frames, and a new
+    /// epoch, so nothing prepared for it is shown for the next project.
     pub async fn clear(&self) {
         let request = self.request_preparation();
         let _preparation = self.preparation.lock().await;
@@ -441,6 +452,8 @@ impl Desktop {
         }
         if self.replace_frame_if_current(request, None) {
             self.renderer.discard_retained_nodes();
+            let mut presentation = self.presentation.write();
+            presentation.epoch = presentation.epoch.wrapping_add(1);
         }
     }
 

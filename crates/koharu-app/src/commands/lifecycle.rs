@@ -206,6 +206,7 @@ pub(crate) async fn replace_project(handle: &AppHandle<CefRuntime>, opened: Proj
     };
 
     let desktop = handle.state::<Desktop>();
+    desktop.clear().await;
     desktop.show_page(&snapshot, page).await?;
     let canvas = desktop.canvas_state();
     drop(previous);
