@@ -107,7 +107,7 @@ pub(crate) async fn restore_project_version(
 }
 
 fn ensure_idle(processing: &Processing) -> Result<()> {
-    if !processing.stops.lock().is_empty() {
+    if processing.pipeline_running() {
         bail!("project versions cannot be changed while processing is running");
     }
     Ok(())

@@ -50,17 +50,16 @@ impl KoharuHost {
         }
     }
 
+    /// The project, its configuration and one line of counts per page; a
+    /// page's layers come from page_layers. Every page in full ran to
+    /// megabytes on a chapter, more than an agent can read.
     async fn project_context(&self) -> Result<Value> {
         let (project, pages) = {
             let current = self.handle.state::<CurrentProject>();
             let current = current.project.lock().await;
             let project = current.as_ref().context("no project is open")?;
             let snapshot = project.snapshot();
-            let pages = Project::pages(&snapshot)?
-                .into_iter()
-                .map(|page| Project::page(&snapshot, page.id))
-                .collect::<Result<Vec<_>>>()?;
-            (project.info(), pages)
+            (project.info(), typesetting::page_summaries(&snapshot)?)
         };
         let preferences = Preferences::load()?;
         let fonts = self
@@ -136,14 +135,21 @@ impl KoharuHost {
         }))
     }
 
-    /// The open project's name and revision, to tell an agent when someone
-    /// else changed the project between its calls.
-    pub(super) async fn project_revision(&self) -> Option<(String, Value)> {
-        let current = self.handle.state::<CurrentProject>();
-        let current = current.project.lock().await;
-        let info = current.as_ref()?.info();
-        let revision = serde_json::to_value(info.revision).ok()?;
-        Some((info.name, revision))
+    /// The open project's name and the text side of each page, to tell an
+    /// agent when someone else changed what its addresses rest on between
+    /// its calls.
+    pub(super) async fn seen(&self) -> Option<(String, Vec<(EntityId, u64)>)> {
+        let snapshot = self.snapshot().await.ok()?;
+        let name = self
+            .handle
+            .state::<CurrentProject>()
+            .project
+            .lock()
+            .await
+            .as_ref()?
+            .info()
+            .name;
+        Some((name, typesetting::text_signatures(&snapshot).ok()?))
     }
 
     async fn snapshot(&self) -> Result<Snapshot> {
@@ -167,8 +173,21 @@ impl KoharuHost {
     }
 
     async fn run_pipeline(&self, arguments: RunPipeline, control: &Control) -> Result<Invocation> {
-        let scope = arguments.scope()?;
-        let operation = arguments.operation.into();
+        // An agent outside the app works beside the owner, who cleans: it
+        // never paints cleanup layers, and it translates itself rather than
+        // through the pipeline's translation.
+        if self.outside
+            && matches!(
+                arguments.operation,
+                AgentPipelineOperation::Full
+                    | AgentPipelineOperation::Translation
+                    | AgentPipelineOperation::Inpainting
+            )
+        {
+            bail!(
+                "an agent outside the app runs only detection, ocr and markup: the owner cleans, and the agent translates itself"
+            );
+        }
         let snapshot = self
             .handle
             .state::<CurrentProject>()
@@ -178,17 +197,14 @@ impl KoharuHost {
             .as_ref()
             .context("no project is open")?
             .snapshot();
+        let scope = arguments.scope(&snapshot)?;
+        let operation = arguments.operation.into();
         let job = JobId::new();
         let image_edit_reviewer = DesktopImageEditReviewer::for_job(self.handle.clone(), job)?;
         let stop = StopToken::default();
-        {
-            let processing = self.handle.state::<Processing>();
-            let mut stops = processing.stops.lock();
-            if !stops.is_empty() {
-                bail!("another pipeline process is already running");
-            }
-            stops.insert(job, stop.clone());
-        }
+        self.handle
+            .state::<Processing>()
+            .admit(job, stop.clone(), &scope, &operation, None)?;
 
         let watcher = tauri::async_runtime::spawn({
             let control = control.clone();
@@ -213,7 +229,7 @@ impl KoharuHost {
             .execute(snapshot, request, &mut committer)
             .await;
         watcher.abort();
-        self.handle.state::<Processing>().stops.lock().remove(&job);
+        self.handle.state::<Processing>().release(job);
         let report = result.map_err(|error| anyhow!(error))?;
         if report.status == RunStatus::Stopped {
             bail!("pipeline processing was cancelled");
@@ -241,7 +257,7 @@ impl Host for KoharuHost {
                 vec![
                     definition::<InspectProject>(
                         "inspect_project",
-                        "Read the latest complete semantic project state after edits. This does not include page images.",
+                        "Read the project, its pipeline and typesetting configuration (target language, fonts by kind of text) and one entry per page: number, label, id, size, text layers, translated and shown. A page's layers come from page_layers.",
                     ),
                     definition::<ViewPage>(
                         "view_page",
@@ -314,7 +330,7 @@ impl Host for KoharuHost {
                     ),
                     definition::<RunPipeline>(
                         "run_pipeline",
-                        "Run Koharu's configured processing pipeline for the whole project, selected pages, or selected text elements.",
+                        "Run one stage of Koharu's configured pipeline on the whole project, some pages, or some text layers (ids or addresses: 45, 45#13). An agent outside the app runs detection, ocr or markup only.",
                     ),
                 ]
             })
@@ -1005,11 +1021,17 @@ struct RunPipeline {
 }
 
 impl RunPipeline {
-    fn scope(&self) -> Result<Scope> {
+    fn scope(&self, snapshot: &Snapshot) -> Result<Scope> {
+        let resolve = |values: &[String]| {
+            values
+                .iter()
+                .map(|value| typesetting::address(snapshot, value))
+                .collect::<Result<Vec<_>>>()
+        };
         match (self.pages.is_empty(), self.elements.is_empty()) {
             (true, true) => Ok(Scope::Project),
-            (false, true) => Ok(Scope::Pages(entities(&self.pages)?)),
-            (true, false) => Ok(Scope::Entities(entities(&self.elements)?)),
+            (false, true) => Ok(Scope::Pages(resolve(&self.pages)?)),
+            (true, false) => Ok(Scope::Entities(resolve(&self.elements)?)),
             (false, false) => bail!("pipeline scope cannot contain both pages and elements"),
         }
     }

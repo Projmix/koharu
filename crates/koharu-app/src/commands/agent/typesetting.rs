@@ -609,6 +609,51 @@ fn page_texts(snapshot: &Snapshot, page: EntityId) -> Result<Vec<Value>> {
         .collect()
 }
 
+/// One entry per page for an agent's overview: its number, label, id, size,
+/// and how many of its text layers there are, carry a translation and show.
+pub(super) fn page_summaries(snapshot: &Snapshot) -> Result<Vec<Value>> {
+    let mut pages = Vec::new();
+    for (index, page) in snapshot.pages().enumerate() {
+        let value = page.page()?;
+        let texts = page_texts(snapshot, page.id())?;
+        let count = |test: fn(&Value) -> bool| texts.iter().filter(|text| test(text)).count();
+        pages.push(json!({
+            "number": index + 1,
+            "label": value.label,
+            "id": page.id(),
+            "size": [value.width, value.height],
+            "text_layers": texts.len(),
+            "translated": count(|text| {
+                text["translation"].as_str().is_some_and(|text| !text.trim().is_empty())
+            }),
+            "shown": count(|text| text["shows"] == true),
+        }));
+    }
+    Ok(pages)
+}
+
+/// What an agent's page and layer addresses rest on, page by page in project
+/// order: each page's text layers, their texts, visibility and boxes. The
+/// owner cleaning a page leaves it alone, so an agent is told to reread only
+/// when someone changed the text side.
+pub(super) fn text_signatures(snapshot: &Snapshot) -> Result<Vec<(EntityId, u64)>> {
+    use std::hash::{Hash as _, Hasher as _};
+    let mut pages = Vec::new();
+    for page in snapshot.pages().map(|page| page.id()).collect::<Vec<_>>() {
+        let mut hasher = std::hash::DefaultHasher::new();
+        for text in page_texts(snapshot, page)? {
+            text.to_string().hash(&mut hasher);
+        }
+        if let Some(group) = snapshot.page(page)?.text_group()? {
+            for layer in group.text_layers()? {
+                format!("{:?}", layer.frame()?).hash(&mut hasher);
+            }
+        }
+        pages.push((page, hasher.finish()));
+    }
+    Ok(pages)
+}
+
 fn shown(snapshot: &Snapshot, entity: EntityId) -> Result<bool> {
     Ok(snapshot
         .component::<Visibility>(entity)?
@@ -2756,6 +2801,70 @@ mod tests {
         );
         assert!(address(&snapshot, "3#1").is_err());
         assert!(address(&snapshot, "2#9").is_err());
+    }
+
+    #[tokio::test]
+    async fn the_owner_cleaning_leaves_the_text_side_unchanged() {
+        let mut session = koharu_scene::Session::memory().await.unwrap();
+        let mut setup = session.snapshot().edit();
+        let page = setup
+            .add_page(
+                koharu_scene::PageDraft::new("1", 10.0, 10.0),
+                koharu_scene::At::End,
+            )
+            .unwrap();
+        let content = setup.add_text_content(page, koharu_scene::At::End).unwrap();
+        setup
+            .add_text_layer(
+                page,
+                koharu_scene::At::End,
+                content,
+                &koharu_scene::TextLayout {
+                    origin: Origin::User,
+                    kind: koharu_scene::TextLayoutKind::Paragraph,
+                    angle_degrees: None,
+                },
+            )
+            .unwrap();
+        let cleanup = setup.add_entity(page, koharu_scene::At::End).unwrap();
+        setup
+            .set(
+                cleanup,
+                &koharu_scene::RasterLayer {
+                    origin: Origin::User,
+                    name: "Cleanup".to_owned(),
+                    kind: koharu_scene::RasterLayerKind::Cleanup,
+                },
+            )
+            .unwrap();
+        session.commit(setup.finish().unwrap()).await.unwrap();
+        let before = text_signatures(&session.snapshot()).unwrap();
+
+        let mut cleaning = session.snapshot().edit();
+        cleaning
+            .set(
+                cleanup,
+                &Visibility {
+                    origin: Origin::User,
+                    visible: false,
+                    opacity: 1.0,
+                },
+            )
+            .unwrap();
+        session.commit(cleaning.finish().unwrap()).await.unwrap();
+        assert_eq!(text_signatures(&session.snapshot()).unwrap(), before);
+
+        let mut text = session.snapshot().edit();
+        text.set(
+            content,
+            &koharu_scene::SourceText {
+                text: koharu_scene::Authored::user("テスト".to_owned()),
+                language: None,
+            },
+        )
+        .unwrap();
+        session.commit(text.finish().unwrap()).await.unwrap();
+        assert_ne!(text_signatures(&session.snapshot()).unwrap(), before);
     }
 
     #[test]

@@ -179,16 +179,20 @@ const WORKFLOW: &str = "\n\nManual file exchange (an agent with file access work
 
 const TYPESETTING: &str = "Proofreading and typesetting (chapter.json lists layers):\n\
 - layers lists every text layer that already has a translation, page by page in reading order: its id, page_index, number (its number on pages/NNN-layers.jpg), role and speech_kind, source_text, translated_text, in_balloon, box [x, y, width, height] in page pixels (the area its text is fitted into), typography (what is set on the layer) and rendered (what the export drew: the fonts, font_size in pixels, text_box around the drawn lettering, and warning: overflow when the text does not fit its box, below_readable_size, or low_contrast when it barely stands out from the art under it). fonts names the font each kind of text gets and the fallback families.\n\
-- page_images lists pages/NNN-typeset.jpg, the page exactly as it exports now, and pages/NNN-layers.jpg, the same with each layer's box outlined in green with its number. Compare them with pages/NNN.jpg, the original.\n\
-- Proofread every layer against the original lettering and the art, in context of the whole chapter. Fix mistranslations, lines that contradict the scene or the lines around them, wrong gender agreement, inconsistent names and terms, rudeness or profanity the source does not have, and explicit, sexual or profane wording that the source has but the translation lost, softened or left out. Keep the register of the source.\n\
+- page_images lists pages/NNN-typeset.jpg, the page exactly as it exports now, and pages/NNN-layers.jpg, the same with each layer's box outlined in green with its number. Compare them with pages/NNN.jpg, the original.\n";
+
+/// How a translated chapter is proofread and lettered, whoever does it: the
+/// file exchange here and an agent working through Koharu's tools.
+pub const LETTERING_RULES: &str = "- Proofread every layer against the original lettering and the art, in context of the whole chapter. Fix mistranslations, lines that contradict the scene or the lines around them, wrong gender agreement, inconsistent names and terms, rudeness or profanity the source does not have, and explicit, sexual or profane wording that the source has but the translation lost, softened or left out. Keep the register of the source.\n\
 - Then typeset every layer so the page reads like professionally lettered manga:\n\
   - Text in a balloon is centred, fills most of the balloon's inside without touching its outline, is coloured like the original lettering (dark on a light balloon, light on a dark one) and has no outline. Similar balloons on a page get similar sizes.\n\
   - Text on art (narration, thoughts, signs outside balloons) stays readable: the original lettering's colour with an outline in a contrasting colour, stroke_width about a tenth of the font size.\n\
   - A sound effect uses the sound-effect font, is large like the original, takes the original's colour with a contrasting outline, and its box covers the area of the original sound effect.\n\
   - A drawn line that stretches a sound (a long wavy or straight stroke after a kana, read as 〜 or ー) is art when the cleaned page still shows it: letter only the sound before it, in that kana's place and size, and let the line carry the length; never stretch letters along it.\n\
   - Clear every warning: a larger box inside the balloon or the free space, a smaller size, or a shorter translation with the same meaning.\n\
-  - Text never covers a face or important art, crosses a panel border or spills out of its balloon.\n\
-- To change a layer, add an entry to layers in translation.json with its id and only what changes: translated_text, box, typography. typography replaces the layer's whole typography, so copy the exported object and edit it. preferred_font is a family from fonts, or null for the font of the text's kind; font_weight is 100 to 900 or null; font_style is normal, italic, oblique or null; with auto_fit true the text takes the largest size that fits its box, up to 2.5% of the page height, and size is ignored; with auto_fit false it is drawn at exactly size pixels, so make sure it fits (the drawn text_box grows roughly in proportion to the size); color and stroke_color are [r, g, b, a] from 0 to 255; stroke_width is in pixels, null or 0 for no outline; alignment is Start, Center, End, Justify or null; writing_mode is Horizontal, Vertical or null. A box replaces the area the text is fitted into, a balloon's included. Rotation cannot be changed.\n\
+  - Text never covers a face or important art, crosses a panel border or spills out of its balloon.\n";
+
+const TYPESETTING_EDITS: &str = "- To change a layer, add an entry to layers in translation.json with its id and only what changes: translated_text, box, typography. typography replaces the layer's whole typography, so copy the exported object and edit it. preferred_font is a family from fonts, or null for the font of the text's kind; font_weight is 100 to 900 or null; font_style is normal, italic, oblique or null; with auto_fit true the text takes the largest size that fits its box, up to 2.5% of the page height, and size is ignored; with auto_fit false it is drawn at exactly size pixels, so make sure it fits (the drawn text_box grows roughly in proportion to the size); color and stroke_color are [r, g, b, a] from 0 to 255; stroke_width is in pixels, null or 0 for no outline; alignment is Start, Center, End, Justify or null; writing_mode is Horizontal, Vertical or null. A box replaces the area the text is fitted into, a balloon's included. Rotation cannot be changed.\n\
 - Leave out a layer that needs no change. Save each page's layer changes in its work/page-NNN.json as well, and before writing translation.json compare the sizes of similar balloons and the sound-effect style across the chapter.\n\n";
 
 impl ChapterTranslation {
@@ -346,6 +350,8 @@ impl ChapterTranslation {
                 }
             }]);
             prompt.push_str(TYPESETTING);
+            prompt.push_str(LETTERING_RULES);
+            prompt.push_str(TYPESETTING_EDITS);
         }
         prompt.push_str(&serde_json::to_string_pretty(&example)?);
         Ok(ManualTranslationExport {

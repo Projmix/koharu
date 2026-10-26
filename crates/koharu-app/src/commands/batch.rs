@@ -133,7 +133,7 @@ pub(crate) async fn run_batch(
     if projects.is_empty() || stages.is_empty() {
         return Err(anyhow::anyhow!("select at least one project and one stage").into());
     }
-    if batch.running() || !processing.stops.lock().is_empty() {
+    if batch.running() || processing.pipeline_running() {
         return Err(anyhow::anyhow!("another process is already running").into());
     }
     {

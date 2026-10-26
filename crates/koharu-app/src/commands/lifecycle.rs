@@ -196,10 +196,7 @@ pub(crate) async fn replace_project(handle: &AppHandle<CefRuntime>, opened: Proj
     handle.state::<ImageEditPreviews>().cancel_all();
     let processing = handle.state::<Processing>();
     processing.clear_warnings();
-    for stop in processing.stops.lock().values() {
-        stop.stop();
-    }
-    processing.stops.lock().clear();
+    processing.stop_all();
     processing.jobs.lock().clear();
 
     let previous = {
@@ -345,10 +342,7 @@ async fn close_current_project(handle: &AppHandle<CefRuntime>) -> Result<()> {
     handle.state::<ImageEditPreviews>().cancel_all();
     let processing = handle.state::<Processing>();
     processing.clear_warnings();
-    for stop in processing.stops.lock().values() {
-        stop.stop();
-    }
-    processing.stops.lock().clear();
+    processing.stop_all();
     processing.jobs.lock().clear();
     let previous = {
         let current = handle.state::<CurrentProject>();
@@ -374,7 +368,7 @@ pub(crate) async fn import(
     processing: State<'_, Processing>,
     canvas_channel: State<'_, CanvasChannel>,
 ) -> std::result::Result<(), Error> {
-    if !processing.stops.lock().is_empty() {
+    if processing.pipeline_running() {
         return Err(anyhow::anyhow!("pages cannot be imported while processing is running").into());
     }
     let extensions = import::Format::iter()

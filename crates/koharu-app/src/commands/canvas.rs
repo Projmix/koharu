@@ -372,10 +372,8 @@ pub(crate) async fn import_cleanup_image(
     processing: State<'_, Processing>,
     canvas_channel: State<'_, CanvasChannel>,
 ) -> Result<LayerCommit, Error> {
-    if !processing.stops.lock().is_empty() {
-        return Err(
-            anyhow!("cleanup images cannot be imported while processing is running").into(),
-        );
+    if processing.cleaning_running() {
+        return Err(anyhow!("cleanup images cannot be imported while inpainting runs").into());
     }
     let (commit, page, layer) = {
         let mut project = project.project.lock().await;

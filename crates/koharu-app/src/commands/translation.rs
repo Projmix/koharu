@@ -69,7 +69,7 @@ pub(crate) async fn export_chapter_translation(
     processing: State<'_, Processing>,
     desktop: State<'_, Desktop>,
 ) -> std::result::Result<bool, Error> {
-    if !processing.stops.lock().is_empty() {
+    if processing.pipeline_running() {
         return Err(anyhow::anyhow!(
             "chapter translation export is unavailable while processing is running"
         )
@@ -107,7 +107,7 @@ pub(crate) async fn import_chapter_translation(
     project: State<'_, CurrentProject>,
     processing: State<'_, Processing>,
 ) -> std::result::Result<bool, Error> {
-    if !processing.stops.lock().is_empty() {
+    if processing.pipeline_running() {
         return Err(anyhow::anyhow!(
             "chapter translation import is unavailable while processing is running"
         )
@@ -128,7 +128,7 @@ pub(crate) async fn import_chapter_translation(
         .clone();
     let (commit, page) = {
         let mut projects = project.project.lock().await;
-        if !processing.stops.lock().is_empty() {
+        if processing.pipeline_running() {
             return Err(anyhow::anyhow!(
                 "chapter translation import is unavailable while processing is running"
             )

@@ -6,6 +6,7 @@
 
 use anyhow::{Context as _, Result, bail};
 use koharu_agent::{Control, Host as _, ToolCall};
+use koharu_scene::EntityId;
 use serde_json::{Value, json};
 use tauri::AppHandle;
 use tauri_runtime_cef::CefRuntime;
@@ -16,14 +17,84 @@ use tokio::{
 
 use super::host::KoharuHost;
 
-/// The project and revision the MCP agent last saw, after its last call.
-static LAST_SEEN: tokio::sync::Mutex<Option<(String, Value)>> = tokio::sync::Mutex::const_new(None);
+/// The project and the text side of its pages as the MCP agent last saw them,
+/// after its last call.
+static LAST_SEEN: tokio::sync::Mutex<Option<(String, Vec<(EntityId, u64)>)>> =
+    tokio::sync::Mutex::const_new(None);
 
 /// Loopback address and port of the server; `claude mcp add --transport http
 /// koharu http://127.0.0.1:4100/mcp` connects to it.
 const ADDRESS: &str = "127.0.0.1:4100";
 const PROTOCOL_VERSION: &str = "2025-06-18";
 const MAX_BODY: usize = 16 * 1024 * 1024;
+
+/// What changed on the text side between an agent's calls, made by someone
+/// else (the owner in the app); the owner's cleaning is not a change here.
+fn outside_text_changes(last: &[(EntityId, u64)], now: &[(EntityId, u64)]) -> Option<String> {
+    let order = |pages: &[(EntityId, u64)]| pages.iter().map(|(page, _)| *page).collect::<Vec<_>>();
+    if order(last) != order(now) {
+        return Some(
+            "Pages were added, removed or reordered outside this agent since its last call: \
+             page numbers may differ. Reread before relying on earlier results."
+                .to_owned(),
+        );
+    }
+    let changed = last
+        .iter()
+        .zip(now)
+        .enumerate()
+        .filter(|(_, (before, after))| before.1 != after.1)
+        .map(|(index, _)| (index + 1).to_string())
+        .collect::<Vec<_>>();
+    (!changed.is_empty()).then(|| {
+        format!(
+            "Text layers on page {} changed outside this agent since its last call: \
+             reread those pages before relying on earlier results.",
+            changed.join(", ")
+        )
+    })
+}
+
+/// The job of an agent connected over MCP, given once at the start of a
+/// session: it translates the open manga fully while the owner cleans it in
+/// the app at the same time. The proofreading and lettering rules are the
+/// ones the file exchange uses.
+const WORKFLOW: &str = "You translate the manga open in Koharu completely: \
+check and correct its OCR, translate every piece of lettering, and letter the \
+translation onto the pages. You do not clean. The owner cleans the same \
+project in the app while you work: never run inpainting, paint or erase, \
+never touch raster layers, and do not reorder, rename or delete pages.
+
+Before you start, detection and local OCR have usually run on the whole \
+project. Where they have not (a page with no text layers, a layer with no \
+source text), run them yourself with run_pipeline: detection then ocr on \
+those pages, or ocr on those layers. Run detection only on pages without \
+text layers, so earlier work is kept.
+
+Work like this:
+1. Read the whole chapter's text once with chapter_text before translating, \
+to know the story, who speaks each line, names and terms. The target \
+language and the fonts for each kind of text are in inspect_project's \
+configuration; read it once.
+2. Page by page, in order: page_layers, and crop with compare for the page \
+and its source. Correct the source text where OCR misread it (source, or \
+confirm_source when it is right); delete a layer that is not lettering; add \
+lettering no layer covers (check_chapter's unboxed, then add_text_layer); \
+merge a sound effect detected in pieces.
+3. Translate in context so the result reads as if written in the target \
+language: natural phrasing, each character's voice, consistent names and \
+terms, sound effects as that language's own onomatopoeia.
+4. Letter each page: apply_layers, preview_layers when unsure, crop to look \
+at the result.
+5. Finish with check_chapter until it reports nothing, and hide_untranslated \
+for lettering left untranslated on purpose.
+
+Pages and layers take addresses: 45 is page 45, 45#13 its layer 13. Your \
+edits stay off the owner's undo history. When a result starts with a notice \
+that text layers changed outside your calls, reread those pages first.
+
+Proofreading and lettering:
+";
 
 /// Serves until the app exits. A second Koharu on the same machine finds the
 /// port taken and runs without the server.
@@ -187,9 +258,7 @@ async fn respond(request: Request, host: &KoharuHost) -> (&'static str, Option<V
                 .unwrap_or(PROTOCOL_VERSION),
             "capabilities": { "tools": { "listChanged": false } },
             "serverInfo": { "name": "koharu", "version": env!("CARGO_PKG_VERSION") },
-            "instructions": "Tools act on the project open in Koharu, with the same \
-                undo history as the app. Start with inspect_project; element and page \
-                IDs come from it.",
+            "instructions": format!("{WORKFLOW}{}", koharu_pipeline::LETTERING_RULES),
         })),
         "ping" => Ok(json!({})),
         "tools/list" => Ok(json!({
@@ -234,24 +303,20 @@ async fn call(host: &KoharuHost, id: &Value, params: &Value) -> Value {
     // The owner edits in the app while an agent works: say so when the
     // project moved since the agent's last call, before it trusts ids or
     // page numbers it read then.
-    let before = host.project_revision().await;
+    let before = host.seen().await;
     let notice = {
         let last = LAST_SEEN.lock().await;
         match (last.as_ref(), before.as_ref()) {
             (Some((last_name, _)), Some((name, _))) if last_name != name => Some(format!(
                 "Another project is open now: {name} (was {last_name}). Reread pages and layers."
             )),
-            (Some((_, last_revision)), Some((_, revision))) if last_revision != revision => {
-                Some(format!(
-                    "The project changed outside this agent since its last call (revision {last_revision} to {revision}): pages, layers or their numbers may differ. Reread before relying on earlier results."
-                ))
-            }
+            (Some((_, last_pages)), Some((_, pages))) => outside_text_changes(last_pages, pages),
             (Some(_), None) => Some("No project is open now.".to_owned()),
             _ => None,
         }
     };
     let result = host.invoke(call, &Control::default()).await;
-    *LAST_SEEN.lock().await = host.project_revision().await;
+    *LAST_SEEN.lock().await = host.seen().await;
     match result {
         Ok(invocation) => {
             let mut content = Vec::new();

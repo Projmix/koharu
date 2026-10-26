@@ -66,13 +66,78 @@ pub enum JobState {
 
 #[derive(Default)]
 pub(crate) struct Processing {
-    pub(crate) stops: Mutex<HashMap<JobId, StopToken>>,
+    running: Mutex<HashMap<JobId, Running>>,
     pub(crate) jobs: Mutex<HashMap<JobId, Job>>,
     pub(crate) warnings: Mutex<HashMap<(ProjectId, EntityId), PageWarning>>,
     resume: Mutex<Option<ProcessingRequest>>,
 }
 
+/// A running job and what it may write. The owner's own Remove, Restore and
+/// region OCR run beside anything, so the owner keeps cleaning while an agent
+/// runs detection and OCR; pipeline runs exclude each other, and one that
+/// paints cleanup layers excludes imported cleanup images.
+struct Running {
+    stop: StopToken,
+    manual: bool,
+    cleaning: bool,
+}
+
 impl Processing {
+    /// Admits job `id`, or fails when its work collides with a running job.
+    pub(crate) fn admit(
+        &self,
+        id: JobId,
+        stop: StopToken,
+        scope: &koharu_pipeline::Scope,
+        operation: &koharu_pipeline::Operation,
+        inpainting_mask: Option<&koharu_pipeline::InpaintingMask>,
+    ) -> anyhow::Result<()> {
+        let manual = accepts_queued_manual_request(scope, operation, inpainting_mask);
+        let mut running = self.running.lock();
+        if !manual && running.values().any(|job| !job.manual) {
+            anyhow::bail!("another process is already running");
+        }
+        running.insert(
+            id,
+            Running {
+                stop,
+                manual,
+                cleaning: !manual && requests_inpainting(operation),
+            },
+        );
+        Ok(())
+    }
+
+    pub(crate) fn release(&self, id: JobId) {
+        self.running.lock().remove(&id);
+    }
+
+    /// Whether a pipeline run, not one of the owner's own edits, is running.
+    pub(crate) fn pipeline_running(&self) -> bool {
+        self.running.lock().values().any(|job| !job.manual)
+    }
+
+    /// Whether a running pipeline paints cleanup layers.
+    pub(crate) fn cleaning_running(&self) -> bool {
+        self.running.lock().values().any(|job| job.cleaning)
+    }
+
+    pub(crate) fn stop(&self, id: JobId) -> anyhow::Result<()> {
+        self.running
+            .lock()
+            .get(&id)
+            .with_context(|| format!("job {id} is not running"))?
+            .stop
+            .stop();
+        Ok(())
+    }
+
+    pub(crate) fn stop_all(&self) {
+        for job in self.running.lock().drain().map(|(_, job)| job) {
+            job.stop.stop();
+        }
+    }
+
     pub(crate) fn clear_warnings(&self) {
         self.warnings.lock().clear();
     }
@@ -270,15 +335,13 @@ pub(crate) async fn start_job(
     let id = JobId::new();
     let image_edit_reviewer = DesktopImageEditReviewer::for_job(handle.clone(), id)?;
     let stop = StopToken::default();
-    {
-        let mut stops = processing.stops.lock();
-        if !stops.is_empty()
-            && !accepts_queued_manual_request(&scope, &operation, inpainting_mask.as_ref())
-        {
-            return Err(anyhow::anyhow!("another process is already running").into());
-        }
-        stops.insert(id, stop.clone());
-    }
+    processing.admit(
+        id,
+        stop.clone(),
+        &scope,
+        &operation,
+        inpainting_mask.as_ref(),
+    )?;
     let job = Job {
         id,
         state: JobState::Running,
@@ -512,7 +575,7 @@ pub(crate) async fn start_job(
         task_handle
             .state::<Processing>()
             .finish(retry, stopped || error.is_some());
-        task_handle.state::<Processing>().stops.lock().remove(&id);
+        task_handle.state::<Processing>().release(id);
         let state = if stopped {
             JobState::Stopped
         } else if error.is_some() {
@@ -589,25 +652,64 @@ mod tests {
     }
 
     #[test]
-    fn stop_tokens_remain_independent_by_job_id() {
+    fn the_owners_edits_run_beside_a_pipeline_run_and_stop_by_job() {
         let processing = Processing::default();
-        let first_job = JobId::new();
-        let second_job = JobId::new();
-        let first_stop = StopToken::default();
-        let second_stop = StopToken::default();
-        processing
-            .stops
-            .lock()
-            .insert(first_job, first_stop.clone());
-        processing
-            .stops
-            .lock()
-            .insert(second_job, second_stop.clone());
+        let page = koharu_scene::EntityId::new();
+        let mask = koharu_pipeline::InpaintingMask {
+            page,
+            png: Arc::from(Vec::<u8>::new()),
+            intent: koharu_pipeline::InpaintingIntent::Remove,
+        };
+        let remove = koharu_pipeline::Scope::Region {
+            page,
+            bounds: koharu_pipeline::Bounds {
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+            },
+        };
+        let inpainting = koharu_pipeline::Operation::Only {
+            stage: koharu_pipeline::Stage::Inpainting,
+        };
+        let ocr = koharu_pipeline::Operation::Stages {
+            stages: vec![
+                koharu_pipeline::Stage::Detection,
+                koharu_pipeline::Stage::Ocr,
+            ],
+        };
+        let (owner, agent) = (JobId::new(), JobId::new());
+        let (owner_stop, agent_stop) = (StopToken::default(), StopToken::default());
 
-        processing.stops.lock().get(&first_job).unwrap().stop();
+        processing
+            .admit(owner, owner_stop.clone(), &remove, &inpainting, Some(&mask))
+            .unwrap();
+        processing
+            .admit(
+                agent,
+                agent_stop.clone(),
+                &koharu_pipeline::Scope::Project,
+                &ocr,
+                None,
+            )
+            .unwrap();
+        assert!(
+            processing
+                .admit(
+                    JobId::new(),
+                    StopToken::default(),
+                    &koharu_pipeline::Scope::Project,
+                    &ocr,
+                    None,
+                )
+                .is_err()
+        );
+        assert!(processing.pipeline_running());
+        assert!(!processing.cleaning_running());
 
-        assert!(first_stop.stopped());
-        assert!(!second_stop.stopped());
+        processing.stop(owner).unwrap();
+        assert!(owner_stop.stopped());
+        assert!(!agent_stop.stopped());
     }
 
     #[tokio::test]
@@ -824,10 +926,6 @@ pub(crate) async fn stop_job(
     job: JobId,
     processing: State<'_, Processing>,
 ) -> std::result::Result<(), Error> {
-    let stops = processing.stops.lock();
-    let stop = stops
-        .get(&job)
-        .with_context(|| format!("job {job} is not running"))?;
-    stop.stop();
+    processing.stop(job)?;
     Ok(())
 }

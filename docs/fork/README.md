@@ -217,9 +217,17 @@ Known gaps after the rebuild:
   renderer lays it out in (`balloon_flow_shapes`). A
   short word in a tall free-text box stacks one letter per line only when
   its author gave no line breaks. Unknown
-  argument fields are refused. A call after the
-  project changed outside the agent (the owner editing in the app) starts
-  with a notice to reread. An agent outside the app edits beside the
+  argument fields are refused. The server's instructions give the agent
+  one job: translate the open manga completely (OCR check, translation,
+  lettering, by the same lettering rules as the file exchange) while the
+  owner cleans it in the app, running detection and OCR itself where they
+  have not run; over MCP run_pipeline takes only detection, ocr and markup.
+  A call after someone changed the text side outside the agent (page order,
+  text layers, their texts or boxes) starts with a notice naming the pages
+  to reread; the owner's cleaning raises none. The owner's own Remove,
+  Restore and region OCR run beside a pipeline run, so neither the owner
+  nor the agent waits for the other's job, and a cleanup image can be
+  imported unless a pipeline run is inpainting. An agent outside the app edits beside the
   owner: its edits stay off the owner's undo history, and a newer frame
   keeps the stroke the owner is drawing. The owner's own edits (strokes,
   Remove, Restore, undo) reach the host one at a time in the order made and

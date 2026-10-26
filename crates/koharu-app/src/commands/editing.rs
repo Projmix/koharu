@@ -142,7 +142,7 @@ pub(crate) async fn duplicate_pages(
     processing: State<'_, Processing>,
     canvas_channel: State<'_, CanvasChannel>,
 ) -> Result<DuplicatePagesResult, Error> {
-    if !processing.stops.lock().is_empty() {
+    if processing.pipeline_running() {
         return Err(
             anyhow::anyhow!("pages cannot be duplicated while processing is running").into(),
         );
@@ -176,7 +176,7 @@ pub(crate) async fn paste_text_blocks(
     processing: State<'_, Processing>,
     canvas_channel: State<'_, CanvasChannel>,
 ) -> Result<TextTransferResult, Error> {
-    if !processing.stops.lock().is_empty() {
+    if processing.pipeline_running() {
         return Err(anyhow::anyhow!("text cannot be pasted while processing is running").into());
     }
     let (commit, result) = {

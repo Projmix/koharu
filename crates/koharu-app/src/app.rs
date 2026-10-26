@@ -227,10 +227,7 @@ pub fn run(context: tauri::Context<CefRuntime>) -> Result<()> {
                 WindowEvent::CloseRequested { .. } | WindowEvent::Destroyed
             ) {
                 let processing = window.state::<Processing>();
-                for stop in processing.stops.lock().values() {
-                    stop.stop();
-                }
-                processing.stops.lock().clear();
+                processing.stop_all();
                 processing.jobs.lock().clear();
                 window.state::<AgentState>().cancel_all();
             }

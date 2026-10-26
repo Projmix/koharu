@@ -25,7 +25,7 @@ const PRODUCER: &str = "dev.koharu.pipeline.translation";
 mod manual;
 mod review;
 
-pub use manual::{ImportScope, Typeset};
+pub use manual::{ImportScope, LETTERING_RULES, Typeset};
 
 pub(super) struct Processor {
     config: TranslationConfig,
