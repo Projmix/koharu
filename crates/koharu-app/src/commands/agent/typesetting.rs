@@ -2804,6 +2804,88 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_text_change_keeps_the_layers_typography() {
+        let mut session = koharu_scene::Session::memory().await.unwrap();
+        let mut setup = session.snapshot().edit();
+        let page = setup
+            .add_page(
+                koharu_scene::PageDraft::new("1", 100.0, 100.0),
+                koharu_scene::At::End,
+            )
+            .unwrap();
+        let content = setup.add_text_content(page, koharu_scene::At::End).unwrap();
+        let layer = setup
+            .add_text_layer(
+                page,
+                koharu_scene::At::End,
+                content,
+                &koharu_scene::TextLayout {
+                    origin: Origin::User,
+                    kind: koharu_scene::TextLayoutKind::Paragraph,
+                    angle_degrees: None,
+                },
+            )
+            .unwrap();
+        let typography = koharu_scene::Typography {
+            origin: Origin::User,
+            preferred_font: Some("NM Shonen 2".to_owned()),
+            font_weight: None,
+            font_style: None,
+            size: Some(30.0),
+            auto_fit: false,
+            color: Some([0, 0, 0, 255]),
+            stroke_color: None,
+            stroke_width: None,
+            alignment: None,
+            writing_mode: None,
+            extensions: Default::default(),
+            line_breaking: None,
+        };
+        setup.set(layer, &typography).unwrap();
+        setup
+            .set(
+                content,
+                &koharu_scene::SourceText {
+                    text: koharu_scene::Authored::user("こんにちは".to_owned()),
+                    language: None,
+                },
+            )
+            .unwrap();
+        session.commit(setup.finish().unwrap()).await.unwrap();
+
+        let change: TrialChange =
+            serde_json::from_value(json!({ "element": "1#1", "text": "Привет" })).unwrap();
+        let steps = steps(&session.snapshot(), vec![change], |_| None).unwrap();
+        let mut edit = session.snapshot().edit();
+        for step in steps {
+            step(&mut edit).unwrap();
+        }
+        session.commit(edit.finish().unwrap()).await.unwrap();
+
+        let snapshot = session.snapshot();
+        assert_eq!(
+            snapshot
+                .component::<koharu_scene::Typography>(layer)
+                .unwrap()
+                .unwrap(),
+            typography
+        );
+        assert_eq!(
+            snapshot
+                .text_layer(layer)
+                .unwrap()
+                .content()
+                .unwrap()
+                .translation()
+                .unwrap()
+                .unwrap()
+                .text
+                .value,
+            "Привет"
+        );
+    }
+
+    #[tokio::test]
     async fn the_owner_cleaning_leaves_the_text_side_unchanged() {
         let mut session = koharu_scene::Session::memory().await.unwrap();
         let mut setup = session.snapshot().edit();
