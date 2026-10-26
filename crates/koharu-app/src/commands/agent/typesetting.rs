@@ -101,6 +101,9 @@ pub(super) struct TrialChange {
     /// New source text. Writing it confirms an unverified OCR reading.
     #[serde(default)]
     source: Option<String>,
+    /// Confirm the OCR reading as it is.
+    #[serde(default)]
+    confirm_source: bool,
     /// New text box, [x, y, width, height] in page pixels.
     #[serde(default)]
     region: Option<[f64; 4]>,
@@ -134,6 +137,42 @@ pub(super) struct ApplyLayers {
     pub(super) changes: Vec<TrialChange>,
     /// Return each changed layer in full, as page_layers does, instead of
     /// the short form.
+    #[serde(default)]
+    pub(super) full: bool,
+    /// Return no layers, only that the changes landed: for text and source
+    /// passes that do not need the layout.
+    #[serde(default)]
+    pub(super) quiet: bool,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub(super) struct HideUntranslated {
+    /// First and last page number, from 1; every page when absent.
+    #[serde(default)]
+    pub(super) pages: Option<[usize; 2]>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub(super) struct MergeTextLayers {
+    /// Two or more layers of one page, in reading order; the first keeps the
+    /// merged text, the others go.
+    pub(super) layers: Vec<String>,
+    /// Put between the joined source texts and translations; nothing by
+    /// default, as for one sound effect split in two.
+    #[serde(default)]
+    pub(super) joiner: String,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub(super) struct CheckChapterArguments {
+    /// Kinds to list: fit, translation, ocr, cleaning, hidden, unboxed;
+    /// every kind when absent.
+    #[serde(default)]
+    pub(super) kinds: Option<Vec<String>>,
+    /// JSON instead of one line per issue.
     #[serde(default)]
     pub(super) full: bool,
 }
@@ -532,20 +571,75 @@ fn shown(snapshot: &Snapshot, entity: EntityId) -> Result<bool> {
 }
 
 /// The chapter check with page and layer numbers, both texts, and what hides
-/// a hidden block, for agents.
-pub(super) fn chapter_issues(snapshot: &Snapshot, check: ChapterCheck) -> Result<Value> {
+/// a hidden block, for agents: one line per issue by default, kinds to keep
+/// optional (fit, translation, ocr, cleaning, hidden, unboxed).
+pub(super) fn chapter_issues(
+    snapshot: &Snapshot,
+    check: ChapterCheck,
+    arguments: &CheckChapterArguments,
+) -> Result<Value> {
+    let wanted = |kind: &str| {
+        arguments
+            .kinds
+            .as_ref()
+            .is_none_or(|kinds| kinds.iter().any(|wanted| wanted == kind))
+    };
     let pages = snapshot.pages().map(|page| page.id()).collect::<Vec<_>>();
+    let page_number = |page: EntityId| {
+        pages
+            .iter()
+            .position(|candidate| *candidate == page)
+            .map_or(0, |index| index + 1)
+    };
     let page_value = |page: EntityId| -> Result<Value> {
         Ok(json!({
             "id": page,
-            "number": pages.iter().position(|candidate| *candidate == page).map(|index| index + 1),
+            "number": page_number(page),
             "label": snapshot.page(page)?.page()?.label,
         }))
     };
     let mut texts = Vec::new();
+    let mut lines = Vec::new();
+    let mut counts = std::collections::BTreeMap::<&str, usize>::new();
     for issue in check.texts {
+        let mut kinds = Vec::new();
+        if let Some(fit) = issue.fit {
+            kinds.push((
+                "fit",
+                format!("fit={}", json!(fit).as_str().unwrap_or("warning")),
+            ));
+        }
+        if let Some(translation) = issue.translation {
+            kinds.push((
+                "translation",
+                format!(
+                    "translation={}",
+                    json!(translation).as_str().unwrap_or("issue")
+                ),
+            ));
+        }
+        if issue.ocr_unverified {
+            kinds.push(("ocr", "ocr_unverified".to_owned()));
+        }
+        if issue.cleaning_unverified {
+            kinds.push(("cleaning", "cleaning_unverified".to_owned()));
+        }
+        if issue.hidden {
+            kinds.push(("hidden", "hidden".to_owned()));
+        }
+        kinds.retain(|(kind, _)| wanted(kind));
+        if kinds.is_empty() {
+            continue;
+        }
+        for (kind, _) in &kinds {
+            *counts.entry(kind).or_default() += 1;
+        }
         let numbers = numbering(snapshot, issue.page)?;
         let content = snapshot.text_layer(issue.element)?.content()?;
+        let source = content.source()?.map(|source| source.text.value);
+        let translation = content
+            .translation()?
+            .map(|translation| translation.text.value);
         let hidden_by = if !issue.hidden {
             Value::Null
         } else if !shown(snapshot, issue.element)? {
@@ -553,32 +647,187 @@ pub(super) fn chapter_issues(snapshot: &Snapshot, check: ChapterCheck) -> Result
         } else {
             json!({ "text_group": snapshot.page(issue.page)?.text_group()?.map(|group| group.id()) })
         };
-        texts.push(json!({
-            "page": page_value(issue.page)?,
-            "layer": numbers(issue.element),
-            "element": issue.element,
-            "source": content.source()?.map(|source| source.text.value),
-            "translation": content.translation()?.map(|translation| translation.text.value),
-            "translation_issue": issue.translation,
-            "fit": issue.fit,
-            "ocr_unverified": issue.ocr_unverified,
-            "cleaning_unverified": issue.cleaning_unverified,
-            "hidden": issue.hidden,
-            "hidden_by": hidden_by,
-        }));
+        let address = format!("{}#{}", page_number(issue.page), numbers(issue.element));
+        if arguments.full {
+            texts.push(json!({
+                "address": address,
+                "page": page_value(issue.page)?,
+                "layer": numbers(issue.element),
+                "element": issue.element,
+                "source": source,
+                "translation": translation,
+                "translation_issue": issue.translation,
+                "fit": issue.fit,
+                "ocr_unverified": issue.ocr_unverified,
+                "cleaning_unverified": issue.cleaning_unverified,
+                "hidden": issue.hidden,
+                "hidden_by": hidden_by,
+            }));
+        } else {
+            let text = translation
+                .filter(|text| !text.trim().is_empty())
+                .or(source)
+                .unwrap_or_default()
+                .replace('\n', " / ");
+            let text = text.chars().take(48).collect::<String>();
+            lines.push(format!(
+                "{address} {} | {text}",
+                kinds
+                    .iter()
+                    .map(|(_, label)| label.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            ));
+        }
     }
-    let unboxed_text = check
-        .unboxed_text
-        .into_iter()
-        .map(|issue| {
+    let mut unboxed_text = Vec::new();
+    if wanted("unboxed") {
+        for issue in check.unboxed_text {
             let boxes = koharu_pipeline::open_unboxed_text(snapshot, issue.page)?
                 .into_iter()
                 .map(|flag| [flag.x, flag.y, flag.width, flag.height].map(f64::round))
                 .collect::<Vec<_>>();
-            Ok(json!({ "page": page_value(issue.page)?, "count": issue.count, "boxes": boxes }))
-        })
-        .collect::<Result<Vec<_>>>()?;
-    Ok(json!({ "texts": texts, "unboxed_text": unboxed_text }))
+            *counts.entry("unboxed").or_default() += boxes.len();
+            if arguments.full {
+                unboxed_text.push(
+                    json!({ "page": page_value(issue.page)?, "count": issue.count, "boxes": boxes }),
+                );
+            } else {
+                lines.push(format!(
+                    "{} unboxed {}",
+                    page_number(issue.page),
+                    boxes
+                        .iter()
+                        .map(|[x, y, width, height]| format!("[{x},{y},{width},{height}]"))
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                ));
+            }
+        }
+    }
+    if arguments.full {
+        return Ok(json!({ "texts": texts, "unboxed_text": unboxed_text, "counts": counts }));
+    }
+    let summary = if counts.is_empty() {
+        "No issues.".to_owned()
+    } else {
+        counts
+            .iter()
+            .map(|(kind, count)| format!("{kind} {count}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    Ok(Value::String(format!("{summary}\n{}", lines.join("\n"))))
+}
+
+/// Visibility off for every shown text layer without a translation: blocks
+/// an agent decided are not lettering, or left untranslated.
+pub(super) fn hide_untranslated_steps(
+    snapshot: &Snapshot,
+    arguments: &HideUntranslated,
+) -> Result<(Vec<EditStep>, usize)> {
+    let [first, last] = arguments.pages.unwrap_or([1, usize::MAX]);
+    let mut steps: Vec<EditStep> = Vec::new();
+    for (index, page) in snapshot.pages().enumerate() {
+        if index + 1 < first || index + 1 > last {
+            continue;
+        }
+        let Some(group) = page.text_group()? else {
+            continue;
+        };
+        for layer in group.text_layers()? {
+            let translated = layer
+                .content()?
+                .translation()?
+                .is_some_and(|translation| !translation.text.value.trim().is_empty());
+            if translated || !shown(snapshot, layer.id())? {
+                continue;
+            }
+            let id = layer.id();
+            steps.push(Box::new(move |edit| {
+                edit.promote_entity_to_user(id)?;
+                edit.set(
+                    id,
+                    &Visibility {
+                        origin: Origin::User,
+                        visible: false,
+                        opacity: 1.0,
+                    },
+                )
+            }));
+        }
+    }
+    let count = steps.len();
+    Ok((steps, count))
+}
+
+/// One sound effect detection split in two (ぐ|ぽっ): the first layer takes
+/// the joined source and translation and the box around all of them.
+pub(super) fn merge_steps(
+    snapshot: &Snapshot,
+    layers: &[EntityId],
+    joiner: &str,
+) -> Result<Vec<EditStep>> {
+    let [first, ..] = layers else {
+        bail!("name two or more layers to merge");
+    };
+    if layers.len() < 2 {
+        bail!("name two or more layers to merge");
+    }
+    let page = owning_page(snapshot, *first)?;
+    let mut sources = Vec::new();
+    let mut translations = Vec::new();
+    let (mut left, mut top, mut right, mut bottom) = (
+        f64::INFINITY,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        f64::NEG_INFINITY,
+    );
+    for layer in layers {
+        if owning_page(snapshot, *layer)? != page {
+            bail!("merged layers must be on one page");
+        }
+        let text = snapshot.text_layer(*layer)?;
+        let content = text.content()?;
+        sources.extend(content.source()?.map(|source| source.text.value));
+        translations.extend(
+            content
+                .translation()?
+                .map(|translation| translation.text.value)
+                .filter(|text| !text.trim().is_empty()),
+        );
+        if let Some((l, t, r, b)) = text.frame()?.as_ref().and_then(bounds) {
+            left = left.min(l);
+            top = top.min(t);
+            right = right.max(r);
+            bottom = bottom.max(b);
+        }
+    }
+    let mut steps = vec![Project::source_step(
+        snapshot,
+        *first,
+        sources.join(joiner),
+    )?];
+    if !translations.is_empty() {
+        steps.push(Project::translation_step(
+            snapshot,
+            *first,
+            Some(translations.join(joiner)),
+        )?);
+    }
+    if right > left && bottom > top {
+        let points = [(left, top), (right, top), (right, bottom), (left, bottom)]
+            .map(|(x, y)| Point { x, y })
+            .to_vec();
+        steps.push(Project::geometry_step(
+            snapshot,
+            vec![GeometryUpdate {
+                layer: *first,
+                points: Some(points),
+            }],
+        )?);
+    }
+    Ok(steps)
 }
 
 /// A crop of `page` in the chosen view, as PNG.
@@ -587,7 +836,7 @@ pub(super) async fn crop(
     snapshot: &Snapshot,
     arguments: &Crop,
 ) -> Result<(Value, String)> {
-    let page = entity(&arguments.page)?;
+    let page = address(snapshot, &arguments.page)?;
     let mut image = match arguments.view {
         CropView::Typeset => render_image(desktop, snapshot, page).await?,
         CropView::Clean => {
@@ -640,8 +889,8 @@ pub(super) async fn preview_layers(
     snapshot: &Snapshot,
     arguments: PreviewLayers,
 ) -> Result<(Value, String)> {
-    let page = entity(&arguments.page)?;
-    let changed = elements(&arguments.changes)?;
+    let page = address(snapshot, &arguments.page)?;
+    let changed = elements(snapshot, &arguments.changes)?;
     for layer in &changed {
         if snapshot.page(*layer).is_ok() || owning_page(snapshot, *layer)? != page {
             bail!("element {layer} is not a layer of page {page}");
@@ -832,11 +1081,45 @@ fn balloon_flow_step(snapshot: &Snapshot, layer: EntityId) -> Result<EditStep> {
     }))
 }
 
+/// A page or layer an agent names: its id, a page number (`45`), or a page
+/// and layer number (`45#13`) as chapter_text and page_layers count them.
+pub(super) fn address(snapshot: &Snapshot, value: &str) -> Result<EntityId> {
+    if let Ok(id) = entity(value) {
+        return Ok(id);
+    }
+    let (page, layer) = match value.trim().split_once('#') {
+        Some((page, layer)) => (page, Some(layer)),
+        None => (value.trim(), None),
+    };
+    let number = |text: &str| {
+        text.trim()
+            .parse::<usize>()
+            .ok()
+            .filter(|number| *number > 0)
+            .with_context(|| format!("{value} is neither an id nor a page#layer address"))
+    };
+    let page = snapshot
+        .pages()
+        .nth(number(page)? - 1)
+        .with_context(|| format!("the chapter has no page {page}"))?
+        .id();
+    let Some(layer) = layer else {
+        return Ok(page);
+    };
+    let index = number(layer)? - 1;
+    snapshot
+        .page(page)?
+        .text_group()?
+        .and_then(|group| group.text_layers().ok()?.nth(index))
+        .map(|layer| layer.id())
+        .with_context(|| format!("page {value} has no such layer"))
+}
+
 /// The elements the changes name, in order.
-pub(super) fn elements(changes: &[TrialChange]) -> Result<Vec<EntityId>> {
+pub(super) fn elements(snapshot: &Snapshot, changes: &[TrialChange]) -> Result<Vec<EntityId>> {
     changes
         .iter()
-        .map(|change| entity(&change.element))
+        .map(|change| address(snapshot, &change.element))
         .collect()
 }
 
@@ -849,7 +1132,7 @@ pub(super) fn steps(
 ) -> Result<Vec<EditStep>> {
     let mut steps = Vec::new();
     for change in changes {
-        let layer = entity(&change.element)?;
+        let layer = address(snapshot, &change.element)?;
         let text = match (change.text, change.lines) {
             (Some(_), Some(_)) => bail!("give {layer} either text or lines, not both"),
             (text, lines) => text.or_else(|| lines.map(|lines| lines.join("\n"))),
@@ -858,6 +1141,14 @@ pub(super) fn steps(
             steps.push(Project::translation_step(snapshot, layer, Some(text))?);
         }
         if let Some(source) = change.source {
+            steps.push(Project::source_step(snapshot, layer, source)?);
+        } else if change.confirm_source {
+            let source = snapshot
+                .text_layer(layer)?
+                .content()?
+                .source()?
+                .map(|source| source.text.value)
+                .with_context(|| format!("{layer} has no source text to confirm"))?;
             steps.push(Project::source_step(snapshot, layer, source)?);
         }
         if change.flow == Some(TrialFlow::Balloon) {
@@ -1026,12 +1317,22 @@ fn layer_value(
         .as_ref()
         .and_then(|geometry| unturned(geometry, angle.unwrap_or(0.0)));
     let page_width = snapshot.page(owning_page(snapshot, layer)?)?.page()?.width;
+    let ocr = match content.source_region()? {
+        Some(region) => region.ocr()?.map(|analysis| {
+            json!({
+                "confidence": analysis.confidence,
+                "unverified": koharu_pipeline::ocr_unverified(content).unwrap_or(false),
+            })
+        }),
+        None => None,
+    };
     Ok(json!({
         "id": layer,
         "number": number,
         "visible": visible,
         "role": content.role()?.map(|role| role.role),
         "source_text": content.source()?.map(|source| source.text.value),
+        "ocr": ocr,
         "translated_text": content.translation()?.map(|translation| translation.text.value),
         "box": frame_box,
         "angle": angle,
@@ -1892,6 +2193,50 @@ mod tests {
     use koharu_scene::Point as ScenePoint;
 
     use super::*;
+
+    #[tokio::test]
+    async fn an_address_names_a_page_and_its_numbered_layer() {
+        let mut session = koharu_scene::Session::memory().await.unwrap();
+        let mut setup = session.snapshot().edit();
+        let mut layers = Vec::new();
+        let mut pages = Vec::new();
+        for label in ["1", "2"] {
+            let page = setup
+                .add_page(
+                    koharu_scene::PageDraft::new(label, 10.0, 10.0),
+                    koharu_scene::At::End,
+                )
+                .unwrap();
+            pages.push(page);
+            for _ in 0..2 {
+                let content = setup.add_text_content(page, koharu_scene::At::End).unwrap();
+                layers.push(
+                    setup
+                        .add_text_layer(
+                            page,
+                            koharu_scene::At::End,
+                            content,
+                            &koharu_scene::TextLayout {
+                                origin: Origin::User,
+                                kind: koharu_scene::TextLayoutKind::Paragraph,
+                                angle_degrees: None,
+                            },
+                        )
+                        .unwrap(),
+                );
+            }
+        }
+        session.commit(setup.finish().unwrap()).await.unwrap();
+        let snapshot = session.snapshot();
+        assert_eq!(address(&snapshot, "2").unwrap(), pages[1]);
+        assert_eq!(address(&snapshot, "2#2").unwrap(), layers[3]);
+        assert_eq!(
+            address(&snapshot, &layers[0].to_string()).unwrap(),
+            layers[0]
+        );
+        assert!(address(&snapshot, "3#1").is_err());
+        assert!(address(&snapshot, "2#9").is_err());
+    }
 
     #[test]
     fn a_balloon_is_measured_on_its_pixels_with_its_letters_filled() {

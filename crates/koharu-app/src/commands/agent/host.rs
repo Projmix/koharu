@@ -275,27 +275,35 @@ impl Host for KoharuHost {
                     ),
                     definition::<typesetting::PageLayers>(
                         "page_layers",
-                        "List a page's text layers in their numbered order: text, role, box (as set, with angle when turned), balloon box and the largest box inside the balloon around the text (measured on the page's pixels when the balloon is closed), typography, what the renderer drew (font, size, auto_fit_max: the largest size auto-fit may choose, small: below 1.2% of the page width, layout box, each line with its width and room, hyphenated words, warning and what overflowed), and lettering: whether the cleaning removed the source lettering and its tone, with check_color when the fill is the opposite tone. Also flow (balloon: laid out in the balloon's shape with no box of its own; box: in its box), the balloon's interior (box and centre of the lobe holding the text, without tail and bumps), off_centre (drawn block centre minus that centre, px) and edge_gap (narrowest gap between a line and the balloon's inside, px; negative crosses it), fits_up_to (when auto-fit stopped at its ceiling: the largest size the box takes, to set as a fixed size), empty_balloons (balloons with no text layer, for add_text_layer) and the edge lines of the neighbouring pages.",
+                        "List a page's text layers in their numbered order: text, role, box (as set, with angle when turned), balloon box and the largest box inside the balloon around the text (measured on the page's pixels when the balloon is closed), typography, what the renderer drew (font, size, auto_fit_max: the largest size auto-fit may choose, small: below 1.2% of the page width, layout box, each line with its width and room, hyphenated words, warning and what overflowed), and lettering: whether the cleaning removed the source lettering and its tone, with check_color when the fill is the opposite tone. Also flow (balloon: laid out in the balloon's shape with no box of its own; box: in its box), the balloon's interior (box and centre of the lobe holding the text, without tail and bumps), off_centre (drawn block centre minus that centre, px) and edge_gap (narrowest gap between a line and the balloon's inside, px; negative crosses it), fits_up_to (when auto-fit stopped at its ceiling: the largest size the box takes, to set as a fixed size), empty_balloons (balloons with no text layer, for add_text_layer) and the edge lines of the neighbouring pages. Pages and layers can be named by id or by address: 45 for page 45, 45#13 for its layer 13.",
                     ),
                     definition::<typesetting::Crop>(
                         "crop",
-                        "Return a PNG of part of a page as it shows: typeset (with text), clean (without its text layers) or source (as imported). compare puts the source on the left and the view on the right; outline draws every text layer's box with its number and the measured balloon interiors.",
+                        "Return a PNG of part of a page as it shows: typeset (with text), clean (without its text layers) or source (as imported). compare puts the source on the left and the view on the right; outline draws every text layer's box with its number and the measured balloon interiors. Pages and layers can be named by id or by address: 45 for page 45, 45#13 for its layer 13.",
                     ),
                     definition::<typesetting::PreviewLayers>(
                         "preview_layers",
-                        "Trial-render text, box and typography changes to layers of one page without committing anything. Returns each changed layer in short form (box, size, lines, warning, overflow, hyphenated, small; full for the whole layer) and a PNG of the area at the stated scale. compare puts the source on the left; outline draws the changed layers' boxes with their numbers and the measured balloon interiors. To fit text, try auto_fit in the intended box; line_breaking whole_words or manual stops auto-fit from hyphenating.",
+                        "Trial-render text, box and typography changes to layers of one page without committing anything. Returns each changed layer in short form (box, size, lines, warning, overflow, hyphenated, small; full for the whole layer) and a PNG of the area at the stated scale. compare puts the source on the left; outline draws the changed layers' boxes with their numbers and the measured balloon interiors. To fit text, try auto_fit in the intended box; line_breaking whole_words or manual stops auto-fit from hyphenating. Pages and layers can be named by id or by address: 45 for page 45, 45#13 for its layer 13.",
                     ),
                     definition::<typesetting::ApplyLayers>(
                         "apply_layers",
-                        "Apply text, box, typography and visibility changes to any layers as one edit, one undo step. flow: balloon drops a layer's box and lays it out in the shape of the balloon that holds it (each line as wide as the balloon at its height, placed by the renderer, a joined balloon shared among its layers); a region gives it a box again. Returns each changed layer in short form (box, flow, size, lines, warning, overflow, hyphenated, small, inner_box, off_centre, edge_gap, fits_up_to); full returns them as page_layers does.",
+                        "Apply text, box, typography and visibility changes to any layers as one edit, one undo step. flow: balloon drops a layer's box and lays it out in the shape of the balloon that holds it (each line as wide as the balloon at its height, placed by the renderer, a joined balloon shared among its layers); a region gives it a box again. Returns each changed layer in short form (box, flow, size, lines, warning, overflow, hyphenated, small, inner_box, off_centre, edge_gap, fits_up_to); full returns them as page_layers does. Pages and layers can be named by id or by address: 45 for page 45, 45#13 for its layer 13.",
                     ),
                     definition::<typesetting::AddTextLayer>(
                         "add_text_layer",
                         "Add a text layer in a region with its translation and typography: an empty balloon from page_layers' empty_balloons, or a box from check_chapter's unboxed_text for lettering drawn in the art. Inside a balloon the text flows in the balloon's shape; elsewhere it fits the region. Without a colour the text is black, or white on a dark ground. One undo step; returns the layer as apply_layers does.",
                     ),
-                    definition::<CheckChapter>(
+                    definition::<typesetting::HideUntranslated>(
+                        "hide_untranslated",
+                        "Hide every shown text layer that has no translation (not lettering, or left untranslated), on all pages or a page range, as one undo step. Returns how many were hidden.",
+                    ),
+                    definition::<typesetting::MergeTextLayers>(
+                        "merge_text_layers",
+                        "Merge two or more text layers of one page into the first, in reading order: one sound effect detection split in two. Sources and translations are joined (with joiner, nothing by default), the box covers all of them, and the other layers are deleted.",
+                    ),
+                    definition::<typesetting::CheckChapterArguments>(
                         "check_chapter",
-                        "Run the pre-export chapter check: blocks with no translation, Japanese left in a translation, fit warnings, unverified OCR (cleared by writing the source text) or cleaning, translated text that is hidden and what hides it, and pages with lettering outside every text region. Pages and layers carry their numbers.",
+                        "Run the pre-export chapter check: blocks with no translation, Japanese left in a translation, fit warnings, unverified OCR (cleared by writing the source text) or cleaning, translated text that is hidden and what hides it, and pages with lettering outside every text region. Pages and layers carry their numbers. One line per issue (page#layer, kinds, text) after a count by kind; kinds keeps only some (fit, translation, ocr, cleaning, hidden, unboxed); full returns JSON.",
                     ),
                     definition::<typesetting::ChapterText>(
                         "chapter_text",
@@ -531,8 +539,8 @@ impl Host for KoharuHost {
             }
             "page_layers" => {
                 let arguments: typesetting::PageLayers = arguments(&call)?;
-                let page = entity(&arguments.page)?;
                 let snapshot = self.snapshot().await?;
+                let page = typesetting::address(&snapshot, &arguments.page)?;
                 let desktop = self.handle.state::<Desktop>();
                 Invocation::read(typesetting::page_layers(&desktop, &snapshot, page).await?)
             }
@@ -556,8 +564,8 @@ impl Host for KoharuHost {
             }
             "apply_layers" => {
                 let arguments: typesetting::ApplyLayers = arguments(&call)?;
-                let layers = typesetting::elements(&arguments.changes)?;
-                let full = arguments.full;
+                let layers = typesetting::elements(&self.snapshot().await?, &arguments.changes)?;
+                let (full, quiet) = (arguments.full, arguments.quiet);
                 let desktop = self.handle.state::<Desktop>();
                 let sizes = layers
                     .iter()
@@ -581,24 +589,60 @@ impl Host for KoharuHost {
                         })
                     })
                     .await?;
-                let snapshot = self.snapshot().await?;
-                invocation.value["layers"] =
-                    typesetting::report(&desktop, &snapshot, &layers, full).await?;
+                if !quiet {
+                    let snapshot = self.snapshot().await?;
+                    invocation.value["layers"] =
+                        typesetting::report(&desktop, &snapshot, &layers, full).await?;
+                }
                 Ok(invocation)
+            }
+            "hide_untranslated" => {
+                let arguments: typesetting::HideUntranslated = arguments(&call)?;
+                self.mutate(|project| {
+                    Box::pin(async move {
+                        let snapshot = project.snapshot();
+                        let (steps, count) =
+                            typesetting::hide_untranslated_steps(&snapshot, &arguments)?;
+                        if count == 0 {
+                            bail!("every shown text layer already has a translation");
+                        }
+                        Ok((
+                            project.apply_steps(steps).await?,
+                            json!({ "hidden": count }),
+                        ))
+                    })
+                })
+                .await
+            }
+            "merge_text_layers" => {
+                let arguments: typesetting::MergeTextLayers = arguments(&call)?;
+                let snapshot = self.snapshot().await?;
+                let layers = arguments
+                    .layers
+                    .iter()
+                    .map(|layer| typesetting::address(&snapshot, layer))
+                    .collect::<Result<Vec<_>>>()?;
+                let joiner = arguments.joiner;
+                self.mutate(|project| {
+                    Box::pin(async move {
+                        let snapshot = project.snapshot();
+                        let steps = typesetting::merge_steps(&snapshot, &layers, &joiner)?;
+                        project.apply_steps(steps).await?;
+                        let commit = project.delete_layers(layers[1..].to_vec()).await?;
+                        Ok((
+                            commit,
+                            json!({ "kept": layers[0], "removed": &layers[1..] }),
+                        ))
+                    })
+                })
+                .await
             }
             "add_text_layer" => {
                 let arguments: typesetting::AddTextLayer = arguments(&call)?;
-                let page = entity(&arguments.page)?;
+                let page = typesetting::address(&self.snapshot().await?, &arguments.page)?;
                 let text = match (arguments.text, arguments.lines) {
                     (Some(_), Some(_)) => bail!("give either text or lines, not both"),
-                    (text, lines) => text.or_else(|| {
-                        lines.map(|lines| {
-                            lines.join(
-                                "
-",
-                            )
-                        })
-                    }),
+                    (text, lines) => text.or_else(|| lines.map(|lines| lines.join("\n"))),
                 };
                 let [x, y, width, height] = arguments.region;
                 let frame = Frame {
@@ -647,7 +691,7 @@ impl Host for KoharuHost {
                 Ok(invocation)
             }
             "check_chapter" => {
-                let _: CheckChapter = arguments(&call)?;
+                let arguments: typesetting::CheckChapterArguments = arguments(&call)?;
                 let (source, target) = {
                     let config = koharu_pipeline::PipelineConfig::load()?;
                     let config = config.read()?;
@@ -659,7 +703,7 @@ impl Host for KoharuHost {
                 let snapshot = self.snapshot().await?;
                 let desktop = self.handle.state::<Desktop>();
                 let check = output::chapter_check(&snapshot, &desktop, source, target).await?;
-                Invocation::read(typesetting::chapter_issues(&snapshot, check)?)
+                Invocation::read(typesetting::chapter_issues(&snapshot, check, &arguments)?)
             }
             "chapter_text" => {
                 let arguments: typesetting::ChapterText = arguments(&call)?;
@@ -719,10 +763,6 @@ fn entities(values: &[String]) -> Result<Vec<EntityId>> {
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct InspectProject {}
-
-#[derive(Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-struct CheckChapter {}
 
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
