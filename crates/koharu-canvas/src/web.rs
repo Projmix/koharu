@@ -105,32 +105,6 @@ struct StagedManifestDto {
     missing: Vec<String>,
 }
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase", tag = "kind")]
-enum StrokeCommitDto {
-    Paint {
-        page: String,
-        revision: u64,
-        layer: Option<String>,
-        diameter: f32,
-        color: [u8; 4],
-        points: Vec<Point>,
-    },
-    Erase {
-        page: String,
-        revision: u64,
-        layer: String,
-        diameter: f32,
-        points: Vec<Point>,
-    },
-    Inpaint {
-        page: String,
-        revision: u64,
-        diameter: f32,
-        points: Vec<Point>,
-    },
-}
-
 #[derive(Clone, Copy)]
 struct Camera {
     zoom: f64,
@@ -199,16 +173,29 @@ enum StrokeKind {
     Inpaint,
 }
 
+/// The stroke under the pointer. Finishing it submits it, so the next stroke
+/// can begin while the host commits this one.
 struct StrokeEdit {
     page: LayerId,
-    revision: Revision,
     kind: StrokeKind,
     layer: Option<LayerId>,
     diameter: f32,
     color: [u8; 4],
     points: Vec<Point>,
     preview: Scene,
-    pending: bool,
+}
+
+/// A finished stroke the host has not shown yet. It keeps drawing until a
+/// frame of its page at or after its commit revision is active, in the order
+/// it was made, so strokes made back to back never blink out.
+struct SubmittedStroke {
+    id: u32,
+    page: LayerId,
+    kind: StrokeKind,
+    layer: Option<LayerId>,
+    color: [u8; 4],
+    preview: Scene,
+    shown_at: Option<Revision>,
 }
 
 struct StagedFrame {
@@ -476,6 +463,8 @@ struct CanvasState {
     tinted: HashSet<LayerId>,
     transform: Option<TransformEdit>,
     stroke: Option<StrokeEdit>,
+    submitted: Vec<SubmittedStroke>,
+    next_stroke_id: u32,
     dirty: bool,
     generation: u64,
 }
@@ -498,6 +487,8 @@ impl CanvasState {
             tinted: HashSet::new(),
             transform: None,
             stroke: None,
+            submitted: Vec::new(),
+            next_stroke_id: 0,
             dirty: true,
             generation: 0,
         }
@@ -697,18 +688,18 @@ impl CanvasState {
         if page_changed {
             self.transform = None;
             self.stroke = None;
-        } else {
-            if self.transform.as_ref().is_some_and(|edit| {
-                !edit.pending || (edit.page == frame.page() && edit.revision < frame.revision())
-            }) {
-                self.transform = None;
-            }
-            if self.stroke.as_ref().is_some_and(|edit| {
-                !edit.pending || (edit.page == frame.page() && edit.revision < frame.revision())
-            }) {
-                self.stroke = None;
-            }
+            self.submitted.clear();
+        } else if self.transform.as_ref().is_some_and(|edit| {
+            !edit.pending || (edit.page == frame.page() && edit.revision < frame.revision())
+        }) {
+            self.transform = None;
         }
+        // A stroke is drawn in page space, so a newer frame of the same page
+        // keeps it; only the strokes this frame already shows retire.
+        let (page, revision) = (frame.page(), frame.revision());
+        self.submitted.retain(|stroke| {
+            stroke.page == page && stroke.shown_at.is_none_or(|shown| shown > revision)
+        });
         self.opacity.clear();
         self.manifests.insert(frame.page(), manifest);
         self.frame = Some(frame);
@@ -770,6 +761,7 @@ impl CanvasState {
         self.opacity.clear();
         self.transform = None;
         self.stroke = None;
+        self.submitted.clear();
         self.dirty = true;
     }
 
@@ -810,10 +802,31 @@ impl CanvasState {
         let camera = self.camera.affine();
         let normalize =
             Affine::translate((-f64::from(frame.origin().0), -f64::from(frame.origin().1)));
-        let erase = self
-            .stroke
-            .as_ref()
-            .filter(|stroke| stroke.kind == StrokeKind::Erase);
+        // Submitted strokes first, in the order they were made, then the one
+        // under the pointer. The compositor takes one erase mask, so erase
+        // strokes share it across the layers they erase.
+        let strokes = self
+            .submitted
+            .iter()
+            .filter(|stroke| stroke.page == frame.page())
+            .map(|stroke| (stroke.kind, stroke.layer, stroke.color, &stroke.preview))
+            .chain(
+                self.stroke
+                    .as_ref()
+                    .map(|stroke| (stroke.kind, stroke.layer, stroke.color, &stroke.preview)),
+            )
+            .collect::<Vec<_>>();
+        let mut erase_mask = None::<Scene>;
+        let mut erased = HashSet::new();
+        for (_, layer, _, preview) in strokes
+            .iter()
+            .filter(|(kind, ..)| *kind == StrokeKind::Erase)
+        {
+            erase_mask
+                .get_or_insert_with(Scene::new)
+                .append(preview, None);
+            erased.extend(*layer);
+        }
         let mut commands = Vec::new();
         let mut vectors = Scene::new();
         let mut vectors_pending = false;
@@ -848,7 +861,7 @@ impl CanvasState {
                         image: image.clone(),
                         transform: camera * transform * layer.placement(),
                         opacity: presentation.opacity.clamp(0.0, 1.0),
-                        erase: erase.and_then(|edit| edit.layer) == Some(layer.id()),
+                        erase: erased.contains(&layer.id()),
                         tint: self.tinted.contains(&layer.id()),
                     }));
                 }
@@ -859,13 +872,12 @@ impl CanvasState {
                     && presentation.opacity > 0.0;
             }
         }
-        if let Some(stroke) = self
-            .stroke
-            .as_ref()
-            .filter(|stroke| stroke.kind != StrokeKind::Erase)
+        for (kind, _, color, preview) in strokes
+            .iter()
+            .filter(|(kind, ..)| *kind != StrokeKind::Erase)
         {
-            let opacity = match stroke.kind {
-                StrokeKind::Paint => f32::from(stroke.color[3]) / 255.0,
+            let opacity = match kind {
+                StrokeKind::Paint => f32::from(color[3]) / 255.0,
                 StrokeKind::Inpaint => 116.0 / 255.0,
                 StrokeKind::Erase => 1.0,
             };
@@ -878,7 +890,7 @@ impl CanvasState {
                     &page_rect,
                 );
             }
-            vectors.append(&stroke.preview, None);
+            vectors.append(preview, None);
             if opacity < 1.0 {
                 vectors.pop_layer();
             }
@@ -894,8 +906,8 @@ impl CanvasState {
         );
         Composition {
             commands,
-            erase_mask: erase
-                .map(|stroke| viewport_scene(&stroke.preview, camera, page_rect, viewport_rect)),
+            erase_mask: erase_mask
+                .map(|mask| viewport_scene(&mask, camera, page_rect, viewport_rect)),
             clip: page_clip(self.camera, page_size, self.size),
         }
     }
@@ -1589,14 +1601,12 @@ impl WebCanvas {
         draw_dot(&mut preview, point, diameter, preview_color);
         browser.canvas.stroke = Some(StrokeEdit {
             page: frame.page(),
-            revision: frame.revision(),
             kind,
             layer,
             diameter,
             color,
             points: vec![point],
             preview,
-            pending: false,
         });
         browser.canvas.dirty = true;
         drop(browser);
@@ -1619,9 +1629,6 @@ impl WebCanvas {
             .stroke
             .as_mut()
             .ok_or_else(|| js_message("no stroke is active"))?;
-        if stroke.pending {
-            return Err(js_message("stroke is waiting for its replacement frame"));
-        }
         let mut changed = false;
         for point in points {
             if !point.x.is_finite() || !point.y.is_finite() {
@@ -1655,44 +1662,65 @@ impl WebCanvas {
         self.request_render()
     }
 
+    /// Submits the stroke under the pointer and returns its id. It keeps
+    /// drawing until `settleStroke` names the revision that shows it, or
+    /// `dropStroke` withdraws it, so another stroke can begin at once.
     #[wasm_bindgen(js_name = finishStroke)]
-    pub fn finish_stroke(&self) -> Result<JsValue, JsValue> {
+    pub fn finish_stroke(&self) -> Result<u32, JsValue> {
         let mut browser = self.browser_mut()?;
-        let stroke = browser
-            .canvas
+        let canvas = &mut browser.canvas;
+        let stroke = canvas
             .stroke
-            .as_mut()
+            .take()
             .ok_or_else(|| js_message("no stroke is active"))?;
-        if stroke.pending {
-            return Err(js_message("stroke is already waiting for replacement"));
-        }
-        stroke.pending = true;
-        let page = format_layer_id(stroke.page);
-        let revision = stroke.revision.get();
-        let output = match stroke.kind {
-            StrokeKind::Paint => StrokeCommitDto::Paint {
-                page,
-                revision,
-                layer: stroke.layer.map(format_layer_id),
-                diameter: stroke.diameter,
-                color: stroke.color,
-                points: stroke.points.clone(),
-            },
-            StrokeKind::Erase => StrokeCommitDto::Erase {
-                page,
-                revision,
-                layer: format_layer_id(stroke.layer.expect("erase target validated")),
-                diameter: stroke.diameter,
-                points: stroke.points.clone(),
-            },
-            StrokeKind::Inpaint => StrokeCommitDto::Inpaint {
-                page,
-                revision,
-                diameter: stroke.diameter,
-                points: stroke.points.clone(),
-            },
-        };
-        serde_wasm_bindgen::to_value(&output).map_err(js_error)
+        canvas.next_stroke_id = canvas.next_stroke_id.wrapping_add(1).max(1);
+        let id = canvas.next_stroke_id;
+        canvas.submitted.push(SubmittedStroke {
+            id,
+            page: stroke.page,
+            kind: stroke.kind,
+            layer: stroke.layer,
+            color: stroke.color,
+            preview: stroke.preview,
+            shown_at: None,
+        });
+        Ok(id)
+    }
+
+    /// The host committed stroke `id` at `revision`: it retires once a frame
+    /// of its page at that revision or later is active.
+    #[wasm_bindgen(js_name = settleStroke)]
+    pub fn settle_stroke(&self, id: u32, revision: u64) -> Result<(), JsValue> {
+        let revision = Revision::new(revision);
+        let mut browser = self.browser_mut()?;
+        let canvas = &mut browser.canvas;
+        let shown = canvas
+            .frame
+            .as_ref()
+            .map(|frame| (frame.page(), frame.revision()));
+        let before = canvas.submitted.len();
+        canvas.submitted.retain_mut(|stroke| {
+            if stroke.id != id {
+                return true;
+            }
+            stroke.shown_at = Some(revision);
+            shown.is_none_or(|(page, current)| page != stroke.page || current < revision)
+        });
+        canvas.dirty |= canvas.submitted.len() != before;
+        drop(browser);
+        self.request_render()
+    }
+
+    /// Withdraws submitted stroke `id`: its commit failed or was stopped.
+    #[wasm_bindgen(js_name = dropStroke)]
+    pub fn drop_stroke(&self, id: u32) -> Result<(), JsValue> {
+        let mut browser = self.browser_mut()?;
+        let canvas = &mut browser.canvas;
+        let before = canvas.submitted.len();
+        canvas.submitted.retain(|stroke| stroke.id != id);
+        canvas.dirty |= canvas.submitted.len() != before;
+        drop(browser);
+        self.request_render()
     }
 
     #[wasm_bindgen(js_name = cancelStroke)]

@@ -32,7 +32,11 @@ export interface Canvas {
   cancelTransform(): void
   beginStroke(stroke: CanvasStroke): void
   extendStroke(points: Point[]): void
-  finishStroke(): void
+  /** Submits the stroke under the pointer; it shows until settled or dropped. */
+  finishStroke(): number
+  /** The host committed submitted stroke `id` at `revision`. */
+  settleStroke(id: number, revision: number): void
+  dropStroke(id: number): void
   cancelStroke(): void
   sampleColor(point: Point): Promise<CanvasColor>
   dispose(): void
@@ -72,7 +76,9 @@ interface CanvasHandle {
     color: Uint8Array,
   ): void
   extendStroke(points: Point[]): void
-  finishStroke(): unknown
+  finishStroke(): number
+  settleStroke(id: number, revision: bigint): void
+  dropStroke(id: number): void
   cancelStroke(): void
   sampleColor(x: number, y: number): Promise<Uint8Array>
   setDeviceLostCallback(callback: ((reason: string) => void) | null): void
@@ -163,7 +169,9 @@ export async function createCanvas(
         new Uint8Array(stroke.color ?? [0, 0, 0, 0]),
       ),
     extendStroke: (points) => canvas.extendStroke(points),
-    finishStroke: () => void canvas.finishStroke(),
+    finishStroke: () => canvas.finishStroke(),
+    settleStroke: (id, revision) => canvas.settleStroke(id, BigInt(revision)),
+    dropStroke: (id) => canvas.dropStroke(id),
     cancelStroke: () => canvas.cancelStroke(),
     sampleColor: async (point) => {
       const color = await canvas.sampleColor(point.x, point.y)

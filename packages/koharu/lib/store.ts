@@ -229,32 +229,7 @@ export function receiveStartupState(state: StartupState): void {
   })
 }
 
-/**
- * While a brush, eraser, clone or inpaint stroke is drawn, a canvas state from
- * someone else's edit (an agent writing text) waits: applying it would reset
- * the canvas and drop the stroke. The stroke then commits on its own
- * revision, which native code accepts while the page's pixels are unchanged.
- */
-let strokeActive: () => boolean = () => false
-let heldCanvas: CanvasState | null = null
-
-export function holdCanvasDuring(active: () => boolean): void {
-  strokeActive = active
-}
-
-export function releaseCanvas(): void {
-  if (!heldCanvas || strokeActive()) return
-  const canvas = heldCanvas
-  heldCanvas = null
-  useKoharuStore.setState(canvasSnapshot(canvas))
-}
-
 export function receiveCanvas(canvas: CanvasState): void {
-  if (strokeActive()) {
-    heldCanvas = canvas
-    return
-  }
-  heldCanvas = null
   useKoharuStore.setState(canvasSnapshot(canvas))
 }
 

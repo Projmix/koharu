@@ -27,7 +27,7 @@ import {
   selectableLayer,
   translateFrames,
 } from '@/lib/geometry'
-import { enqueueHistory, historyShortcutKey } from '@/lib/history'
+import { enqueueEdit, enqueueHistory, historyShortcutKey } from '@/lib/history'
 import { stepPage } from '@/lib/navigation'
 import {
   pageKey,
@@ -41,12 +41,10 @@ import {
 } from '@/lib/queries'
 import { runLayerShortcut } from '@/lib/rasterLayers'
 import {
-  holdCanvasDuring,
   isBrushTool,
   maxBrushDiameter,
   MIN_BRUSH_DIAMETER,
   receiveError,
-  releaseCanvas,
   useKoharuStore,
   type CanvasTool,
 } from '@/lib/store'
@@ -60,6 +58,7 @@ import {
   commands,
   type Frame,
   type Layer,
+  type LayerCommit,
   type Page,
   type Point,
   type TextClipboardPayload,
@@ -109,7 +108,6 @@ type RasterLayer = Extract<Layer, { type: 'raster' }>
 interface StrokeGesture {
   kind: 'paint' | 'erase' | 'inpaint' | 'clone'
   pointer: number
-  revision: number
   layer: string | null
   points: Point[]
   diameter: number
@@ -189,14 +187,6 @@ export function CanvasWorkspace() {
   const surface = useRef<HTMLDivElement>(null)
   const [canvasElement, setCanvasElement] = useState<HTMLCanvasElement | null>(null)
   const gesture = useRef<Gesture | null>(null)
-  useEffect(() => {
-    const isStroke = () => {
-      const kind = gesture.current?.kind
-      return kind === 'paint' || kind === 'erase' || kind === 'inpaint' || kind === 'clone'
-    }
-    holdCanvasDuring(isStroke)
-    return () => holdCanvasDuring(() => false)
-  }, [])
   const previousPageIndex = useRef<number | null>(null)
   const spaceHeld = useRef(false)
   const transformActive = useRef(false)
@@ -205,13 +195,15 @@ export function CanvasWorkspace() {
   const transformFinal = useRef<TransformFrame[]>([])
   const transformInitial = useRef<TransformFrame[]>([])
   const commitPending = useRef(false)
+  // Strokes sent to the host and not yet committed. A new stroke never waits
+  // for them; a transform, measured against the frame, does.
+  const pendingStrokes = useRef(0)
+  const cloneStrokeId = useRef(0)
   const [committedEdit, setCommittedEdit] = useState<{
     canvas: Canvas
     page: string
     revision: number
-    kind: 'stroke' | 'transform'
   } | null>(null)
-  const commandQueue = useRef<Promise<void>>(Promise.resolve())
   const [previews, setPreviews] = useState<Record<string, Frame>>({})
   const [draft, setDraft] = useState<Frame | null>(null)
   const [hovered, setHovered] = useState<string | null>(null)
@@ -223,6 +215,11 @@ export function CanvasWorkspace() {
   const compareOriginal = useKoharuStore((state) => state.compareOriginal)
   const cloneSource = useKoharuStore((state) => state.cloneSource)
   const [cloneStroke, setCloneStroke] = useState<CloneStroke | null>(null)
+  // Clone Stamp and reveal strokes sent to the host, each shown until a frame
+  // at its commit revision (shownAt) is installed.
+  const [submittedClones, setSubmittedClones] = useState<
+    { id: number; stroke: CloneStroke; shownAt: number | null }[]
+  >([])
   const pendingPage = useKoharuStore((state) => state.pendingPage)
   const pages = usePages().data
   const canvasPage = useKoharuStore((state) => state.canvasPage)
@@ -258,15 +255,6 @@ export function CanvasWorkspace() {
         layer.type === 'raster' && layer.kind === 'cleanup' && layer.visibility.visible,
     )
 
-  const enqueue = useCallback(<Result,>(operation: () => Promise<Result>): Promise<Result> => {
-    const pending = commandQueue.current.then(operation)
-    commandQueue.current = pending.then(
-      () => undefined,
-      () => undefined,
-    )
-    return pending
-  }, [])
-
   const transformUpdates = useFrameCommand((elements: TransformFrame[]) =>
     canvas?.updateTransform(elements),
   )
@@ -290,11 +278,8 @@ export function CanvasWorkspace() {
         canvasRevision < committedEdit.revision)
     )
       return
-    // The committed frame now shows the Clone Stamp stroke.
-    setCloneStroke(null)
     try {
-      if (committedEdit.kind === 'stroke') committedEdit.canvas.cancelStroke()
-      else committedEdit.canvas.cancelTransform()
+      committedEdit.canvas.cancelTransform()
     } catch (error) {
       if (committedEdit.canvas === canvas) receiveError(errorMessage(error))
     } finally {
@@ -383,7 +368,7 @@ export function CanvasWorkspace() {
         return
       }
       commitPending.current = true
-      void enqueue(() =>
+      void enqueueEdit(() =>
         call(
           commands.setGeometry,
           elements.map(({ element, frame }) => ({ layer: element, points: framePoints(frame) })),
@@ -411,14 +396,13 @@ export function CanvasWorkspace() {
       return
     }
     commitPending.current = true
-    void enqueue(() => call(commands.commitTransform, revision, elements))
+    void enqueueEdit(() => call(commands.commitTransform, revision, elements))
       .then((revision) => {
         if (revision === null) {
           canvas?.cancelTransform()
           return
         }
-        if (canvas && pageId)
-          setCommittedEdit({ canvas, page: pageId, revision, kind: 'transform' })
+        if (canvas && pageId) setCommittedEdit({ canvas, page: pageId, revision })
         return refresh(projectKey, pagesKey, pageKey)
       })
       .catch(() => {
@@ -429,7 +413,7 @@ export function CanvasWorkspace() {
         commitPending.current = false
         setPreviews({})
       })
-  }, [canvas, enqueue, pageId, transformUpdates])
+  }, [canvas, pageId, transformUpdates])
 
   // One path for a drawn OCR rectangle and a flagged unboxed text: add the
   // region, select its layer, then read it.
@@ -463,11 +447,11 @@ export function CanvasWorkspace() {
   const dismissUnboxedText = useCallback(
     (flag: UnboxedText) => {
       if (!pageId) return
-      void enqueue(() => call(commands.dismissUnboxedText, pageId, flag))
+      void enqueueEdit(() => call(commands.dismissUnboxedText, pageId, flag))
         .then(() => refresh(projectKey, pagesKey, pageKey))
         .catch(() => undefined)
     },
-    [enqueue, pageId],
+    [pageId],
   )
 
   const cancelGesture = useCallback(() => {
@@ -493,7 +477,6 @@ export function CanvasWorkspace() {
     }
     setDraft(null)
     setPreviews({})
-    releaseCanvas()
   }, [canvas, strokeUpdates, transformUpdates])
 
   const fitCanvas = useCallback(() => {
@@ -628,10 +611,32 @@ export function CanvasWorkspace() {
     if (pendingPage && pendingPage === canvasPage) useKoharuStore.setState({ pendingPage: null })
   }, [canvasPage, pendingPage])
 
-  useEffect(
-    () => cancelGesture,
-    [cancelGesture, canvasGeneration, canvasRevision, page?.id, tool, textTransformTarget],
-  )
+  useEffect(() => cancelGesture, [cancelGesture, page?.id, tool, textTransformTarget])
+
+  // A stroke is drawn in page space and survives a newer frame of its page;
+  // a gesture measured against the frame it replaced does not.
+  useEffect(() => {
+    const kind = gesture.current?.kind
+    if (kind !== 'paint' && kind !== 'erase' && kind !== 'inpaint' && kind !== 'clone')
+      cancelGesture()
+  }, [cancelGesture, canvasGeneration, canvasRevision])
+
+  // A submitted clone stroke retires once its commit's frame is installed.
+  useEffect(() => {
+    if (
+      canvasRevision === null ||
+      canvasState.status !== 'ready' ||
+      canvasState.generation !== canvasGeneration
+    )
+      return
+    setSubmittedClones((strokes) => {
+      const left = strokes.filter(
+        (stroke) => stroke.shownAt === null || stroke.shownAt > canvasRevision,
+      )
+      return left.length === strokes.length ? strokes : left
+    })
+  }, [canvasGeneration, canvasRevision, canvasState.generation, canvasState.status])
+  useEffect(() => setSubmittedClones([]), [pageId])
 
   useEffect(() => {
     cursorPage.current = null
@@ -807,7 +812,7 @@ export function CanvasWorkspace() {
       window.removeEventListener('keyup', up)
       window.removeEventListener('blur', blur)
     }
-  }, [cancelGesture, colorSampling, enqueue, page, requestCanvasFit, selectLayers, setTool])
+  }, [cancelGesture, colorSampling, page, requestCanvasFit, selectLayers, setTool])
 
   useEffect(() => {
     const editable = (target: EventTarget | null) =>
@@ -1052,7 +1057,7 @@ export function CanvasWorkspace() {
       const [layer] = useKoharuStore.getState().selectedLayers
       if (!layer || current.frame.width < 4 / zoom || current.frame.height < 4 / zoom) return
       commitPending.current = true
-      void enqueue(() =>
+      void enqueueEdit(() =>
         call(commands.setGeometry, [{ layer, points: framePoints(current.frame) }]),
       )
         .then(() => {
@@ -1068,10 +1073,9 @@ export function CanvasWorkspace() {
     } else if (current.kind === 'restore') {
       setDraft(null)
       if (current.frame.width < 4 / zoom || current.frame.height < 4 / zoom) return
-      commitPending.current = true
-      void enqueue(() => call(commands.commitRestore, current.revision, current.frame))
-        .catch(() => undefined)
-        .finally(() => (commitPending.current = false))
+      void enqueueEdit(() => call(commands.commitRestore, page.id, current.frame)).catch(
+        () => undefined,
+      )
     } else if (
       current.kind === 'paint' ||
       current.kind === 'erase' ||
@@ -1079,89 +1083,88 @@ export function CanvasWorkspace() {
       current.kind === 'clone'
     ) {
       strokeUpdates.commit()
+      // The stroke leaves the pointer here: the canvas, or the clone list for
+      // strokes previewed in the browser, shows it until its frame does.
+      const clone = current.kind === 'clone' || Boolean(current.reveal)
+      let submitted: number
       try {
-        if (current.kind !== 'clone' && !current.reveal) canvas?.finishStroke()
+        submitted = clone ? ++cloneStrokeId.current : canvas!.finishStroke()
       } catch (error) {
         canvas?.cancelStroke()
         receiveError(errorMessage(error))
-        releaseCanvas()
         return
       }
-      releaseCanvas()
-      const operation =
+      if (clone) {
+        setSubmittedClones((strokes) => [
+          ...strokes,
+          {
+            id: submitted,
+            shownAt: null,
+            stroke: {
+              points: current.points,
+              diameter: current.diameter,
+              offset: current.offset ?? { x: 0, y: 0 },
+              reveal: current.reveal ? current.layer! : undefined,
+            },
+          },
+        ])
+        setCloneStroke(null)
+      }
+      const settle = (revision: number | null) => {
+        if (clone) {
+          setSubmittedClones((strokes) =>
+            revision === null
+              ? strokes.filter((stroke) => stroke.id !== submitted)
+              : strokes.map((stroke) =>
+                  stroke.id === submitted ? { ...stroke, shownAt: revision } : stroke,
+                ),
+          )
+        } else if (revision === null) {
+          canvas?.dropStroke(submitted)
+        } else {
+          canvas?.settleStroke(submitted, revision)
+        }
+      }
+      const committed = (result: LayerCommit) => {
+        selectLayers([result.layer])
+        void refresh(projectKey, pagesKey, pageKey)
+        return result.revision
+      }
+      const operation: Promise<number | null> =
         current.kind === 'paint'
-          ? enqueue(() =>
-              call(commands.commitPaint, current.revision, current.layer, current.points, {
+          ? enqueueEdit(() =>
+              call(commands.commitPaint, page.id, current.layer, current.points, {
                 diameter: current.diameter,
                 color: current.color!,
               }),
-            ).then((result) => {
-              if (canvas)
-                setCommittedEdit({
-                  canvas,
-                  page: page.id,
-                  revision: result.revision,
-                  kind: 'stroke',
-                })
-              selectLayers([result.layer])
-              return refresh(projectKey, pagesKey, pageKey)
-            })
+            ).then(committed)
           : current.kind === 'clone'
-            ? enqueue(() =>
+            ? enqueueEdit(() =>
                 call(
                   commands.commitClone,
-                  current.revision,
+                  page.id,
                   current.layer,
                   current.points,
                   current.diameter,
                   current.offset!,
                   useKoharuStore.getState().cloneOpacity,
                 ),
-              ).then((result) => {
-                if (canvas)
-                  setCommittedEdit({
-                    canvas,
-                    page: page.id,
-                    revision: result.revision,
-                    kind: 'stroke',
-                  })
-                selectLayers([result.layer])
-                return refresh(projectKey, pagesKey, pageKey)
-              })
+              ).then(committed)
             : current.kind === 'erase'
-              ? enqueue(() =>
+              ? enqueueEdit(() =>
                   call(
                     commands.commitErase,
-                    current.revision,
+                    page.id,
                     current.layer!,
                     current.points,
                     current.diameter,
                   ),
-                ).then((result) => {
-                  if (canvas)
-                    setCommittedEdit({
-                      canvas,
-                      page: page.id,
-                      revision: result.revision,
-                      kind: 'stroke',
-                    })
-                  selectLayers([result.layer])
-                  return refresh(projectKey, pagesKey, pageKey)
-                })
-              : enqueue(() =>
-                  call(commands.commitInpaint, current.revision, current.points, current.diameter),
+                ).then(committed)
+              : enqueueEdit(() =>
+                  call(commands.commitInpaint, page.id, current.points, current.diameter),
                 )
-      commitPending.current = true
-      void operation
-        .then(() => {
-          if (current.kind === 'inpaint') canvas?.cancelStroke()
-        })
-        .catch(() => {
-          canvas?.cancelStroke()
-          setCommittedEdit(null)
-          setCloneStroke(null)
-        })
-        .finally(() => (commitPending.current = false))
+      pendingStrokes.current++
+      void operation.then(settle, () => settle(null)).finally(() => pendingStrokes.current--)
     }
   }
 
@@ -1182,17 +1185,33 @@ export function CanvasWorkspace() {
           }}
           onContextMenu={(event) => event.preventDefault()}
           onPointerDown={(event) => {
+            // Panning, sampling, strokes and Restore start on the frame shown,
+            // the edits queued behind those still on their way to the host;
+            // other gestures are measured against the frame, so they wait
+            // until it is current.
+            const queued =
+              event.button === 1 ||
+              spaceHeld.current ||
+              tool === 'pan' ||
+              tool === 'draw' ||
+              tool === 'eraser' ||
+              tool === 'clone' ||
+              tool === 'remove' ||
+              tool === 'restore'
             if (
               !page ||
               !canvas ||
-              canvasState.status !== 'ready' ||
-              canvasState.generation !== canvasGeneration ||
               canvasRevision === null ||
-              commitPending.current ||
-              committedEdit ||
               gesture.current ||
               transformActive.current ||
-              event.button > 1
+              event.button > 1 ||
+              (queued
+                ? !canvasState.hasFrame || canvasPage !== page.id
+                : canvasState.status !== 'ready' ||
+                  canvasState.generation !== canvasGeneration ||
+                  commitPending.current ||
+                  pendingStrokes.current > 0 ||
+                  committedEdit)
             )
               return
             if (event.target instanceof Element && event.target.closest('[data-canvas-control]'))
@@ -1271,7 +1290,6 @@ export function CanvasWorkspace() {
               gesture.current = {
                 kind: 'paint',
                 pointer: event.pointerId,
-                revision: canvasRevision,
                 layer: selectedRaster?.id ?? null,
                 points: [point],
                 diameter: brush.diameter,
@@ -1298,7 +1316,6 @@ export function CanvasWorkspace() {
                 )
               } catch (error) {
                 gesture.current = null
-                releaseCanvas()
                 receiveError(errorMessage(error))
               }
             } else if (tool === 'eraser') {
@@ -1310,7 +1327,6 @@ export function CanvasWorkspace() {
               gesture.current = {
                 kind: 'erase',
                 pointer: event.pointerId,
-                revision: canvasRevision,
                 layer: eraserRaster.id,
                 points: [point],
                 diameter: brush.diameter,
@@ -1336,7 +1352,6 @@ export function CanvasWorkspace() {
                 })
               } catch (error) {
                 gesture.current = null
-                releaseCanvas()
                 receiveError(errorMessage(error))
               }
             } else if (tool === 'clone') {
@@ -1361,7 +1376,6 @@ export function CanvasWorkspace() {
               gesture.current = {
                 kind: 'clone',
                 pointer: event.pointerId,
-                revision: canvasRevision,
                 layer,
                 points: [point],
                 diameter: brush.diameter,
@@ -1374,7 +1388,6 @@ export function CanvasWorkspace() {
               gesture.current = {
                 kind: 'inpaint',
                 pointer: event.pointerId,
-                revision: canvasRevision,
                 layer: null,
                 points: [point],
                 diameter: brush.diameter,
@@ -1388,7 +1401,6 @@ export function CanvasWorkspace() {
                 })
               } catch (error) {
                 gesture.current = null
-                releaseCanvas()
                 receiveError(errorMessage(error))
               }
             } else if (tool === 'color_picker') {
@@ -1489,6 +1501,10 @@ export function CanvasWorkspace() {
           {page && (tool === 'clone' || cloneStroke) && (
             <ClonePreview page={page} revision={canvasRevision} stroke={cloneStroke} />
           )}
+          {page &&
+            submittedClones.map(({ id, stroke }) => (
+              <ClonePreview key={id} page={page} revision={canvasRevision} stroke={stroke} />
+            ))}
           <canvas
             ref={setCanvasElement}
             data-testid='webgpu-canvas'

@@ -125,13 +125,13 @@ export const commands = {
 	addPointText: (point: Point) => __TAURI_INVOKE<LayerCommit>("add_point_text", { point }),
 	addTextBox: (frame: Frame) => __TAURI_INVOKE<LayerCommit>("add_text_box", { frame }),
 	addOcrRegion: (frame: Frame) => __TAURI_INVOKE<OcrRegionCommit>("add_ocr_region", { frame }),
-	commitPaint: (expectedRevision: Revision, layer: string | null, points: Point[], brush: PaintBrush) => __TAURI_INVOKE<LayerCommit>("commit_paint", { expectedRevision, layer, points: points.map(i=>i), brush }),
-	commitErase: (expectedRevision: Revision, layer: string | null, points: Point[], diameter: number) => __TAURI_INVOKE<LayerCommit>("commit_erase", { expectedRevision, layer, points: points.map(i=>i), diameter }),
+	commitPaint: (page: EntityId, layer: string | null, points: Point[], brush: PaintBrush) => __TAURI_INVOKE<LayerCommit>("commit_paint", { page, layer, points: points.map(i=>i), brush }),
+	commitErase: (page: EntityId, layer: string | null, points: Point[], diameter: number) => __TAURI_INVOKE<LayerCommit>("commit_erase", { page, layer, points: points.map(i=>i), diameter }),
 	/**
 	 *  Clone Stamp stroke: paints the page as it shows, read `offset` page units
 	 *  from each stroke point, into `layer` or the page's visible cleanup layer.
 	 */
-	commitClone: (expectedRevision: Revision, layer: string | null, points: Point[], diameter: number, offset: Point, opacity: number) => __TAURI_INVOKE<LayerCommit>("commit_clone", { expectedRevision, layer, points: points.map(i=>i), diameter, offset, opacity }),
+	commitClone: (page: EntityId, layer: string | null, points: Point[], diameter: number, offset: Point, opacity: number) => __TAURI_INVOKE<LayerCommit>("commit_clone", { page, layer, points: points.map(i=>i), diameter, offset, opacity }),
 	/**
 	 *  The active page as it shows without text, PNG encoded: what the Clone
 	 *  Stamp copies from, for its live preview.
@@ -144,8 +144,18 @@ export const commands = {
 	getUnmaskedLayer: (layer: EntityId) => __TAURI_INVOKE<ImageBytes>("get_unmasked_layer", { layer }),
 	importCleanupImage: (dataUrl: string) => __TAURI_INVOKE<LayerCommit>("import_cleanup_image", { dataUrl }),
 	commitTransform: (expectedRevision: Revision, elements: TransformFrame[]) => __TAURI_INVOKE<number | null>("commit_transform", { expectedRevision, elements }).then((v) => (v==null?v:v as typeof v)),
-	commitInpaint: (expectedRevision: Revision, points: Point[], diameter: number) => __TAURI_INVOKE<string | null>("commit_inpaint", { expectedRevision, points: points.map(i=>i), diameter }),
-	commitRestore: (expectedRevision: Revision, frame: Frame) => __TAURI_INVOKE<string | null>("commit_restore", { expectedRevision, frame }),
+	/**
+	 *  Remove brush: inpaints under the stroke on `page` and returns the revision
+	 *  that shows the result, or nothing when the run was stopped. The editor sends
+	 *  its edits one after another, so this runs on the page as the edits before
+	 *  it left it.
+	 */
+	commitInpaint: (page: EntityId, points: Point[], diameter: number) => __TAURI_INVOKE<number | null>("commit_inpaint", { page, points: points.map(i=>i), diameter }).then((v) => (v==null?v:v as typeof v)),
+	/**
+	 *  Restore: puts the source back inside `frame` on `page`, as commit_inpaint
+	 *  does for the Remove brush.
+	 */
+	commitRestore: (page: EntityId, frame: Frame) => __TAURI_INVOKE<number | null>("commit_restore", { page, frame }).then((v) => (v==null?v:v as typeof v)),
 };
 
 /* Types */

@@ -16,7 +16,7 @@ use tauri_runtime_cef::CefRuntime;
 
 use super::{
     ChannelExt as _, Error, processing,
-    processing::{JobChannel, JobId, Processing},
+    processing::{JobChannel, JobState, Processing},
     project::{CurrentProject, Page, Project, RasterStrokeMode},
 };
 
@@ -230,7 +230,7 @@ pub(crate) async fn add_ocr_region(
 #[tauri::command]
 #[specta::specta]
 pub(crate) async fn commit_paint(
-    expected_revision: Revision,
+    page: EntityId,
     layer: Option<EntityId>,
     points: Vec<Point>,
     brush: PaintBrush,
@@ -239,7 +239,7 @@ pub(crate) async fn commit_paint(
     canvas_channel: State<'_, CanvasChannel>,
 ) -> Result<LayerCommit, Error> {
     commit_raster_stroke(
-        expected_revision,
+        page,
         layer,
         points,
         brush.diameter,
@@ -255,7 +255,7 @@ pub(crate) async fn commit_paint(
 #[tauri::command]
 #[specta::specta]
 pub(crate) async fn commit_erase(
-    expected_revision: Revision,
+    page: EntityId,
     layer: Option<EntityId>,
     points: Vec<Point>,
     diameter: f32,
@@ -264,7 +264,7 @@ pub(crate) async fn commit_erase(
     canvas_channel: State<'_, CanvasChannel>,
 ) -> Result<LayerCommit, Error> {
     commit_raster_stroke(
-        expected_revision,
+        page,
         layer,
         points,
         diameter,
@@ -333,7 +333,7 @@ pub(crate) async fn get_unmasked_layer(
 #[tauri::command]
 #[specta::specta]
 pub(crate) async fn commit_clone(
-    expected_revision: Revision,
+    page: EntityId,
     layer: Option<EntityId>,
     points: Vec<Point>,
     diameter: f32,
@@ -347,7 +347,7 @@ pub(crate) async fn commit_clone(
         return Err(anyhow!("the clone offset must be finite and its opacity within 0..1").into());
     }
     commit_raster_stroke(
-        expected_revision,
+        page,
         layer,
         points,
         diameter,
@@ -399,7 +399,7 @@ pub(crate) async fn import_cleanup_image(
 
 #[allow(clippy::too_many_arguments)]
 async fn commit_raster_stroke(
-    expected_revision: Revision,
+    page: EntityId,
     layer: Option<EntityId>,
     points: Vec<Point>,
     diameter: f32,
@@ -409,13 +409,9 @@ async fn commit_raster_stroke(
     project: &CurrentProject,
     canvas_channel: &CanvasChannel,
 ) -> Result<LayerCommit, Error> {
-    let (commit, page, element) = {
+    let (commit, active, element) = {
         let mut project = project.project.lock().await;
         let project = project.as_mut().context("no project is open")?;
-        let page = project
-            .active_page()
-            .context("the project has no active page")?;
-        project.ensure_pixels_unchanged(page, expected_revision)?;
         let (commit, element) = project
             .apply_raster_stroke(
                 page,
@@ -435,7 +431,9 @@ async fn commit_raster_stroke(
         project.record_commit(&commit);
         (commit, project.active_page(), element)
     };
-    desktop.synchronize(&commit.snapshot, page, &commit).await?;
+    desktop
+        .synchronize(&commit.snapshot, active, &commit)
+        .await?;
     canvas_channel.channel.publish(desktop.canvas_state());
     Ok(LayerCommit {
         revision: commit.revision,
@@ -469,15 +467,19 @@ pub(crate) async fn commit_transform(
     Ok(Some(commit.revision))
 }
 
+/// Remove brush: inpaints under the stroke on `page` and returns the revision
+/// that shows the result, or nothing when the run was stopped. The editor sends
+/// its edits one after another, so this runs on the page as the edits before
+/// it left it.
 #[tauri::command]
 #[specta::specta]
 pub(crate) async fn commit_inpaint(
-    expected_revision: Revision,
+    page: EntityId,
     points: Vec<Point>,
     diameter: f32,
     handle: AppHandle<CefRuntime>,
     project: State<'_, CurrentProject>,
-) -> Result<Option<JobId>, Error> {
+) -> Result<Option<Revision>, Error> {
     if !diameter.is_finite() || diameter <= 0.0 || points.is_empty() {
         return Err(anyhow!(
             "an inpaint stroke requires a positive diameter and at least one point"
@@ -490,87 +492,86 @@ pub(crate) async fn commit_inpaint(
     {
         return Err(anyhow!("inpaint stroke points must be finite").into());
     }
-    let (page, width, height) = {
-        let project = project.project.lock().await;
-        let project = project.as_ref().context("no project is open")?;
-        let snapshot = project.snapshot();
-        let page = project
-            .active_page()
-            .context("the project has no active page")?;
-        project.ensure_pixels_unchanged(page, expected_revision)?;
-        let page_value = snapshot.page(page)?.page()?;
-        (
-            page,
-            page_value.width.round() as u32,
-            page_value.height.round() as u32,
-        )
-    };
+    let (width, height) = page_size(&project, page).await?;
     let (png, bounds) =
         tokio_rayon::spawn(move || encode_mask(width, height, &points, diameter)).await?;
-    let mask = koharu_pipeline::InpaintingMask {
+    inpaint_region(
+        handle,
         page,
-        png: Arc::from(png),
-        intent: koharu_pipeline::InpaintingIntent::Remove,
-    };
-    Ok(Some(
-        processing::process_with_mask(
-            handle.clone(),
-            koharu_pipeline::Scope::Region { page, bounds },
-            koharu_pipeline::Operation::Only {
-                stage: koharu_pipeline::Stage::Inpainting,
-            },
-            handle.state::<CurrentProject>(),
-            handle.state::<Processing>(),
-            handle.state::<JobChannel>(),
-            Some(mask),
-        )
-        .await?,
-    ))
+        bounds,
+        png,
+        koharu_pipeline::InpaintingIntent::Remove,
+    )
+    .await
 }
 
+/// Restore: puts the source back inside `frame` on `page`, as commit_inpaint
+/// does for the Remove brush.
 #[tauri::command]
 #[specta::specta]
 pub(crate) async fn commit_restore(
-    expected_revision: Revision,
+    page: EntityId,
     frame: Frame,
     handle: AppHandle<CefRuntime>,
     project: State<'_, CurrentProject>,
-) -> Result<Option<JobId>, Error> {
-    let (page, width, height) = {
-        let project = project.project.lock().await;
-        let project = project.as_ref().context("no project is open")?;
-        let snapshot = project.snapshot();
-        let page = project
-            .active_page()
-            .context("the project has no active page")?;
-        project.ensure_pixels_unchanged(page, expected_revision)?;
-        let page_value = snapshot.page(page)?.page()?;
-        (
-            page,
-            page_value.width.round() as u32,
-            page_value.height.round() as u32,
-        )
-    };
+) -> Result<Option<Revision>, Error> {
+    let (width, height) = page_size(&project, page).await?;
     let (png, bounds) = encode_rectangle_mask(width, height, frame)?;
+    inpaint_region(
+        handle,
+        page,
+        bounds,
+        png,
+        koharu_pipeline::InpaintingIntent::Restore,
+    )
+    .await
+}
+
+async fn page_size(project: &CurrentProject, page: EntityId) -> anyhow::Result<(u32, u32)> {
+    let project = project.project.lock().await;
+    let snapshot = project.as_ref().context("no project is open")?.snapshot();
+    let page = snapshot.page(page)?.page()?;
+    Ok((page.width.round() as u32, page.height.round() as u32))
+}
+
+async fn inpaint_region(
+    handle: AppHandle<CefRuntime>,
+    page: EntityId,
+    bounds: koharu_pipeline::Bounds,
+    png: Vec<u8>,
+    intent: koharu_pipeline::InpaintingIntent,
+) -> Result<Option<Revision>, Error> {
     let mask = koharu_pipeline::InpaintingMask {
         page,
         png: Arc::from(png),
-        intent: koharu_pipeline::InpaintingIntent::Restore,
+        intent,
     };
-    Ok(Some(
-        processing::process_with_mask(
-            handle.clone(),
-            koharu_pipeline::Scope::Region { page, bounds },
-            koharu_pipeline::Operation::Only {
-                stage: koharu_pipeline::Stage::Inpainting,
-            },
-            handle.state::<CurrentProject>(),
-            handle.state::<Processing>(),
-            handle.state::<JobChannel>(),
-            Some(mask),
-        )
-        .await?,
-    ))
+    let (_, finished) = processing::start_job(
+        handle.clone(),
+        koharu_pipeline::Scope::Region { page, bounds },
+        koharu_pipeline::Operation::Only {
+            stage: koharu_pipeline::Stage::Inpainting,
+        },
+        handle.state::<CurrentProject>(),
+        handle.state::<Processing>(),
+        handle.state::<JobChannel>(),
+        Some(mask),
+    )
+    .await?;
+    let (state, error) = finished
+        .await
+        .map_err(|error| anyhow!("the inpainting job did not finish: {error}"))?;
+    match state {
+        JobState::Finished => Ok(handle
+            .state::<CurrentProject>()
+            .project
+            .lock()
+            .await
+            .as_ref()
+            .map(Project::revision)),
+        JobState::Stopped => Ok(None),
+        _ => Err(anyhow!(error.unwrap_or_else(|| "inpainting failed".to_owned())).into()),
+    }
 }
 
 fn ensure_revision(actual: Revision, expected: Revision) -> anyhow::Result<()> {

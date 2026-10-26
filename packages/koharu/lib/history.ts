@@ -30,22 +30,27 @@ export function historyShortcutKey(event: KeyboardEvent): 'z' | 'y' | null {
   return key === 'z' || key === 'y' ? key : null
 }
 
-// Native commands are asynchronous.  Keep one process-wide queue so keyboard
-// repeats and menu clicks cannot observe the same backend revision and race
-// each other.  The backend still owns the actual undo/redo stacks.
+// The owner's edits reach the host one at a time, in the order they were
+// made, so each lands on the result of the one before: a stroke drawn while
+// Remove runs paints over its result, a second Remove sees the first, and
+// undo takes back the last edit made rather than the last one committed.
 let queue: Promise<void> = Promise.resolve()
 
-export function enqueueHistory(action: HistoryAction): Promise<void> {
-  const pending = queue.then(async () => {
-    await flushPendingEdits()
-    await call(action === 'undo' ? commands.undo : commands.redo)
-    await refresh(projectKey, pagesKey, pageKey)
-  })
+export function enqueueEdit<Result>(operation: () => Promise<Result>): Promise<Result> {
+  const pending = queue.then(operation)
   queue = pending.then(
     () => undefined,
     () => undefined,
   )
   return pending
+}
+
+export function enqueueHistory(action: HistoryAction): Promise<void> {
+  return enqueueEdit(async () => {
+    await flushPendingEdits()
+    await call(action === 'undo' ? commands.undo : commands.redo)
+    await refresh(projectKey, pagesKey, pageKey)
+  })
 }
 
 export function isEditableTarget(target: EventTarget | null): boolean {

@@ -25,6 +25,8 @@ const canvas = vi.hoisted(() => ({
   beginStroke: vi.fn(),
   extendStroke: vi.fn(),
   finishStroke: vi.fn(),
+  settleStroke: vi.fn(),
+  dropStroke: vi.fn(),
   cancelStroke: vi.fn(),
   sampleColor: vi.fn(),
   dispose: vi.fn(),
@@ -467,63 +469,73 @@ describe('canvas interaction adapter', () => {
     })
     expect(canvas.extendStroke).toHaveBeenCalledWith(expect.arrayContaining([{ x: 45, y: 45 }]))
     expect(canvas.finishStroke).toHaveBeenCalledOnce()
-    expect(commit).toHaveBeenCalledWith(1, null, expect.arrayContaining([{ x: 45, y: 45 }]), {
+    expect(commit).toHaveBeenCalledWith('page', null, expect.arrayContaining([{ x: 45, y: 45 }]), {
       diameter: 48,
       color: [255, 255, 255, 255],
     })
   })
 
-  it('releases a committed brush preview even when the frame does not change', async () => {
+  it('keeps a submitted stroke on the canvas until its commit revision', async () => {
     installProject()
     useKoharuStore.setState({ tool: 'draw' })
-    let active = false
-    canvas.beginStroke.mockImplementation(() => {
-      if (active) throw new Error('another canvas edit is already active')
-      active = true
-    })
-    canvas.cancelStroke.mockImplementation(() => {
-      active = false
-    })
+    canvas.finishStroke.mockReturnValue(3)
     const commit = vi
       .spyOn(commands, 'commitPaint')
-      .mockResolvedValue({ revision: 1, layer: 'paint' })
+      .mockResolvedValue({ revision: 4, layer: 'paint' })
     const surface = renderWorkspace()
 
     fireEvent.pointerDown(surface, { button: 0, pointerId: 81, clientX: 30, clientY: 40 })
     fireEvent.pointerUp(surface, { pointerId: 81, clientX: 30, clientY: 40 })
-    await waitFor(() => expect(canvas.cancelStroke).toHaveBeenCalledOnce())
-    fireEvent.pointerDown(surface, { button: 0, pointerId: 82, clientX: 50, clientY: 60 })
-    fireEvent.pointerUp(surface, { pointerId: 82, clientX: 50, clientY: 60 })
-    await waitFor(() => expect(commit).toHaveBeenCalledTimes(2))
+
+    await waitFor(() => expect(canvas.settleStroke).toHaveBeenCalledWith(3, 4))
+    expect(commit).toHaveBeenCalledOnce()
+    expect(canvas.cancelStroke).not.toHaveBeenCalled()
+    expect(canvas.dropStroke).not.toHaveBeenCalled()
   })
 
-  it('waits for the committed brush frame before accepting another stroke', async () => {
+  it('starts the next stroke at once and commits strokes in the order drawn', async () => {
     installProject()
     useKoharuStore.setState({ tool: 'draw' })
+    canvas.finishStroke.mockReturnValueOnce(1).mockReturnValueOnce(2)
+    let release!: () => void
+    const first = new Promise<void>((resolve) => (release = resolve))
     const commit = vi
       .spyOn(commands, 'commitPaint')
-      .mockResolvedValue({ revision: 2, layer: 'paint' })
+      .mockImplementationOnce(async () => {
+        await first
+        return { revision: 2, layer: 'paint' }
+      })
+      .mockResolvedValueOnce({ revision: 3, layer: 'paint' })
     const surface = renderWorkspace()
+
     fireEvent.pointerDown(surface, { button: 0, pointerId: 83, clientX: 30, clientY: 40 })
-    await act(async () => {
-      fireEvent.pointerUp(surface, { pointerId: 83, clientX: 30, clientY: 40 })
-    })
-    expect(commit).toHaveBeenCalledOnce()
+    fireEvent.pointerUp(surface, { pointerId: 83, clientX: 30, clientY: 40 })
     fireEvent.pointerDown(surface, { button: 0, pointerId: 84, clientX: 50, clientY: 60 })
-    expect(canvas.beginStroke).toHaveBeenCalledOnce()
-    expect(canvas.cancelStroke).not.toHaveBeenCalled()
+    fireEvent.pointerUp(surface, { pointerId: 84, clientX: 50, clientY: 60 })
+    expect(canvas.beginStroke).toHaveBeenCalledTimes(2)
+    expect(canvas.finishStroke).toHaveBeenCalledTimes(2)
+    await waitFor(() => expect(commit).toHaveBeenCalledOnce())
 
-    act(() => useKoharuStore.setState({ canvasRevision: 2, canvasGeneration: 2 }))
-    fireEvent.pointerDown(surface, { button: 0, pointerId: 85, clientX: 50, clientY: 60 })
-    expect(canvas.beginStroke).toHaveBeenCalledOnce()
-
-    canvasState.generation = 2
-    act(() => useKoharuStore.setState({ brush: { diameter: 49, color: '#FFFFFF' } }))
-    await waitFor(() => expect(canvas.cancelStroke).toHaveBeenCalledOnce())
-    fireEvent.pointerDown(surface, { button: 0, pointerId: 86, clientX: 50, clientY: 60 })
-    fireEvent.pointerUp(surface, { pointerId: 86, clientX: 50, clientY: 60 })
+    release()
     await waitFor(() => expect(commit).toHaveBeenCalledTimes(2))
-    expect(commit.mock.calls[1][0]).toBe(2)
+    expect(commit.mock.calls[0][2][0]).toEqual({ x: 20, y: 20 })
+    expect(commit.mock.calls[1][2][0]).toEqual({ x: 40, y: 40 })
+    await waitFor(() => expect(canvas.settleStroke).toHaveBeenCalledWith(2, 3))
+    expect(canvas.settleStroke).toHaveBeenCalledWith(1, 2)
+  })
+
+  it('withdraws a submitted stroke whose commit fails', async () => {
+    installProject()
+    useKoharuStore.setState({ tool: 'draw' })
+    canvas.finishStroke.mockReturnValue(5)
+    vi.spyOn(commands, 'commitPaint').mockRejectedValue(new Error('the layer is gone'))
+    const surface = renderWorkspace()
+
+    fireEvent.pointerDown(surface, { button: 0, pointerId: 85, clientX: 30, clientY: 40 })
+    fireEvent.pointerUp(surface, { pointerId: 85, clientX: 30, clientY: 40 })
+
+    await waitFor(() => expect(canvas.dropStroke).toHaveBeenCalledWith(5))
+    expect(canvas.settleStroke).not.toHaveBeenCalled()
   })
 
   it('cancels an unfinished brush gesture when pointer capture is lost', () => {
@@ -647,12 +659,12 @@ describe('canvas interaction adapter', () => {
   it.each([
     ['revision', { canvasRevision: 2 }],
     ['generation', { canvasGeneration: 2 }],
-  ])('cancels an active gesture when the canvas %s changes', async (_name, update) => {
+  ])('keeps the stroke being drawn when the canvas %s changes', async (_name, update) => {
     installProject()
     useKoharuStore.setState({ tool: 'draw', brush: { diameter: 48, color: '#FFFFFF' } })
     const commit = vi
       .spyOn(commands, 'commitPaint')
-      .mockResolvedValue({ revision: 2, layer: 'paint' })
+      .mockResolvedValue({ revision: 3, layer: 'paint' })
     const surface = renderWorkspace()
 
     fireEvent.pointerDown(surface, { button: 0, pointerId: 8, clientX: 30, clientY: 40 })
@@ -662,10 +674,10 @@ describe('canvas interaction adapter', () => {
       useKoharuStore.setState(update)
     })
 
-    await waitFor(() => expect(canvas.cancelStroke).toHaveBeenCalledOnce())
     fireEvent.pointerUp(surface, { pointerId: 8, clientX: 30, clientY: 40 })
-    expect(canvas.finishStroke).not.toHaveBeenCalled()
-    expect(commit).not.toHaveBeenCalled()
+    expect(canvas.cancelStroke).not.toHaveBeenCalled()
+    expect(canvas.finishStroke).toHaveBeenCalledOnce()
+    await waitFor(() => expect(commit).toHaveBeenCalledOnce())
   })
 
   it('uses rendered text bounds for hit testing and semantic transforms', async () => {
@@ -1251,7 +1263,12 @@ describe('canvas interaction adapter', () => {
       point: { x: 20, y: 20 },
       diameter: 48,
     })
-    expect(commit).toHaveBeenCalledWith(1, 'paint', expect.arrayContaining([{ x: 20, y: 20 }]), 48)
+    expect(commit).toHaveBeenCalledWith(
+      'page',
+      'paint',
+      expect.arrayContaining([{ x: 20, y: 20 }]),
+      48,
+    )
   })
 
   it('falls back to the visible cleanup layer when the eraser selection is empty', async () => {
@@ -1274,25 +1291,21 @@ describe('canvas interaction adapter', () => {
       expect.objectContaining({ kind: 'erase', layer: 'cleanup' }),
     )
     expect(commit).toHaveBeenCalledWith(
-      1,
+      'page',
       'cleanup',
       expect.arrayContaining([{ x: 20, y: 20 }]),
       48,
     )
   })
 
-  it('clears an accepted Remove preview before starting the next stroke', async () => {
+  it('keeps a Remove preview until its result is committed while the next stroke starts', async () => {
     installProject()
     useKoharuStore.setState({ tool: 'remove' })
-    let activeStroke = false
-    canvas.beginStroke.mockImplementation(() => {
-      if (activeStroke) throw new Error('another canvas edit is already active')
-      activeStroke = true
-    })
-    canvas.cancelStroke.mockImplementation(() => {
-      activeStroke = false
-    })
-    const commit = vi.spyOn(commands, 'commitInpaint').mockResolvedValue('job')
+    canvas.finishStroke.mockReturnValue(7)
+    let release!: (revision: number) => void
+    const commit = vi
+      .spyOn(commands, 'commitInpaint')
+      .mockImplementation(() => new Promise((resolve) => (release = resolve)))
     const surface = renderWorkspace()
 
     fireEvent.pointerDown(surface, { button: 0, pointerId: 12, clientX: 30, clientY: 40 })
@@ -1305,16 +1318,32 @@ describe('canvas interaction adapter', () => {
       point: { x: 20, y: 20 },
       diameter: 48,
     })
-    expect(commit).toHaveBeenCalledWith(1, expect.arrayContaining([{ x: 20, y: 20 }]), 48)
-    expect(canvas.cancelStroke).toHaveBeenCalledOnce()
+    expect(commit).toHaveBeenCalledWith('page', expect.arrayContaining([{ x: 20, y: 20 }]), 48)
 
     fireEvent.pointerDown(surface, { button: 0, pointerId: 13, clientX: 50, clientY: 60 })
     expect(canvas.beginStroke).toHaveBeenCalledTimes(2)
+    expect(canvas.settleStroke).not.toHaveBeenCalled()
+
+    release(6)
+    await waitFor(() => expect(canvas.settleStroke).toHaveBeenCalledWith(7, 6))
+  })
+
+  it('withdraws a Remove preview when its run is stopped', async () => {
+    installProject()
+    useKoharuStore.setState({ tool: 'remove' })
+    canvas.finishStroke.mockReturnValue(8)
+    vi.spyOn(commands, 'commitInpaint').mockResolvedValue(null)
+    const surface = renderWorkspace()
+
+    fireEvent.pointerDown(surface, { button: 0, pointerId: 14, clientX: 30, clientY: 40 })
+    fireEvent.pointerUp(surface, { pointerId: 14, clientX: 30, clientY: 40 })
+
+    await waitFor(() => expect(canvas.dropStroke).toHaveBeenCalledWith(8))
   })
 
   it('previews and commits a clamped restore rectangle with Alt+R', async () => {
     installProject()
-    const commit = vi.spyOn(commands, 'commitRestore').mockResolvedValue('job')
+    const commit = vi.spyOn(commands, 'commitRestore').mockResolvedValue(3)
     const surface = renderWorkspace()
 
     fireEvent.keyDown(window, { key: 'j', code: 'KeyJ', altKey: true })
@@ -1328,7 +1357,7 @@ describe('canvas interaction adapter', () => {
     fireEvent.pointerUp(surface, { pointerId: 121, clientX: 1200, clientY: 1200 })
 
     await waitFor(() => expect(commit).toHaveBeenCalledOnce())
-    expect(commit).toHaveBeenCalledWith(1, {
+    expect(commit).toHaveBeenCalledWith('page', {
       x: 0,
       y: 0,
       width: 1000,
@@ -1368,7 +1397,7 @@ describe('canvas interaction adapter', () => {
     fireEvent.pointerMove(surface, { pointerId: 123, clientX: 140, clientY: 150 })
     fireEvent.pointerUp(surface, { pointerId: 123, clientX: 140, clientY: 150 })
     await waitFor(() => expect(commit).toHaveBeenCalledOnce())
-    expect(commit).toHaveBeenCalledWith(1, {
+    expect(commit).toHaveBeenCalledWith('page', {
       x: 30,
       y: 30,
       width: 100,
