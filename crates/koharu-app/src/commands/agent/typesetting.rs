@@ -117,6 +117,11 @@ pub(super) struct TrialChange {
     /// sets a box again.
     #[serde(default)]
     flow: Option<TrialFlow>,
+    /// `along_source` lays one horizontal line along the source lettering:
+    /// the box of its detected region, turned to its slant, a Japanese column
+    /// turned 90 degrees to read top to bottom. Instead of region and angle.
+    #[serde(default)]
+    orient: Option<TrialOrient>,
     /// Whole new typography, as set_typography takes it.
     #[serde(default)]
     typography: Option<TrialTypography>,
@@ -129,6 +134,12 @@ pub(super) struct TrialChange {
 #[serde(rename_all = "snake_case")]
 pub(super) enum TrialFlow {
     Balloon,
+}
+
+#[derive(Clone, Copy, Deserialize, JsonSchema, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum TrialOrient {
+    AlongSource,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -168,8 +179,9 @@ pub(super) struct MergeTextLayers {
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(super) struct CheckChapterArguments {
-    /// Kinds to list: fit, translation, ocr, cleaning, hidden, unboxed;
-    /// every kind when absent.
+    /// Kinds to list: fit, translation, ocr, cleaning, hidden, unboxed,
+    /// cleaned (lettering the cleaning removed with no translated layer
+    /// over it); every kind when absent.
     #[serde(default)]
     pub(super) kinds: Option<Vec<String>>,
     /// JSON instead of one line per issue.
@@ -242,11 +254,18 @@ pub(super) async fn page_layers(
     // Balloons are measured on the page as it shows without its text.
     let clean = render_image(desktop, &without_text(snapshot, page)?, page).await?;
     let source = source_image(snapshot, page).await?;
+    let reading = reading_order(snapshot, page)?;
     let mut layers = Vec::new();
     let mut filled = Vec::new();
     if let Some(group) = snapshot.page(page)?.text_group()? {
         for (index, layer) in group.text_layers()?.enumerate() {
             let mut value = layer_value(snapshot, &frame, layer.id(), index + 1)?;
+            value["reading"] = json!(
+                reading
+                    .iter()
+                    .position(|id| *id == layer.id())
+                    .map(|position| position + 1)
+            );
             measure_balloon(&clean, &mut value);
             if let Some(region) = layer.content()?.source_region()? {
                 filled.extend(
@@ -348,6 +367,11 @@ pub(super) async fn page_layers(
         "size": [size.width, size.height],
         "layers": layers,
         "empty_balloons": empty_balloons,
+        "cleaned_without_text": cleaned_without_text(
+            &source,
+            &clean,
+            &translated_boxes(snapshot, page)?,
+        ),
         "previous_page_end": neighbour(-1, true)?,
         "next_page_start": neighbour(1, false)?,
     }))
@@ -504,7 +528,16 @@ pub(super) fn chapter_text(snapshot: &Snapshot, arguments: &ChapterText) -> Resu
                 page.page()?.label,
                 page.id()
             ));
-            for layer in page_texts(snapshot, page.id())? {
+            let reading = reading_order(snapshot, page.id())?;
+            let mut texts = page_texts(snapshot, page.id())?;
+            texts.sort_by_key(|layer| {
+                let id = layer["id"].as_str().and_then(|id| entity(id).ok());
+                reading
+                    .iter()
+                    .position(|candidate| Some(*candidate) == id)
+                    .unwrap_or(usize::MAX)
+            });
+            for layer in texts {
                 let role = layer["role"]
                     .as_str()
                     .and_then(|role| role.rsplit('.').next())
@@ -573,17 +606,48 @@ fn shown(snapshot: &Snapshot, entity: EntityId) -> Result<bool> {
 /// The chapter check with page and layer numbers, both texts, and what hides
 /// a hidden block, for agents: one line per issue by default, kinds to keep
 /// optional (fit, translation, ocr, cleaning, hidden, unboxed).
-pub(super) fn chapter_issues(
-    snapshot: &Snapshot,
-    check: ChapterCheck,
-    arguments: &CheckChapterArguments,
-) -> Result<Value> {
-    let wanted = |kind: &str| {
-        arguments
-            .kinds
+/// The chapter check an agent reads, with the places cleaned without text
+/// when the kinds ask for them.
+pub(super) struct AgentCheck {
+    pub(super) check: ChapterCheck,
+    pub(super) cleaned_without_text: Option<Vec<(EntityId, Vec<[f64; 4]>)>>,
+}
+
+impl CheckChapterArguments {
+    pub(super) fn wants(&self, kind: &str) -> bool {
+        self.kinds
             .as_ref()
             .is_none_or(|kinds| kinds.iter().any(|wanted| wanted == kind))
-    };
+    }
+}
+
+/// Every page's places cleaned without a translated layer over them.
+pub(super) async fn chapter_cleaned_without_text(
+    desktop: &Desktop,
+    snapshot: &Snapshot,
+) -> Result<Vec<(EntityId, Vec<[f64; 4]>)>> {
+    let mut pages = Vec::new();
+    for page in snapshot.pages().map(|page| page.id()).collect::<Vec<_>>() {
+        let source = source_image(snapshot, page).await?;
+        let clean = render_image(desktop, &without_text(snapshot, page)?, page).await?;
+        let covered = translated_boxes(snapshot, page)?;
+        let places =
+            tokio_rayon::spawn(move || cleaned_without_text(&source, &clean, &covered)).await;
+        pages.push((page, places));
+    }
+    Ok(pages)
+}
+
+pub(super) fn chapter_issues(
+    snapshot: &Snapshot,
+    check: AgentCheck,
+    arguments: &CheckChapterArguments,
+) -> Result<Value> {
+    let AgentCheck {
+        check,
+        cleaned_without_text: cleaned_places,
+    } = check;
+    let wanted = |kind: &str| arguments.wants(kind);
     let pages = snapshot.pages().map(|page| page.id()).collect::<Vec<_>>();
     let page_number = |page: EntityId| {
         pages
@@ -705,8 +769,35 @@ pub(super) fn chapter_issues(
             }
         }
     }
+    let mut cleaned = Vec::new();
+    if let Some(places) = cleaned_places {
+        for (page, boxes) in places {
+            if boxes.is_empty() {
+                continue;
+            }
+            *counts.entry("cleaned").or_default() += boxes.len();
+            if arguments.full {
+                cleaned.push(json!({ "page": page_value(page)?, "boxes": boxes }));
+            } else {
+                lines.push(format!(
+                    "{} cleaned_without_text {}",
+                    page_number(page),
+                    boxes
+                        .iter()
+                        .map(|[x, y, width, height]| format!("[{x},{y},{width},{height}]"))
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                ));
+            }
+        }
+    }
     if arguments.full {
-        return Ok(json!({ "texts": texts, "unboxed_text": unboxed_text, "counts": counts }));
+        return Ok(json!({
+            "texts": texts,
+            "unboxed_text": unboxed_text,
+            "cleaned_without_text": cleaned,
+            "counts": counts,
+        }));
     }
     let summary = if counts.is_empty() {
         "No issues.".to_owned()
@@ -1042,6 +1133,264 @@ pub(super) async fn new_layer_typography(
     Ok(typography)
 }
 
+/// Places where the cleaning took lettering off the page and no shown,
+/// translated layer covers it: cleaned text whose layer is missing or
+/// hidden, which detection no longer sees once it is gone. A pixel counts as
+/// removed lettering when source and clean page differ by more than
+/// enhancement moves a tone (dark to light or light to dark across 90
+/// levels); removed pixels within 6 px join into one place.
+pub(super) fn cleaned_without_text(
+    source: &RgbaImage,
+    clean: &RgbaImage,
+    covered: &[[f64; 4]],
+) -> Vec<[f64; 4]> {
+    let (width, height) = source.dimensions();
+    if clean.dimensions() != (width, height) {
+        return Vec::new();
+    }
+    let (w, h) = (width as usize, height as usize);
+    let luma = |pixel: &image::Rgba<u8>| {
+        (u32::from(pixel[0]) * 299 + u32::from(pixel[1]) * 587 + u32::from(pixel[2]) * 114) / 1000
+    };
+    let removed = source
+        .pixels()
+        .zip(clean.pixels())
+        .map(|(before, after)| luma(before).abs_diff(luma(after)) > 90)
+        .collect::<Vec<_>>();
+    let near = chamfer(&removed, w, h);
+    let joined = near
+        .iter()
+        .map(|distance| *distance <= 18)
+        .collect::<Vec<_>>();
+    let mut seen = vec![false; w * h];
+    let mut places = Vec::new();
+    for start in 0..w * h {
+        if !joined[start] || seen[start] {
+            continue;
+        }
+        let (mut left, mut top, mut right, mut bottom) = (w, h, 0, 0);
+        let mut count = 0usize;
+        let mut stack = vec![start];
+        seen[start] = true;
+        while let Some(at) = stack.pop() {
+            let (x, y) = (at % w, at / w);
+            left = left.min(x);
+            top = top.min(y);
+            right = right.max(x);
+            bottom = bottom.max(y);
+            count += usize::from(removed[at]);
+            for (nx, ny) in [
+                (x.wrapping_sub(1), y),
+                (x + 1, y),
+                (x, y.wrapping_sub(1)),
+                (x, y + 1),
+            ] {
+                if nx < w && ny < h && joined[ny * w + nx] && !seen[ny * w + nx] {
+                    seen[ny * w + nx] = true;
+                    stack.push(ny * w + nx);
+                }
+            }
+        }
+        let place = [
+            left as f64,
+            top as f64,
+            (right - left + 1) as f64,
+            (bottom - top + 1) as f64,
+        ];
+        if count < 120 || place[2] < 12.0 || place[3] < 12.0 {
+            continue;
+        }
+        let area = place[2] * place[3];
+        let overlap = covered
+            .iter()
+            .map(|[x, y, cw, ch]| {
+                let dx = (place[0] + place[2]).min(x + cw) - place[0].max(*x);
+                let dy = (place[1] + place[3]).min(y + ch) - place[1].max(*y);
+                dx.max(0.0) * dy.max(0.0)
+            })
+            .sum::<f64>();
+        if overlap < area * 0.3 {
+            places.push(place);
+        }
+    }
+    places
+}
+
+/// The boxes of a page's shown, translated text layers, grown by 8 px.
+pub(super) fn translated_boxes(snapshot: &Snapshot, page: EntityId) -> Result<Vec<[f64; 4]>> {
+    let Some(group) = snapshot.page(page)?.text_group()? else {
+        return Ok(Vec::new());
+    };
+    let group_shown = shown(snapshot, group.id())?;
+    let mut boxes = Vec::new();
+    for layer in group.text_layers()? {
+        let translated = layer
+            .content()?
+            .translation()?
+            .is_some_and(|translation| !translation.text.value.trim().is_empty());
+        if !(group_shown && translated && shown(snapshot, layer.id())?) {
+            continue;
+        }
+        if let Some((left, top, right, bottom)) = layer.frame()?.as_ref().and_then(bounds) {
+            boxes.push([
+                left - 8.0,
+                top - 8.0,
+                right - left + 16.0,
+                bottom - top + 16.0,
+            ]);
+        }
+    }
+    Ok(boxes)
+}
+
+/// The box and slant of `layer`'s source lettering, for one line laid along
+/// it: the detected region's long side gives the direction, so a Japanese
+/// column turns 90 degrees and reads top to bottom.
+fn along_source(snapshot: &Snapshot, layer: EntityId) -> Result<([f64; 4], f32)> {
+    let geometry = snapshot
+        .text_layer(layer)?
+        .content()?
+        .source_region()?
+        .map(|region| region.geometry())
+        .transpose()?
+        .with_context(|| format!("{layer} has no detected source region"))?;
+    let [a, b, c, ..] = geometry.points.as_slice() else {
+        bail!("{layer}'s source region is not a box");
+    };
+    let (first, second) = ((b.x - a.x, b.y - a.y), (c.x - b.x, c.y - b.y));
+    let (along, across) = if first.0.hypot(first.1) >= second.0.hypot(second.1) {
+        (first, second)
+    } else {
+        (second, first)
+    };
+    let mut angle = along.1.atan2(along.0).to_degrees();
+    // A line reads left to right or top to bottom, never upside down.
+    if angle > 90.0 {
+        angle -= 180.0;
+    } else if angle <= -90.0 {
+        angle += 180.0;
+    }
+    let (count, sum_x, sum_y) = geometry
+        .points
+        .iter()
+        .fold((0.0, 0.0, 0.0), |(n, x, y), point| {
+            (n + 1.0, x + point.x, y + point.y)
+        });
+    let (cx, cy) = (sum_x / count, sum_y / count);
+    let (width, height) = (along.0.hypot(along.1), across.0.hypot(across.1));
+    let angle = if angle.abs() < 3.0 { 0.0 } else { angle };
+    Ok((
+        [cx - width / 2.0, cy - height / 2.0, width, height].map(f64::round),
+        angle as f32,
+    ))
+}
+
+/// The page's text layers in reading order: panels right to left in rows
+/// from the top, layers inside a panel the same way, a layer outside every
+/// panel taking its own place among them.
+pub(super) fn reading_order(snapshot: &Snapshot, page: EntityId) -> Result<Vec<EntityId>> {
+    let Some(group) = snapshot.page(page)?.text_group()? else {
+        return Ok(Vec::new());
+    };
+    let mut layers = Vec::new();
+    for layer in group.text_layers()? {
+        let geometry = match layer.frame()? {
+            Some(geometry) => Some(geometry),
+            None => layer
+                .content()?
+                .source_region()?
+                .map(|region| region.geometry())
+                .transpose()?,
+        };
+        let Some((left, top, right, bottom)) = geometry.as_ref().and_then(bounds) else {
+            continue;
+        };
+        layers.push((layer.id(), [left, top, right - left, bottom - top]));
+    }
+    let mut panels = Vec::new();
+    for entity in snapshot.descendants(page)? {
+        let is_panel = snapshot
+            .component::<koharu_scene::Region>(entity.id())?
+            .is_some_and(|region| {
+                region.kind == <koharu_scene::PanelRegion as koharu_scene::RegionSpec>::kind()
+            });
+        if !is_panel {
+            continue;
+        }
+        if let Some((left, top, right, bottom)) = snapshot
+            .component::<Geometry>(entity.id())?
+            .as_ref()
+            .and_then(bounds)
+        {
+            panels.push([left, top, right - left, bottom - top]);
+        }
+    }
+    let inside = |[x, y, width, height]: [f64; 4], [px, py, pw, ph]: [f64; 4]| {
+        let (cx, cy) = (x + width / 2.0, y + height / 2.0);
+        cx >= px && cx <= px + pw && cy >= py && cy <= py + ph
+    };
+    // Units: each panel with its layers, and each layer outside every panel.
+    let mut units = panels
+        .iter()
+        .map(|panel| (*panel, Vec::new()))
+        .collect::<Vec<([f64; 4], Vec<(EntityId, [f64; 4])>)>>();
+    for (layer, frame) in layers {
+        let holder = units
+            .iter()
+            .enumerate()
+            .filter(|(_, (panel, _))| inside(frame, *panel))
+            .min_by(|(_, (a, _)), (_, (b, _))| (a[2] * a[3]).total_cmp(&(b[2] * b[3])))
+            .map(|(index, _)| index);
+        match holder {
+            Some(index) => units[index].1.push((layer, frame)),
+            None => units.push((frame, vec![(layer, frame)])),
+        }
+    }
+    let mut order = Vec::new();
+    let unit_frames = units.iter().map(|(frame, _)| *frame).collect::<Vec<_>>();
+    for unit in manga_order(&unit_frames) {
+        let members = &units[unit].1;
+        let frames = members.iter().map(|(_, frame)| *frame).collect::<Vec<_>>();
+        order.extend(
+            manga_order(&frames)
+                .into_iter()
+                .map(|index| members[index].0),
+        );
+    }
+    Ok(order)
+}
+
+/// Boxes in manga order: rows from the top, a box joining a row when it
+/// overlaps the row's band by half its height, right to left inside a row.
+fn manga_order(boxes: &[[f64; 4]]) -> Vec<usize> {
+    let mut by_top = (0..boxes.len()).collect::<Vec<_>>();
+    by_top.sort_by(|a, b| boxes[*a][1].total_cmp(&boxes[*b][1]));
+    let mut rows: Vec<(f64, f64, Vec<usize>)> = Vec::new();
+    for index in by_top {
+        let [_, top, _, height] = boxes[index];
+        let bottom = top + height;
+        match rows.last_mut() {
+            Some((row_top, row_bottom, members))
+                if bottom.min(*row_bottom) - top.max(*row_top)
+                    >= 0.5 * height.min(*row_bottom - *row_top) =>
+            {
+                *row_top = row_top.min(top);
+                *row_bottom = row_bottom.max(bottom);
+                members.push(index);
+            }
+            _ => rows.push((top, bottom, vec![index])),
+        }
+    }
+    rows.into_iter()
+        .flat_map(|(_, _, mut members)| {
+            members.sort_by(|a, b| {
+                (boxes[*b][0] + boxes[*b][2]).total_cmp(&(boxes[*a][0] + boxes[*a][2]))
+            });
+            members
+        })
+        .collect()
+}
+
 /// Drops `layer`'s own box and binds it to the balloon that holds it, so the
 /// renderer lays it out in the balloon's shape.
 fn balloon_flow_step(snapshot: &Snapshot, layer: EntityId) -> Result<EditStep> {
@@ -1157,10 +1506,19 @@ pub(super) fn steps(
             }
             steps.push(balloon_flow_step(snapshot, layer)?);
         }
-        if let Some(angle) = change.angle {
-            let [x, y, width, height] = change
-                .region
-                .with_context(|| format!("turning {layer} needs its region"))?;
+        let (region, angle) = match change.orient {
+            Some(TrialOrient::AlongSource) => {
+                if change.region.is_some() || change.angle.is_some() {
+                    bail!("give {layer} either orient or a region and angle, not both");
+                }
+                let (region, angle) = along_source(snapshot, layer)?;
+                (Some(region), Some(angle))
+            }
+            None => (change.region, change.angle),
+        };
+        if let Some(angle) = angle {
+            let [x, y, width, height] =
+                region.with_context(|| format!("turning {layer} needs its region"))?;
             let geometry = Project::geometry_from_frame(TextFrame {
                 x: x as f32,
                 y: y as f32,
@@ -1178,7 +1536,7 @@ pub(super) fn steps(
                 edit.set(layer, &geometry)?;
                 edit.set(layer, &layout)
             }));
-        } else if let Some([x, y, width, height]) = change.region {
+        } else if let Some([x, y, width, height]) = region {
             let points = [
                 (x, y),
                 (x + width, y),
@@ -2193,6 +2551,34 @@ mod tests {
     use koharu_scene::Point as ScenePoint;
 
     use super::*;
+
+    #[test]
+    fn lettering_cleaned_away_without_a_layer_is_found() {
+        // Two words of dark strokes on white; the cleaning took both away.
+        let source = RgbaImage::from_fn(200, 100, |x, y| {
+            let word = ((20..60).contains(&x) || (120..170).contains(&x)) && (40..60).contains(&y);
+            let value = if word && x % 4 < 2 { 20 } else { 250 };
+            image::Rgba([value, value, value, 255])
+        });
+        let clean = RgbaImage::from_pixel(200, 100, image::Rgba([250, 250, 250, 255]));
+        // A translated layer covers the right word only.
+        let places = cleaned_without_text(&source, &clean, &[[110.0, 30.0, 70.0, 40.0]]);
+        assert_eq!(places.len(), 1, "{places:?}");
+        assert!(places[0][0] < 30.0 && places[0][0] + places[0][2] < 70.0);
+    }
+
+    #[test]
+    fn manga_order_reads_rows_from_the_top_right_to_left() {
+        // Two panels on top (right one first), one wide panel below, and a
+        // small box sitting a little lower in the top row.
+        let boxes = [
+            [0.0, 0.0, 100.0, 100.0],
+            [110.0, 0.0, 100.0, 100.0],
+            [0.0, 120.0, 210.0, 80.0],
+            [60.0, 20.0, 30.0, 90.0],
+        ];
+        assert_eq!(manga_order(&boxes), [1, 0, 3, 2]);
+    }
 
     #[tokio::test]
     async fn an_address_names_a_page_and_its_numbered_layer() {

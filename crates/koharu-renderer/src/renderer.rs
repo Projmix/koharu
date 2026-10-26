@@ -859,6 +859,12 @@ impl Traversal<'_> {
                 || writing_mode != WritingMode::Horizontal
                 || layout.kind == TextLayoutKind::Point
                 || typography.as_ref().is_some_and(|value| !value.auto_fit)
+                // Lines the author broke or chose to keep are theirs, not a
+                // word to stack one letter per line.
+                || text.contains('\n')
+                || typography
+                    .as_ref()
+                    .is_some_and(|value| value.line_breaking.is_some())
             {
                 text.clone()
             } else {

@@ -268,7 +268,10 @@ impl Host for KoharuHost {
                         "set_visibility",
                         "Change visibility and/or opacity for elements.",
                     ),
-                    definition::<DeleteElements>("delete_elements", "Delete elements and descendants."),
+                    definition::<DeleteElements>(
+                        "delete_elements",
+                        "Delete elements and their descendants, by id or address (45#13). Deleting a text layer also removes its content and its text region when nothing else reads them: use it for a detected block that is not lettering (a hair stroke, speed lines), so cleaning leaves that art alone and the chapter check stops listing it.",
+                    ),
                     definition::<MoveElement>(
                         "move_element",
                         "Move an element under a page or element at a zero-based index.",
@@ -512,7 +515,12 @@ impl Host for KoharuHost {
             }
             "delete_elements" => {
                 let arguments: DeleteElements = arguments(&call)?;
-                let elements = entities(&arguments.elements)?;
+                let snapshot = self.snapshot().await?;
+                let elements = arguments
+                    .elements
+                    .iter()
+                    .map(|element| typesetting::address(&snapshot, element))
+                    .collect::<Result<Vec<_>>>()?;
                 self.mutate(|project| {
                     Box::pin(async move {
                         Ok((
@@ -703,6 +711,15 @@ impl Host for KoharuHost {
                 let snapshot = self.snapshot().await?;
                 let desktop = self.handle.state::<Desktop>();
                 let check = output::chapter_check(&snapshot, &desktop, source, target).await?;
+                let cleaned_without_text = if arguments.wants("cleaned") {
+                    Some(typesetting::chapter_cleaned_without_text(&desktop, &snapshot).await?)
+                } else {
+                    None
+                };
+                let check = typesetting::AgentCheck {
+                    check,
+                    cleaned_without_text,
+                };
                 Invocation::read(typesetting::chapter_issues(&snapshot, check, &arguments)?)
             }
             "chapter_text" => {

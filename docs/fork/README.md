@@ -202,7 +202,17 @@ Known gaps after the rebuild:
   by kind and can keep only some kinds; `apply_layers` can stay quiet for
   text passes and confirm an OCR reading as it is; layers carry their OCR
   confidence; `hide_untranslated` hides every shown untranslated layer and
-  `merge_text_layers` joins a sound effect detected in pieces. Unknown
+  `merge_text_layers` joins a sound effect detected in pieces;
+  `delete_elements` on a block that is not lettering also removes its text
+  region, so cleaning leaves that art alone. A change can take
+  `orient: along_source`: one horizontal line in the source lettering's box,
+  turned to its slant, a Japanese column turned 90 degrees. Layers carry a
+  reading order computed from geometry (panels right to left in rows from
+  the top, layers inside a panel the same way), and chapter_text lists them
+  in it. page_layers and check_chapter (`cleaned`) report places where the
+  cleaning removed lettering and no shown translated layer covers them. A
+  short word in a tall free-text box stacks one letter per line only when
+  its author gave no line breaks. Unknown
   argument fields are refused. A call after the
   project changed outside the agent (the owner editing in the app) starts
   with a notice to reread. An agent outside the app edits beside the
