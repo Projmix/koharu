@@ -322,7 +322,7 @@ impl Host for KoharuHost {
                     ),
                     definition::<typesetting::CheckChapterArguments>(
                         "check_chapter",
-                        "Run the pre-export chapter check: blocks with no translation, Japanese left in a translation, fit warnings, unverified OCR (cleared by writing the source text) or cleaning, translated text that is hidden and what hides it, and pages with lettering outside every text region. Pages and layers carry their numbers. One line per issue (page#layer, kinds, text) after a count by kind; kinds keeps only some (fit, translation, ocr, cleaning, hidden, unboxed); full returns JSON.",
+                        "Run the pre-export chapter check: blocks with no translation, Japanese left in a translation, fit warnings, unverified OCR (cleared by writing the source text) or cleaning, translated text that is hidden and what hides it, shown translated text whose font and colour are still automatic (style), and pages with lettering outside every text region. Pages and layers carry their numbers. One line per issue (page#layer, kinds, text) after a count by kind; kinds keeps only some (fit, translation, ocr, cleaning, hidden, style, unboxed); full returns JSON.",
                     ),
                     definition::<typesetting::ChapterText>(
                         "chapter_text",

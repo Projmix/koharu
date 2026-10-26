@@ -199,7 +199,7 @@ Known gaps after the rebuild:
   numbers, the measured balloon insides and the unboxed lettering; images
   state their scale. Pages and layers can be named by id or by address
   (`45`, `45#13`). `check_chapter` answers one line per issue after a count
-  by kind and can keep only some kinds; `apply_layers` can stay quiet for
+  by kind and can keep only some kinds, `style` among them (shown translated text whose font and colour were never chosen); `apply_layers` can stay quiet for
   text passes and confirm an OCR reading as it is; layers carry their OCR
   confidence; `hide_untranslated` hides every shown untranslated layer and
   `merge_text_layers` joins a sound effect detected in pieces;

@@ -183,8 +183,9 @@ pub(super) struct MergeTextLayers {
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(super) struct CheckChapterArguments {
-    /// Kinds to list: fit, translation, ocr, cleaning, hidden, unboxed, and
-    /// cleaned (lettering the cleaning removed with no translated layer over
+    /// Kinds to list: fit, translation, ocr, cleaning, hidden, unboxed,
+    /// style (shown translated text whose font and colour were never chosen),
+    /// and cleaned (lettering the cleaning removed with no translated layer over
     /// it; slow, listed only when asked for); every kind but cleaned when
     /// absent.
     #[serde(default)]
@@ -804,6 +805,33 @@ pub(super) fn chapter_issues(
             ));
         }
     }
+    let mut automatic_style = Vec::new();
+    if wanted("style") {
+        for page in &pages {
+            for layer in automatic_style_layers(snapshot, *page)? {
+                *counts.entry("style").or_default() += 1;
+                let address = format!(
+                    "{}#{}",
+                    page_number(*page),
+                    numbering(snapshot, *page)?(layer)
+                );
+                let text = snapshot
+                    .text_layer(layer)?
+                    .content()?
+                    .translation()?
+                    .map(|translation| translation.text.value)
+                    .unwrap_or_default()
+                    .replace('\n', " / ");
+                if arguments.full {
+                    automatic_style
+                        .push(json!({ "address": address, "element": layer, "translation": text }));
+                } else {
+                    let text = text.chars().take(48).collect::<String>();
+                    lines.push(format!("{address} style=automatic | {text}"));
+                }
+            }
+        }
+    }
     let mut unboxed_text = Vec::new();
     if wanted("unboxed") {
         for issue in check.unboxed_text {
@@ -855,6 +883,7 @@ pub(super) fn chapter_issues(
         return Ok(json!({
             "texts": texts,
             "unboxed_text": unboxed_text,
+            "automatic_style": automatic_style,
             "cleaned_without_text": cleaned,
             "counts": counts,
         }));
@@ -1735,6 +1764,39 @@ pub(super) async fn report(
 
 pub(super) fn image_url(png: String) -> String {
     format!("data:image/png;base64,{png}")
+}
+
+/// The page's shown, translated text layers whose font and colour nobody
+/// chose: typography from processing (or none), or a font and colour both
+/// left unset. They draw in the kind's font and the colour sampled from the
+/// original lettering, often grey; the export wants them set.
+fn automatic_style_layers(snapshot: &Snapshot, page: EntityId) -> Result<Vec<EntityId>> {
+    let Some(group) = snapshot.page(page)?.text_group()? else {
+        return Ok(Vec::new());
+    };
+    if !shown(snapshot, group.id())? {
+        return Ok(Vec::new());
+    }
+    let mut layers = Vec::new();
+    for layer in group.text_layers()? {
+        let translated = layer
+            .content()?
+            .translation()?
+            .is_some_and(|translation| !translation.text.value.trim().is_empty());
+        if !translated || !shown(snapshot, layer.id())? {
+            continue;
+        }
+        let automatic = snapshot
+            .component::<koharu_scene::Typography>(layer.id())?
+            .is_none_or(|typography| {
+                matches!(typography.origin, Origin::Generated(_))
+                    || (typography.preferred_font.is_none() && typography.color.is_none())
+            });
+        if automatic {
+            layers.push(layer.id());
+        }
+    }
+    Ok(layers)
 }
 
 fn numbering(snapshot: &Snapshot, page: EntityId) -> Result<impl Fn(EntityId) -> usize> {
@@ -2882,6 +2944,99 @@ mod tests {
                 .text
                 .value,
             "Привет"
+        );
+    }
+
+    #[tokio::test]
+    async fn shown_translated_text_with_no_chosen_font_or_colour_is_listed() {
+        let mut session = koharu_scene::Session::memory().await.unwrap();
+        let mut setup = session.snapshot().edit();
+        let page = setup
+            .add_page(
+                koharu_scene::PageDraft::new("1", 100.0, 100.0),
+                koharu_scene::At::End,
+            )
+            .unwrap();
+        let typography = |font: Option<&str>, color: Option<[u8; 4]>| koharu_scene::Typography {
+            origin: Origin::User,
+            preferred_font: font.map(str::to_owned),
+            font_weight: None,
+            font_style: None,
+            size: None,
+            auto_fit: true,
+            color,
+            stroke_color: None,
+            stroke_width: None,
+            alignment: None,
+            writing_mode: None,
+            extensions: Default::default(),
+            line_breaking: None,
+        };
+        // No typography; both unset; a chosen font; untranslated; hidden.
+        let cases = [
+            (None, true, true),
+            (Some(typography(None, None)), true, true),
+            (Some(typography(Some("NM Shonen 2"), None)), true, true),
+            (None, false, true),
+            (None, true, false),
+        ];
+        let mut layers = Vec::new();
+        for (style, translated, visible) in cases {
+            let content = setup.add_text_content(page, koharu_scene::At::End).unwrap();
+            let layer = setup
+                .add_text_layer(
+                    page,
+                    koharu_scene::At::End,
+                    content,
+                    &koharu_scene::TextLayout {
+                        origin: Origin::User,
+                        kind: koharu_scene::TextLayoutKind::Paragraph,
+                        angle_degrees: None,
+                    },
+                )
+                .unwrap();
+            setup
+                .set(
+                    content,
+                    &koharu_scene::SourceText {
+                        text: koharu_scene::Authored::user("あ".to_owned()),
+                        language: None,
+                    },
+                )
+                .unwrap();
+            if translated {
+                setup
+                    .set(
+                        content,
+                        &koharu_scene::Translation {
+                            text: koharu_scene::Authored::user("А".to_owned()),
+                            language: None,
+                        },
+                    )
+                    .unwrap();
+            }
+            if let Some(style) = style {
+                setup.set(layer, &style).unwrap();
+            }
+            if !visible {
+                setup
+                    .set(
+                        layer,
+                        &Visibility {
+                            origin: Origin::User,
+                            visible: false,
+                            opacity: 1.0,
+                        },
+                    )
+                    .unwrap();
+            }
+            layers.push(layer);
+        }
+        session.commit(setup.finish().unwrap()).await.unwrap();
+
+        assert_eq!(
+            automatic_style_layers(&session.snapshot(), page).unwrap(),
+            vec![layers[0], layers[1]]
         );
     }
 
