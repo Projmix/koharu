@@ -4,7 +4,7 @@
 //! changes that commit nothing, and the chapter's text and check with page
 //! and layer numbers. A fit is a trial with auto-fit in the intended box.
 
-use std::io::Cursor;
+use std::{collections::HashMap, io::Cursor};
 
 use anyhow::{Context as _, Result, bail};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -255,6 +255,7 @@ pub(super) async fn page_layers(
     let clean = render_image(desktop, &without_text(snapshot, page)?, page).await?;
     let source = source_image(snapshot, page).await?;
     let reading = reading_order(snapshot, page)?;
+    let shapes = koharu_renderer::balloon_flow_shapes(snapshot, page)?;
     let mut layers = Vec::new();
     let mut filled = Vec::new();
     if let Some(group) = snapshot.page(page)?.text_group()? {
@@ -266,7 +267,7 @@ pub(super) async fn page_layers(
                     .position(|id| *id == layer.id())
                     .map(|position| position + 1)
             );
-            measure_balloon(&clean, &mut value);
+            measure_balloon(&clean, &mut value, &shapes);
             if let Some(region) = layer.content()?.source_region()? {
                 filled.extend(
                     snapshot
@@ -446,10 +447,16 @@ fn read_box(value: &Value) -> Option<[f64; 4]> {
 
 /// Replaces a layer value's outline estimate of the balloon's inside with
 /// the one measured on the clean page, when the balloon is closed.
-fn measure_balloon(clean: &RgbaImage, value: &mut Value) {
+fn measure_balloon(clean: &RgbaImage, value: &mut Value, shapes: &HashMap<EntityId, Geometry>) {
+    // A layer sharing a balloon is measured in its own part of it, the one
+    // the renderer lays it out in.
+    let shape = value["id"]
+        .as_str()
+        .and_then(|id| entity(id).ok())
+        .and_then(|id| shapes.get(&id));
     let measured = read_box(&value["balloon"]["box"])
         .zip(read_box(&value["box"]))
-        .and_then(|(balloon, text)| balloon_interior(clean, balloon, text));
+        .and_then(|(balloon, text)| balloon_interior(clean, balloon, text, shape));
     match measured {
         Some(interior) => {
             value["balloon"]["inner_box"] = json!(interior.inner_box);
@@ -1032,8 +1039,9 @@ pub(super) async fn preview_layers(
     let scale = arguments.scale.unwrap_or(1.0).clamp(0.1, 4.0);
     let mut image = rasterize(desktop, &frame).await?;
     let clean = render_image(desktop, &without_text(&trial, page)?, page).await?;
+    let shapes = koharu_renderer::balloon_flow_shapes(&trial, page)?;
     for value in &mut layers {
-        measure_balloon(&clean, value);
+        measure_balloon(&clean, value, &shapes);
     }
     if arguments.outline {
         draw_outlines(&mut image, &trial, &frame, &clean, page, &changed, scale)?;
@@ -1601,10 +1609,11 @@ pub(super) async fn report(
     for (page, members) in pages {
         let frame = desktop.renderer().render(snapshot, page).await?;
         let clean = render_image(desktop, &without_text(snapshot, page)?, page).await?;
+        let shapes = koharu_renderer::balloon_flow_shapes(snapshot, page)?;
         let numbers = numbering(snapshot, page)?;
         for layer in members {
             let mut value = layer_value(snapshot, &frame, layer, numbers(layer))?;
-            measure_balloon(&clean, &mut value);
+            measure_balloon(&clean, &mut value, &shapes);
             if !full {
                 value = compact_layer(&value);
             }
@@ -1972,7 +1981,7 @@ fn inner_box(geometry: &Geometry) -> Option<[f64; 4]> {
 /// The largest axis-aligned rectangle inside the balloon around the text, as
 /// drawn on the clean page; see `balloon_interior`.
 fn pixel_inner_box(clean: &RgbaImage, balloon: [f64; 4], text: [f64; 4]) -> Option<[f64; 4]> {
-    balloon_interior(clean, balloon, text).map(|interior| interior.inner_box)
+    balloon_interior(clean, balloon, text, None).map(|interior| interior.inner_box)
 }
 
 /// The inside of a balloon as drawn on the clean page, for the text whose
@@ -2006,6 +2015,23 @@ impl Interior {
             f64::from(self.left) + last as f64 + 1.0,
         ))
     }
+}
+
+/// Whether the point lies inside the polygon (even-odd rule).
+fn polygon_contains(polygon: &[(f64, f64)], x: f64, y: f64) -> bool {
+    let mut inside = false;
+    let Some(mut previous) = polygon.last().copied() else {
+        return false;
+    };
+    for &current in polygon {
+        if (current.1 > y) != (previous.1 > y)
+            && x < (previous.0 - current.0) * (y - current.1) / (previous.1 - current.1) + current.0
+        {
+            inside = !inside;
+        }
+        previous = current;
+    }
+    inside
 }
 
 /// Chamfer (3-4) distance, in thirds of a pixel, from each pixel to the
@@ -2063,7 +2089,12 @@ fn chamfer(sources: &[bool], width: usize, height: usize) -> Vec<u32> {
 /// neck; the lobe holding (or nearest) the text is measured. `None` when the
 /// flood leaks out of the balloon's box (an open balloon) or finds no light
 /// pixel, so the detected outline decides instead.
-fn balloon_interior(clean: &RgbaImage, balloon: [f64; 4], text: [f64; 4]) -> Option<Interior> {
+fn balloon_interior(
+    clean: &RgbaImage,
+    balloon: [f64; 4],
+    text: [f64; 4],
+    shape: Option<&Geometry>,
+) -> Option<Interior> {
     const LIGHT: u32 = 200;
     let (page_width, page_height) = clean.dimensions();
     let grow = |value: f64| value * 0.15;
@@ -2162,7 +2193,25 @@ fn balloon_interior(clean: &RgbaImage, balloon: [f64; 4], text: [f64; 4]) -> Opt
         }
     }
     // Open the inside and keep the lobe of the text.
-    let inside = outside.iter().map(|outside| !outside).collect::<Vec<_>>();
+    let mut inside = outside.iter().map(|outside| !outside).collect::<Vec<_>>();
+    if let Some(shape) = shape {
+        let polygon = shape
+            .points
+            .iter()
+            .map(|point| (point.x, point.y))
+            .collect::<Vec<_>>();
+        for (at, cell) in inside.iter_mut().enumerate() {
+            if *cell {
+                let (x, y) = (at % width, at / width);
+                *cell = polygon_contains(
+                    &polygon,
+                    f64::from(left) + x as f64 + 0.5,
+                    f64::from(top) + y as f64 + 0.5,
+                );
+            }
+        }
+    }
+    let outside = inside.iter().map(|inside| !inside).collect::<Vec<_>>();
     let (inside_min_x, inside_max_x, inside_min_y, inside_max_y) = (0..width * height)
         .filter(|at| inside[*at])
         .fold((width, 0, height, 0), |(a, b, c, d), at| {
@@ -2457,12 +2506,13 @@ fn draw_outlines(
     scale: f64,
 ) -> Result<()> {
     let numbers = numbering(snapshot, page)?;
+    let shapes = koharu_renderer::balloon_flow_shapes(snapshot, page)?;
     let stroke = (2.0 / scale).ceil().max(1.0) as u32;
     let cell = (3.0 / scale).ceil().max(2.0) as u32;
     for layer in layers {
         let number = numbers(*layer);
         let mut value = layer_value(snapshot, frame, *layer, number)?;
-        measure_balloon(clean, &mut value);
+        measure_balloon(clean, &mut value, &shapes);
         if let Some(inner) = read_box(&value["balloon"]["inner_box"]) {
             draw_box(image, inner, stroke, BALLOON_COLOR);
         }

@@ -211,6 +211,8 @@ Known gaps after the rebuild:
   the top, layers inside a panel the same way), and chapter_text lists them
   in it. page_layers and check_chapter (`cleaned`) report places where the
   cleaning removed lettering and no shown translated layer covers them. A
+  layer sharing a balloon is measured in its own part of it, the part the
+  renderer lays it out in (`balloon_flow_shapes`). A
   short word in a tall free-text box stacks one letter per line only when
   its author gave no line breaks. Unknown
   argument fields are refused. A call after the

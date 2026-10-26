@@ -1058,6 +1058,20 @@ struct FlowSeed {
     dependencies: BTreeSet<RenderDependency>,
 }
 
+/// The part of its balloon each flowing text layer of `page` is laid out in,
+/// in page coordinates: a joined balloon divided at its necks, or by text
+/// length, among its layers. A typesetting agent measures a lobe on it.
+pub fn balloon_flow_shapes(
+    snapshot: &Snapshot,
+    page: EntityId,
+) -> Result<HashMap<EntityId, Geometry>> {
+    Ok(resolve_balloon_flows(snapshot, page)?
+        .placements
+        .into_iter()
+        .map(|(layer, placement)| (layer, placement.geometry))
+        .collect())
+}
+
 fn resolve_balloon_flows(snapshot: &Snapshot, page: EntityId) -> Result<BalloonFlowPlan> {
     let mut groups = BTreeMap::<EntityId, Vec<FlowSeed>>::new();
     if let Some(group) = snapshot.page(page)?.text_group()? {
