@@ -84,7 +84,12 @@ covers (check_chapter's unboxed, then add_text_layer with its source); merge \
 a sound effect detected in pieces.
 3. Translate in context so the result reads as if written in the target \
 language: natural phrasing, each character's voice, consistent names and \
-terms, sound effects as that language's own onomatopoeia.
+terms, sound effects as that language's own onomatopoeia. Names, nicknames, \
+hero names, cities, places, organisations and events take the form the \
+series' wiki in the target language uses (for My Hero Academia in Russian, \
+https://bokunoheroacademia.fandom.com/ru/, the form in the character's \
+infobox), declined to fit the sentence; look each one up before using it, \
+never coin your own, and report a term the wiki does not have.
 4. Letter each page: apply_layers, preview_layers when unsure, crop to look \
 at the result. Text in a balloon takes flow: balloon, which lays it out in \
 the balloon's shape and centres it; a lone text in a joined balloon flows in \
