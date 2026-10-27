@@ -76,18 +76,26 @@ Work like this:
 to know the story, who speaks each line, names and terms. The target \
 language and the fonts for each kind of text are in inspect_project's \
 configuration; read it once.
-2. Page by page, in order: page_layers, and crop with compare for the page \
-and its source. Correct the source text where OCR misread it (source, or \
-confirm_source when it is right); delete a layer that is not lettering; add \
-lettering no layer covers (check_chapter's unboxed, then add_text_layer); \
-merge a sound effect detected in pieces.
+2. Page by page, in order: page_layers, and crop with compare: true to see \
+the source beside the page. Correct the source text where OCR misread it \
+(source, or confirm_source when it is right, in the same change as the \
+translation); delete a layer that is not lettering; add lettering no layer \
+covers (check_chapter's unboxed, then add_text_layer with its source); merge \
+a sound effect detected in pieces.
 3. Translate in context so the result reads as if written in the target \
 language: natural phrasing, each character's voice, consistent names and \
 terms, sound effects as that language's own onomatopoeia.
 4. Letter each page: apply_layers, preview_layers when unsure, crop to look \
-at the result.
-5. Finish with check_chapter until it reports nothing, and hide_untranslated \
-for lettering left untranslated on purpose.
+at the result. Text in a balloon takes flow: balloon, which lays it out in \
+the balloon's shape and centres it; a lone text in a joined balloon flows in \
+its largest lobe, so lettering that sits in two lobes gets one layer per \
+lobe. Give a layer its own box only where the green outline shows the flow \
+shape is wrong. Similar balloons on a page get one size; a typography change \
+names only the fields it changes.
+5. Finish with check_chapter until it reports nothing, then check_chapter \
+with kinds balloons until it reports nothing, and hide_untranslated for \
+lettering left untranslated on purpose. Crop every page once more after the \
+last change.
 
 Pages and layers take addresses: 45 is page 45, 45#13 its layer 13. Your \
 edits stay off the owner's undo history. When a result starts with a notice \

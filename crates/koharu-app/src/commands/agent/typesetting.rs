@@ -63,27 +63,43 @@ pub(super) struct Crop {
     /// Put the imported source on the left of the same region.
     #[serde(default)]
     pub(super) compare: bool,
-    /// Draw every text layer's box with its number, and the measured inside
-    /// of its balloon.
+    /// Draw every text layer's box with its number (magenta), the measured
+    /// inside of its balloon (blue) and the shape a balloon flow lays it out
+    /// in (green).
     #[serde(default)]
     pub(super) outline: bool,
 }
 
-#[derive(Clone, Deserialize, JsonSchema)]
+/// Typography fields to change. A field left out keeps the layer's current
+/// value, so a new size keeps the font, colour and outline.
+#[derive(Clone, Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(super) struct TrialTypography {
+    /// A family name from available_fonts.
+    #[serde(default)]
     preferred_font: Option<String>,
+    #[serde(default)]
     font_weight: Option<u16>,
+    #[serde(default)]
     font_style: Option<AgentFontStyle>,
+    /// Fixed size in page pixels; give auto_fit false with it.
+    #[serde(default)]
     size: Option<f32>,
-    auto_fit: bool,
+    #[serde(default)]
+    auto_fit: Option<bool>,
+    #[serde(default)]
     color: Option<[u8; 4]>,
+    #[serde(default)]
     stroke_color: Option<[u8; 4]>,
+    /// Outline width in page pixels; 0 removes the outline.
+    #[serde(default)]
     stroke_width: Option<f32>,
+    #[serde(default)]
     alignment: Option<AgentTextAlignment>,
+    #[serde(default)]
     writing_mode: Option<AgentWritingMode>,
     /// Where lines may break; automatic (hyphenating a word as a last
-    /// resort) when absent.
+    /// resort) when never set.
     #[serde(default)]
     line_breaking: Option<AgentLineBreaking>,
 }
@@ -126,7 +142,7 @@ pub(super) struct TrialChange {
     /// and let the line carry the length; never stretch letters along it.
     #[serde(default)]
     orient: Option<TrialOrient>,
-    /// Whole new typography, as set_typography takes it.
+    /// Typography fields to change; the others keep their current values.
     #[serde(default)]
     typography: Option<TrialTypography>,
     /// Show or hide the layer.
@@ -185,9 +201,11 @@ pub(super) struct MergeTextLayers {
 pub(super) struct CheckChapterArguments {
     /// Kinds to list: fit, translation, ocr, cleaning, hidden, unboxed,
     /// style (shown translated text whose font and colour were never chosen),
-    /// and cleaned (lettering the cleaning removed with no translated layer over
-    /// it; slow, listed only when asked for); every kind but cleaned when
-    /// absent.
+    /// and two slow kinds listed only when asked for: cleaned (lettering the
+    /// cleaning removed with no translated layer over it) and balloons (shown
+    /// translated text in a balloon that crosses its inside, sits off its
+    /// centre, is small, or is set well below the page's usual balloon size);
+    /// every other kind when absent.
     #[serde(default)]
     pub(super) kinds: Option<Vec<String>>,
     /// JSON instead of one line per issue.
@@ -202,6 +220,9 @@ pub(super) struct AddTextLayer {
     /// [x, y, width, height] in page pixels. Inside a balloon the text flows
     /// in the balloon's shape.
     pub(super) region: [f64; 4],
+    /// The lettering as read off the page, in the source language.
+    #[serde(default)]
+    pub(super) source: Option<String>,
     /// The translation, or its lines.
     #[serde(default)]
     pub(super) text: Option<String>,
@@ -228,8 +249,9 @@ pub(super) struct PreviewLayers {
     /// Put the imported source on the left of the same region.
     #[serde(default)]
     compare: bool,
-    /// Draw the changed layers' boxes with their numbers, and the measured
-    /// inside of their balloons.
+    /// Draw the changed layers' boxes with their numbers (magenta), the
+    /// measured inside of their balloons (blue) and the shape a balloon flow
+    /// lays each out in (green).
     #[serde(default)]
     outline: bool,
     /// Return each changed layer in full, as page_layers does, instead of
@@ -454,11 +476,11 @@ fn read_box(value: &Value) -> Option<[f64; 4]> {
 /// Replaces a layer value's outline estimate of the balloon's inside with
 /// the one measured on the clean page, when the balloon is closed.
 fn measure_balloon(clean: &RgbaImage, value: &mut Value, shapes: &HashMap<EntityId, Geometry>) {
-    // A layer sharing a balloon is measured in its own part of it, the one
-    // the renderer lays it out in.
-    let shape = value["id"]
-        .as_str()
-        .and_then(|id| entity(id).ok())
+    // A flowing layer is measured in the part of its balloon the renderer
+    // lays it out in; a layer with its own box, in the lobe its box sits in.
+    let shape = (value["flow"] == "balloon")
+        .then(|| value["id"].as_str().and_then(|id| entity(id).ok()))
+        .flatten()
         .and_then(|id| shapes.get(&id));
     let measured = read_box(&value["balloon"]["box"])
         .zip(read_box(&value["box"]))
@@ -669,17 +691,151 @@ fn shown(snapshot: &Snapshot, entity: EntityId) -> Result<bool> {
 pub(super) struct AgentCheck {
     pub(super) check: ChapterCheck,
     pub(super) cleaned_without_text: Option<Vec<(EntityId, Vec<[f64; 4]>)>>,
+    /// Text layers as `page_layers` reports them, balloons measured, for the
+    /// pages the asked kinds need: every page for balloons, else those with
+    /// a fit issue.
+    pub(super) layers: HashMap<EntityId, Value>,
 }
 
 impl CheckChapterArguments {
-    /// Every kind is listed by default except `cleaned`, which renders and
-    /// compares every page and is asked for by name.
+    /// Every kind is listed by default except `cleaned` and `balloons`,
+    /// which render every page and are asked for by name.
     pub(super) fn wants(&self, kind: &str) -> bool {
         match &self.kinds {
             Some(kinds) => kinds.iter().any(|wanted| wanted == kind),
-            None => kind != "cleaned",
+            None => !matches!(kind, "cleaned" | "balloons"),
         }
     }
+}
+
+/// `pages`' text layers as `page_layers` reports them, keyed by layer.
+pub(super) async fn measured_layers(
+    desktop: &Desktop,
+    snapshot: &Snapshot,
+    pages: &[EntityId],
+) -> Result<HashMap<EntityId, Value>> {
+    let mut layers = HashMap::new();
+    for page in pages {
+        let Some(group) = snapshot.page(*page)?.text_group()? else {
+            continue;
+        };
+        let frame = desktop.renderer().render(snapshot, *page).await?;
+        let clean = render_image(desktop, &without_text(snapshot, *page)?, *page).await?;
+        let shapes = koharu_renderer::balloon_flow_shapes(snapshot, *page)?;
+        for (index, layer) in group.text_layers()?.enumerate() {
+            let mut value = layer_value(snapshot, &frame, layer.id(), index + 1)?;
+            measure_balloon(&clean, &mut value, &shapes);
+            layers.insert(layer.id(), value);
+        }
+    }
+    Ok(layers)
+}
+
+/// What a fit warning needs to be fixed without another call: the drawn
+/// size, the line that overflows most against its room, and the largest
+/// size the box takes when auto-fit stopped at its ceiling.
+fn fit_details(value: &Value) -> String {
+    let rendered = &value["rendered"];
+    let mut details = Vec::new();
+    if let Some(size) = rendered["font_size"].as_f64() {
+        details.push(format!("size={size}"));
+    }
+    let worst = rendered["lines"].as_array().and_then(|lines| {
+        lines
+            .iter()
+            .filter_map(|line| Some((line["width"].as_f64()?, line["room"].as_f64()?)))
+            .max_by(|left, right| (left.0 - left.1).total_cmp(&(right.0 - right.1)))
+    });
+    if let Some((width, room)) = worst {
+        details.push(format!("widest={width}/{room}"));
+    }
+    if let Some(size) = rendered["fits_up_to"].as_f64() {
+        details.push(format!("fits_up_to={size}"));
+    }
+    details.join(" ")
+}
+
+/// The balloon issues of shown, translated text in balloons, page by page.
+fn balloon_issues(
+    snapshot: &Snapshot,
+    pages: &[EntityId],
+    layers: &HashMap<EntityId, Value>,
+) -> Result<Vec<(EntityId, EntityId, Vec<String>)>> {
+    let mut issues = Vec::new();
+    for page in pages {
+        let Some(group) = snapshot.page(*page)?.text_group()? else {
+            continue;
+        };
+        let page_layers = group
+            .text_layers()?
+            .filter_map(|layer| layers.get(&layer.id()).map(|value| (layer.id(), value)))
+            .collect::<Vec<_>>();
+        let values = page_layers
+            .iter()
+            .map(|(_, value)| *value)
+            .collect::<Vec<_>>();
+        for ((layer, _), found) in page_layers.iter().zip(page_balloon_issues(&values)) {
+            if !found.is_empty() {
+                issues.push((*page, *layer, found));
+            }
+        }
+    }
+    Ok(issues)
+}
+
+/// One page's layers as `page_layers` reports them, each with its balloon
+/// issues: a line crossing the balloon's inside, a block off the centre of
+/// its lobe by more than an eighth of the lobe, a size the renderer calls
+/// small, or a size under 85% of the page's median balloon size (a larger
+/// shout is the letterer's choice). Only shown, translated, horizontal text
+/// in a balloon measured on the page's pixels counts.
+fn page_balloon_issues(layers: &[&Value]) -> Vec<Vec<String>> {
+    let lettered = |value: &Value| {
+        value["visible"] == true
+            && value["translated_text"]
+                .as_str()
+                .is_some_and(|text| !text.trim().is_empty())
+            && value["balloon"]["measured"] == "pixels"
+            && value["typography"]["writing_mode"] != "Vertical"
+    };
+    let mut sizes = layers
+        .iter()
+        .filter(|value| lettered(value))
+        .filter_map(|value| value["rendered"]["font_size"].as_f64())
+        .collect::<Vec<_>>();
+    sizes.sort_by(f64::total_cmp);
+    let median = (sizes.len() >= 3).then(|| sizes[sizes.len() / 2]);
+    layers
+        .iter()
+        .map(|value| {
+            let mut found = Vec::new();
+            if !lettered(value) {
+                return found;
+            }
+            let balloon = &value["balloon"];
+            if let Some(gap) = balloon["edge_gap"].as_f64().filter(|gap| *gap < -2.0) {
+                found.push(format!("crosses={gap}"));
+            }
+            if let (Some([dx, dy]), Some([_, _, width, height])) = (
+                balloon["off_centre"]
+                    .as_array()
+                    .and_then(|off| Some([off.first()?.as_f64()?, off.get(1)?.as_f64()?])),
+                read_box(&balloon["interior"]["box"]),
+            ) && (dx.abs() > width / 8.0 || dy.abs() > height / 8.0)
+            {
+                found.push(format!("off_centre={dx},{dy}"));
+            }
+            let size = value["rendered"]["font_size"].as_f64();
+            if value["rendered"]["small"] == true {
+                found.push(format!("small={}", size.unwrap_or_default()));
+            } else if let (Some(size), Some(median)) = (size, median)
+                && size < median * 0.85
+            {
+                found.push(format!("size={size} page_median={median}"));
+            }
+            found
+        })
+        .collect()
 }
 
 /// Every page's places cleaned without a translated layer over them.
@@ -707,6 +863,7 @@ pub(super) fn chapter_issues(
     let AgentCheck {
         check,
         cleaned_without_text: cleaned_places,
+        layers: measured,
     } = check;
     let wanted = |kind: &str| arguments.wants(kind);
     let pages = snapshot.pages().map(|page| page.id()).collect::<Vec<_>>();
@@ -729,9 +886,15 @@ pub(super) fn chapter_issues(
     for issue in check.texts {
         let mut kinds = Vec::new();
         if let Some(fit) = issue.fit {
+            let details = measured
+                .get(&issue.element)
+                .map(fit_details)
+                .unwrap_or_default();
             kinds.push((
                 "fit",
-                format!("fit={}", json!(fit).as_str().unwrap_or("warning")),
+                format!("fit={} {details}", json!(fit).as_str().unwrap_or("warning"))
+                    .trim_end()
+                    .to_owned(),
             ));
         }
         if let Some(translation) = issue.translation {
@@ -857,6 +1020,27 @@ pub(super) fn chapter_issues(
             }
         }
     }
+    let mut balloons = Vec::new();
+    if wanted("balloons") {
+        for (page, layer, found) in balloon_issues(snapshot, &pages, &measured)? {
+            *counts.entry("balloons").or_default() += 1;
+            let address = format!(
+                "{}#{}",
+                page_number(page),
+                numbering(snapshot, page)?(layer)
+            );
+            if arguments.full {
+                balloons.push(json!({ "address": address, "element": layer, "issues": found }));
+            } else {
+                let text = measured[&layer]["translated_text"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .replace('\n', " / ");
+                let text = text.chars().take(48).collect::<String>();
+                lines.push(format!("{address} {} | {text}", found.join(" ")));
+            }
+        }
+    }
     let mut cleaned = Vec::new();
     if let Some(places) = cleaned_places {
         for (page, boxes) in places {
@@ -885,6 +1069,7 @@ pub(super) fn chapter_issues(
             "unboxed_text": unboxed_text,
             "automatic_style": automatic_style,
             "cleaned_without_text": cleaned,
+            "balloons": balloons,
             "counts": counts,
         }));
     }
@@ -1152,19 +1337,47 @@ pub(super) async fn preview_layers(
 }
 
 impl TrialTypography {
-    pub(super) fn into_typography(self) -> Typography {
+    /// These fields over `current`, a layer's typography; a new layer has
+    /// none and auto-fits unless told otherwise.
+    pub(super) fn onto(self, current: Option<&koharu_scene::Typography>) -> Typography {
         Typography {
-            preferred_font: self.preferred_font,
-            font_weight: self.font_weight,
-            font_style: self.font_style.map(Into::into),
-            size: self.size,
-            auto_fit: self.auto_fit,
-            color: self.color,
-            stroke_color: self.stroke_color,
-            stroke_width: self.stroke_width,
-            alignment: self.alignment.map(Into::into),
-            writing_mode: self.writing_mode.map(Into::into),
-            line_breaking: self.line_breaking.map(Into::into),
+            preferred_font: self
+                .preferred_font
+                .or_else(|| current.and_then(|current| current.preferred_font.clone())),
+            font_weight: self
+                .font_weight
+                .or_else(|| current.and_then(|current| current.font_weight)),
+            font_style: self
+                .font_style
+                .map(Into::into)
+                .or_else(|| current.and_then(|current| current.font_style)),
+            size: self
+                .size
+                .or_else(|| current.and_then(|current| current.size)),
+            auto_fit: self
+                .auto_fit
+                .unwrap_or_else(|| current.is_none_or(|current| current.auto_fit)),
+            color: self
+                .color
+                .or_else(|| current.and_then(|current| current.color)),
+            stroke_color: self
+                .stroke_color
+                .or_else(|| current.and_then(|current| current.stroke_color)),
+            stroke_width: self
+                .stroke_width
+                .or_else(|| current.and_then(|current| current.stroke_width)),
+            alignment: self
+                .alignment
+                .map(Into::into)
+                .or_else(|| current.and_then(|current| current.alignment)),
+            writing_mode: self
+                .writing_mode
+                .map(Into::into)
+                .or_else(|| current.and_then(|current| current.writing_mode)),
+            line_breaking: self
+                .line_breaking
+                .map(Into::into)
+                .or_else(|| current.and_then(|current| current.line_breaking)),
         }
     }
 }
@@ -1179,22 +1392,7 @@ pub(super) async fn new_layer_typography(
     [x, y, width, height]: [f64; 4],
     typography: Option<TrialTypography>,
 ) -> Result<Typography> {
-    let mut typography = typography.map_or(
-        Typography {
-            preferred_font: None,
-            font_weight: None,
-            font_style: None,
-            size: None,
-            auto_fit: true,
-            color: None,
-            stroke_color: None,
-            stroke_width: None,
-            alignment: None,
-            writing_mode: None,
-            line_breaking: None,
-        },
-        TrialTypography::into_typography,
-    );
+    let mut typography = typography.unwrap_or_default().onto(None);
     if typography.color.is_none() {
         let clean = render_image(desktop, &without_text(snapshot, page)?, page).await?;
         let (image_width, image_height) = clean.dimensions();
@@ -1700,7 +1898,11 @@ pub(super) fn steps(
             )?);
         }
         if let Some(typography) = change.typography {
-            let typography = typography.into_typography();
+            let typography = typography.onto(
+                snapshot
+                    .component::<koharu_scene::Typography>(layer)?
+                    .as_ref(),
+            );
             steps.push(Project::typography_step(
                 snapshot,
                 vec![TypographyUpdate { layer, typography }],
@@ -2682,11 +2884,13 @@ fn cut(image: &RgbaImage, region: Option<[f64; 4]>, scale: f64) -> Result<(Value
 
 const LAYER_COLOR: [u8; 4] = [230, 0, 160, 255];
 const BALLOON_COLOR: [u8; 4] = [0, 170, 230, 255];
+const FLOW_COLOR: [u8; 4] = [0, 180, 60, 255];
 const UNBOXED_COLOR: [u8; 4] = [255, 140, 0, 255];
 
-/// Draws each of `layers`' box in magenta with its number, and the inside of
-/// its balloon as measured for `page_layers` in blue. Strokes and digits are
-/// sized to stay legible at `scale`.
+/// Draws each of `layers`' box in magenta with its number, the inside of its
+/// balloon as measured for `page_layers` in blue, and the shape a balloon
+/// flow lays it out in (its lobe of a joined balloon) in green. Strokes and
+/// digits are sized to stay legible at `scale`.
 fn draw_outlines(
     image: &mut RgbaImage,
     snapshot: &Snapshot,
@@ -2704,6 +2908,11 @@ fn draw_outlines(
         let number = numbers(*layer);
         let mut value = layer_value(snapshot, frame, *layer, number)?;
         measure_balloon(clean, &mut value, &shapes);
+        if value["flow"] == "balloon"
+            && let Some(shape) = shapes.get(layer)
+        {
+            draw_polygon(image, &shape.points, stroke, FLOW_COLOR);
+        }
         if let Some(inner) = read_box(&value["balloon"]["inner_box"]) {
             draw_box(image, inner, stroke, BALLOON_COLOR);
         }
@@ -2713,6 +2922,36 @@ fn draw_outlines(
         }
     }
     Ok(())
+}
+
+fn draw_polygon(
+    image: &mut RgbaImage,
+    points: &[koharu_scene::Point],
+    stroke: u32,
+    color: [u8; 4],
+) {
+    let (image_width, image_height) = image.dimensions();
+    let half = f64::from(stroke) / 2.0;
+    for (index, start) in points.iter().enumerate() {
+        let end = points[(index + 1) % points.len()];
+        let steps = (end.x - start.x)
+            .abs()
+            .max((end.y - start.y).abs())
+            .ceil()
+            .max(1.0) as usize;
+        for step in 0..=steps {
+            let t = step as f64 / steps as f64;
+            let (x, y) = (
+                start.x + (end.x - start.x) * t,
+                start.y + (end.y - start.y) * t,
+            );
+            for py in (y - half).max(0.0) as u32..((y + half).ceil() as u32).min(image_height) {
+                for px in (x - half).max(0.0) as u32..((x + half).ceil() as u32).min(image_width) {
+                    image.put_pixel(px, py, image::Rgba(color));
+                }
+            }
+        }
+    }
 }
 
 fn draw_box(image: &mut RgbaImage, [x, y, width, height]: [f64; 4], stroke: u32, color: [u8; 4]) {
@@ -2865,6 +3104,41 @@ mod tests {
         assert!(address(&snapshot, "2#9").is_err());
     }
 
+    #[test]
+    fn balloon_issues_name_crossing_off_centre_and_undersized_text() {
+        let layer = |size: f64, gap: f64, off: [f64; 2]| {
+            json!({
+                "visible": true,
+                "translated_text": "Привет",
+                "typography": { "writing_mode": null },
+                "balloon": {
+                    "measured": "pixels",
+                    "interior": { "box": [0.0, 0.0, 200.0, 400.0] },
+                    "off_centre": off,
+                    "edge_gap": gap,
+                },
+                "rendered": { "font_size": size, "small": false },
+            })
+        };
+        let hidden = json!({ "visible": false, "translated_text": "Скрыто" });
+        let layers = [
+            layer(25.0, 12.0, [3.0, 4.0]),
+            layer(26.0, 10.0, [-2.0, 0.0]),
+            layer(40.0, 8.0, [0.0, 0.0]),
+            layer(20.0, -9.0, [30.0, 60.0]),
+            hidden,
+        ];
+        let found = page_balloon_issues(&layers.iter().collect::<Vec<_>>());
+        assert!(found[0].is_empty() && found[1].is_empty());
+        // A larger shout is the letterer's choice.
+        assert!(found[2].is_empty());
+        assert_eq!(
+            found[3],
+            ["crosses=-9", "off_centre=30,60", "size=20 page_median=26"]
+        );
+        assert!(found[4].is_empty());
+    }
+
     #[tokio::test]
     async fn a_text_change_keeps_the_layers_typography() {
         let mut session = koharu_scene::Session::memory().await.unwrap();
@@ -2917,9 +3191,9 @@ mod tests {
 
         let change: TrialChange =
             serde_json::from_value(json!({ "element": "1#1", "text": "Привет" })).unwrap();
-        let steps = steps(&session.snapshot(), vec![change], |_| None).unwrap();
+        let retexted = steps(&session.snapshot(), vec![change], |_| None).unwrap();
         let mut edit = session.snapshot().edit();
-        for step in steps {
+        for step in retexted {
             step(&mut edit).unwrap();
         }
         session.commit(edit.finish().unwrap()).await.unwrap();
@@ -2944,6 +3218,28 @@ mod tests {
                 .text
                 .value,
             "Привет"
+        );
+
+        // A new size alone keeps the font, colour and the rest.
+        let change: TrialChange =
+            serde_json::from_value(json!({ "element": "1#1", "typography": { "size": 22.0 } }))
+                .unwrap();
+        let resized = steps(&session.snapshot(), vec![change], |_| None).unwrap();
+        let mut edit = session.snapshot().edit();
+        for step in resized {
+            step(&mut edit).unwrap();
+        }
+        session.commit(edit.finish().unwrap()).await.unwrap();
+        assert_eq!(
+            session
+                .snapshot()
+                .component::<koharu_scene::Typography>(layer)
+                .unwrap()
+                .unwrap(),
+            koharu_scene::Typography {
+                size: Some(22.0),
+                ..typography
+            }
         );
     }
 

@@ -34,7 +34,9 @@ use crate::{
     Error, FontFamily, FontStyle, Frame, ImageKind, ImageMetadata, KindFonts, Layer, LayerKind,
     Presentation, RasterImage, RenderBounds, RenderDependency, RenderDiagnostic, Result,
     RetentionStats, TextAlign, TextMetadata, TypesettingConfig, WritingMode,
-    bubble::{GeometryFrame, LayoutBox, contour, flow_cells, geometry_bounds, geometry_frame},
+    bubble::{
+        GeometryFrame, LayoutBox, contour, flow_cells, geometry_bounds, geometry_frame, main_lobe,
+    },
     fonts::{FontPreview, FontRequest, Fonts},
     frame::{
         FrameData, ImageNodeDescriptor, LayerData, LocalTextMetadata, NodeDescriptor, RetainedNode,
@@ -1157,8 +1159,13 @@ fn resolve_balloon_flows(snapshot: &Snapshot, page: EntityId) -> Result<BalloonF
             .map(|seed| seed.anchor.unwrap_or(center))
             .collect::<Vec<_>>();
         let weights = seeds.iter().map(|seed| seed.weight).collect::<Vec<_>>();
-        let cells =
-            (seeds.len() > 1).then(|| flow_cells(frame, &balloon_contour, &anchors, &weights));
+        // A lone text in a joined balloon flows in its own lobe; spread over
+        // every lobe its lines would cross the necks.
+        let cells = if seeds.len() > 1 {
+            Some(flow_cells(frame, &balloon_contour, &anchors, &weights))
+        } else {
+            main_lobe(&balloon_contour).map(|lobe| vec![lobe])
+        };
         let dependencies: Arc<[RenderDependency]> = dependencies.iter().cloned().collect();
         for (index, seed) in seeds.into_iter().enumerate() {
             // Persisting a canvas transform must preserve the exact shape used

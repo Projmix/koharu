@@ -106,31 +106,65 @@ fn topological_flow_cells(
     (cells.len() == anchors.len()).then(|| cells.into_iter().map(|(_, cell)| cell).collect())
 }
 
-#[derive(Clone)]
 struct LobeSplit {
-    structural_support: f32,
-    length_squared: f32,
     first: Vec<(f32, f32)>,
     second: Vec<(f32, f32)>,
     first_anchors: Vec<(usize, (f32, f32))>,
     second_anchors: Vec<(usize, (f32, f32))>,
 }
 
-fn decompose_lobes(
-    polygon: Vec<(f32, f32)>,
-    anchors: Vec<(usize, (f32, f32))>,
-    tolerance: f32,
-) -> Option<Vec<IndexedPolygon>> {
-    if anchors.len() == 1 {
-        return Some(vec![(anchors[0].0, polygon)]);
+/// The lobe of a joined balloon that holds its only text flow: the balloon is
+/// cut at each narrow neck (shorter than about 0.7 of the square root of the
+/// smaller side's area, so a tail or a shallow dent keeps the whole balloon)
+/// and the larger side is kept. A lone text is often lettering merged from
+/// several lobes whose source region is only the first part's, so the room,
+/// not the source position, decides. `None` when the balloon has no such neck.
+pub(crate) fn main_lobe(contour: &[(f32, f32)]) -> Option<Vec<(f32, f32)>> {
+    if contour.len() < 4
+        || contour.len() > MAX_CONTOUR_POINTS
+        || contour
+            .iter()
+            .any(|(x, y)| !x.is_finite() || !y.is_finite())
+    {
+        return None;
     }
-    let simplified = simplify_closed_indices(&polygon, tolerance);
+    let (min_x, max_x, min_y, max_y) = polygon_bounds(contour)?;
+    let tolerance = (max_x - min_x).min(max_y - min_y).max(1.0) * 0.0075;
+    let mut lobe = contour.to_vec();
+    let mut narrowed = false;
+    while let Some(split) = neck_splits(&lobe, tolerance).into_iter().find(|split| {
+        let smaller = polygon_area(&split.first)
+            .abs()
+            .min(polygon_area(&split.second).abs());
+        split.length_squared <= smaller * 0.5
+    }) {
+        lobe = if polygon_area(&split.first).abs() >= polygon_area(&split.second).abs() {
+            split.first
+        } else {
+            split.second
+        };
+        narrowed = true;
+    }
+    narrowed.then_some(lobe)
+}
+
+struct NeckSplit {
+    structural_support: f32,
+    length_squared: f32,
+    first: Vec<(f32, f32)>,
+    second: Vec<(f32, f32)>,
+}
+
+/// Every cut of `polygon` along a diagonal between two reflex corners, the
+/// most structural neck first.
+fn neck_splits(polygon: &[(f32, f32)], tolerance: f32) -> Vec<NeckSplit> {
+    let simplified = simplify_closed_indices(polygon, tolerance);
     if simplified.len() < 4 {
-        return None;
+        return Vec::new();
     }
-    let orientation = polygon_area_from_indices(&polygon, &simplified).signum();
+    let orientation = polygon_area_from_indices(polygon, &simplified).signum();
     if orientation == 0.0 {
-        return None;
+        return Vec::new();
     }
     let hull = convex_hull(
         &simplified
@@ -157,16 +191,15 @@ fn decompose_lobes(
             })
         })
         .collect::<Vec<_>>();
-
-    let mut candidates = Vec::new();
+    let mut splits = Vec::new();
     for first_index in 0..reflex.len() {
         for second_index in first_index + 1..reflex.len() {
             let (first_vertex, first_support) = reflex[first_index];
             let (second_vertex, second_support) = reflex[second_index];
-            if !valid_diagonal(&polygon, first_vertex, second_vertex, tolerance) {
+            if !valid_diagonal(polygon, first_vertex, second_vertex, tolerance) {
                 continue;
             }
-            let (first, second) = split_polygon(&polygon, first_vertex, second_vertex);
+            let (first, second) = split_polygon(polygon, first_vertex, second_vertex);
             if first.len() < 3
                 || second.len() < 3
                 || polygon_area(&first).abs() <= tolerance * tolerance
@@ -174,49 +207,67 @@ fn decompose_lobes(
             {
                 continue;
             }
-            let mut first_anchors = Vec::new();
-            let mut second_anchors = Vec::new();
-            let mut assigns_cleanly = true;
-            let cross_epsilon = (tolerance * tolerance * 0.001).max(f32::EPSILON);
-            for &(index, anchor) in &anchors {
-                match (
-                    point_in_polygon(&first, anchor, cross_epsilon),
-                    point_in_polygon(&second, anchor, cross_epsilon),
-                ) {
-                    (true, false) => first_anchors.push((index, anchor)),
-                    (false, true) => second_anchors.push((index, anchor)),
-                    _ => {
-                        assigns_cleanly = false;
-                        break;
-                    }
-                }
-            }
-            if !assigns_cleanly || first_anchors.is_empty() || second_anchors.is_empty() {
-                continue;
-            }
             let length_squared = distance_squared(polygon[first_vertex], polygon[second_vertex]);
             if length_squared <= f32::EPSILON {
                 continue;
             }
-            candidates.push(LobeSplit {
+            splits.push(NeckSplit {
                 structural_support: first_support.min(second_support) / length_squared.sqrt(),
                 length_squared,
                 first,
                 second,
-                first_anchors,
-                second_anchors,
             });
         }
     }
     // A structural neck connects sharp corners that are recessed from the bubble's
     // convex envelope. Recession makes outer-wall raster kinks contribute almost no
     // support without imposing a pixel- or scale-specific rejection threshold.
-    candidates.sort_by(|left, right| {
+    splits.sort_by(|left, right| {
         right
             .structural_support
             .total_cmp(&left.structural_support)
             .then_with(|| left.length_squared.total_cmp(&right.length_squared))
     });
+    splits
+}
+
+fn decompose_lobes(
+    polygon: Vec<(f32, f32)>,
+    anchors: Vec<(usize, (f32, f32))>,
+    tolerance: f32,
+) -> Option<Vec<IndexedPolygon>> {
+    if anchors.len() == 1 {
+        return Some(vec![(anchors[0].0, polygon)]);
+    }
+    let cross_epsilon = (tolerance * tolerance * 0.001).max(f32::EPSILON);
+    let mut candidates = Vec::new();
+    for split in neck_splits(&polygon, tolerance) {
+        let mut first_anchors = Vec::new();
+        let mut second_anchors = Vec::new();
+        let mut assigns_cleanly = true;
+        for &(index, anchor) in &anchors {
+            match (
+                point_in_polygon(&split.first, anchor, cross_epsilon),
+                point_in_polygon(&split.second, anchor, cross_epsilon),
+            ) {
+                (true, false) => first_anchors.push((index, anchor)),
+                (false, true) => second_anchors.push((index, anchor)),
+                _ => {
+                    assigns_cleanly = false;
+                    break;
+                }
+            }
+        }
+        if !assigns_cleanly || first_anchors.is_empty() || second_anchors.is_empty() {
+            continue;
+        }
+        candidates.push(LobeSplit {
+            first: split.first,
+            second: split.second,
+            first_anchors,
+            second_anchors,
+        });
+    }
     for candidate in candidates {
         let Some(mut first) = decompose_lobes(candidate.first, candidate.first_anchors, tolerance)
         else {
@@ -1209,6 +1260,121 @@ mod tests {
 
         assert!(contains_edge(&cells[0], (63.0, 95.0), (96.0, 263.0)));
         assert!(contains_edge(&cells[1], (63.0, 95.0), (96.0, 263.0)));
+    }
+
+    /// A joined balloon from a scanned page: an upper right lobe and a lower
+    /// left one stepped below it, holding one text.
+    fn stepped_balloon() -> (GeometryFrame, Vec<(f32, f32)>) {
+        let points = [
+            (291, 34),
+            (263, 55),
+            (244, 80),
+            (234, 100),
+            (222, 101),
+            (187, 93),
+            (173, 93),
+            (147, 106),
+            (129, 128),
+            (119, 167),
+            (120, 291),
+            (114, 298),
+            (103, 295),
+            (80, 296),
+            (68, 306),
+            (53, 353),
+            (42, 447),
+            (43, 471),
+            (61, 506),
+            (80, 557),
+            (90, 564),
+            (103, 567),
+            (132, 565),
+            (156, 558),
+            (169, 551),
+            (181, 533),
+            (185, 512),
+            (190, 446),
+            (190, 382),
+            (197, 372),
+            (246, 362),
+            (277, 391),
+            (286, 395),
+            (300, 395),
+            (309, 390),
+            (333, 362),
+            (339, 359),
+            (350, 359),
+            (342, 350),
+            (341, 344),
+            (359, 309),
+            (368, 281),
+            (371, 257),
+            (366, 177),
+            (368, 76),
+            (364, 62),
+            (357, 55),
+            (340, 50),
+            (308, 35),
+        ]
+        .map(|(x, y)| Point {
+            x: f64::from(x),
+            y: f64::from(y),
+        });
+        let geometry = Geometry {
+            origin: koharu_scene::Origin::User,
+            points: points.to_vec(),
+        };
+        let frame = geometry_frame(&geometry, None).unwrap();
+        (frame, contour(&geometry, frame))
+    }
+
+    #[test]
+    fn a_lone_text_flows_in_the_largest_lobe() {
+        let (frame, contour) = stepped_balloon();
+        let (min_x, max_x, min_y, max_y) = polygon_bounds(&main_lobe(&contour).unwrap()).unwrap();
+        let lobe = [
+            min_x + frame.bounds.x,
+            min_y + frame.bounds.y,
+            max_x + frame.bounds.x,
+            max_y + frame.bounds.y,
+        ];
+        // The upper right lobe, without the lower left one stepped below it.
+        assert!(lobe[0] > 100.0 && lobe[3] < 420.0, "{lobe:?}");
+    }
+
+    #[test]
+    fn a_balloon_without_a_narrow_neck_keeps_its_whole_shape() {
+        // An oval with a tail, and a box with a shallow dent in each long side.
+        let tailed = [
+            (30.0, 0.0),
+            (70.0, 0.0),
+            (100.0, 30.0),
+            (100.0, 60.0),
+            (70.0, 80.0),
+            (60.0, 80.0),
+            (75.0, 100.0),
+            (45.0, 80.0),
+            (30.0, 80.0),
+            (0.0, 60.0),
+            (0.0, 30.0),
+        ];
+        let dented = [
+            (0.0, 0.0),
+            (45.0, 0.0),
+            (50.0, 10.0),
+            (55.0, 0.0),
+            (100.0, 0.0),
+            (100.0, 100.0),
+            (55.0, 100.0),
+            (50.0, 90.0),
+            (45.0, 100.0),
+            (0.0, 100.0),
+        ];
+        let tail = main_lobe(&tailed);
+        assert!(
+            tail.is_none_or(|lobe| polygon_area(&lobe).abs() > 0.9 * polygon_area(&tailed).abs())
+        );
+        assert!(main_lobe(&dented).is_none());
     }
 
     #[test]

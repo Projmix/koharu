@@ -1205,23 +1205,31 @@ impl Project {
         frame: Frame,
         source_language: koharu_translator::Language,
     ) -> Result<(Commit, EntityId, EntityId)> {
-        self.add_region_layer(page, frame, source_language, None, None)
+        self.add_region_layer(page, frame, source_language, None, None, None)
             .await
     }
 
-    /// A text layer in a new text region with its translation, flowing in
-    /// the balloon that holds the region: what an agent sets in a balloon
-    /// detection left without text.
+    /// A text layer in a new text region with the lettering's source and its
+    /// translation, flowing in the balloon that holds the region: what an
+    /// agent sets in a balloon detection left without text.
     pub(crate) async fn add_text_layer(
         &mut self,
         page: EntityId,
         frame: Frame,
         source_language: koharu_translator::Language,
+        source: Option<String>,
         translation: Option<String>,
         typography: Typography,
     ) -> Result<(Commit, EntityId)> {
         let (commit, layer, _) = self
-            .add_region_layer(page, frame, source_language, translation, Some(typography))
+            .add_region_layer(
+                page,
+                frame,
+                source_language,
+                source,
+                translation,
+                Some(typography),
+            )
             .await?;
         Ok((commit, layer))
     }
@@ -1231,6 +1239,7 @@ impl Project {
         page: EntityId,
         frame: Frame,
         source_language: koharu_translator::Language,
+        source: Option<String>,
         translation: Option<String>,
         typography: Option<Typography>,
     ) -> Result<(Commit, EntityId, EntityId)> {
@@ -1319,16 +1328,18 @@ impl Project {
             } else {
                 edit.relate::<FitsTo>(layer, region)?;
             }
-            // A translation needs a source; one typed in by an agent has
-            // no reading to keep, as with a text box added by hand.
-            if let Some(text) = translation {
+            // A translation needs a source: the lettering as the agent read
+            // it, or none, as with a text box added by hand.
+            if source.is_some() || translation.is_some() {
                 edit.set(
                     content,
                     &SceneSourceText {
-                        text: Authored::user(String::new()),
+                        text: Authored::user(source.unwrap_or_default()),
                         language: None,
                     },
                 )?;
+            }
+            if let Some(text) = translation {
                 edit.set(
                     content,
                     &SceneTranslation {

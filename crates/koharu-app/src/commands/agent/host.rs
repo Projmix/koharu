@@ -17,13 +17,13 @@ use super::typesetting;
 use crate::commands::{
     ChannelExt as _,
     canvas::{CanvasChannel, Point},
-    editing::{GeometryUpdate, TypographyUpdate},
+    editing::GeometryUpdate,
     image_edit_preview::DesktopImageEditReviewer,
     lifecycle::ProjectChannel,
     output,
     preferences::Preferences,
     processing::{JobId, Processing},
-    project::{CurrentProject, Project, Typography},
+    project::{CurrentProject, Project},
 };
 
 #[derive(Clone)]
@@ -152,6 +152,19 @@ impl KoharuHost {
         Some((name, typesetting::text_signatures(&snapshot).ok()?))
     }
 
+    /// An element named by id or by address (45, 45#13).
+    async fn resolve(&self, value: &str) -> Result<EntityId> {
+        typesetting::address(&self.snapshot().await?, value)
+    }
+
+    async fn resolve_all(&self, values: &[String]) -> Result<Vec<EntityId>> {
+        let snapshot = self.snapshot().await?;
+        values
+            .iter()
+            .map(|value| typesetting::address(&snapshot, value))
+            .collect()
+    }
+
     async fn snapshot(&self) -> Result<Snapshot> {
         Ok(self
             .handle
@@ -272,10 +285,6 @@ impl Host for KoharuHost {
                         "set_translation",
                         "Set an element's translation, or pass null to remove it.",
                     ),
-                    definition::<SetTypography>(
-                        "set_typography",
-                        "Replace an element's typography settings. Font is a family name from available_fonts.",
-                    ),
                     definition::<SetGeometry>(
                         "set_geometry",
                         "Replace an element's page-space polygon geometry.",
@@ -298,11 +307,11 @@ impl Host for KoharuHost {
                     ),
                     definition::<typesetting::Crop>(
                         "crop",
-                        "Return a PNG of part of a page as it shows: typeset (with text), clean (without its text layers) or source (as imported). compare puts the source on the left and the view on the right; outline draws every text layer's box with its number and the measured balloon interiors. Pages and layers can be named by id or by address: 45 for page 45, 45#13 for its layer 13.",
+                        "Return a PNG of part of a page as it shows: typeset (with text), clean (without its text layers) or source (as imported). compare puts the source on the left and the view on the right; outline draws every text layer's box with its number (magenta), the measured balloon interiors (blue) and the shape a balloon flow lays each text in (green). Pages and layers can be named by id or by address: 45 for page 45, 45#13 for its layer 13.",
                     ),
                     definition::<typesetting::PreviewLayers>(
                         "preview_layers",
-                        "Trial-render text, box and typography changes to layers of one page without committing anything. Returns each changed layer in short form (box, size, lines, warning, overflow, hyphenated, small; full for the whole layer) and a PNG of the area at the stated scale. compare puts the source on the left; outline draws the changed layers' boxes with their numbers and the measured balloon interiors. To fit text, try auto_fit in the intended box; line_breaking whole_words or manual stops auto-fit from hyphenating. Pages and layers can be named by id or by address: 45 for page 45, 45#13 for its layer 13.",
+                        "Trial-render text, box and typography changes to layers of one page without committing anything. Returns each changed layer in short form (box, size, lines, warning, overflow, hyphenated, small; full for the whole layer) and a PNG of the area at the stated scale. compare puts the source on the left; outline draws the changed layers' boxes with their numbers (magenta), the measured balloon interiors (blue) and the shape a balloon flow lays each text in (green). To fit text, try auto_fit in the intended box; line_breaking whole_words or manual stops auto-fit from hyphenating. Pages and layers can be named by id or by address: 45 for page 45, 45#13 for its layer 13.",
                     ),
                     definition::<typesetting::ApplyLayers>(
                         "apply_layers",
@@ -345,7 +354,7 @@ impl Host for KoharuHost {
             }
             "view_page" => {
                 let arguments: ViewPage = arguments(&call)?;
-                let page = entity(&arguments.page)?;
+                let page = self.resolve(&arguments.page).await?;
                 let (label, snapshot) = {
                     let current = self.handle.state::<CurrentProject>();
                     let current = current.project.lock().await;
@@ -368,7 +377,7 @@ impl Host for KoharuHost {
             }
             "rename_page" => {
                 let arguments: RenamePage = arguments(&call)?;
-                let page = entity(&arguments.page)?;
+                let page = self.resolve(&arguments.page).await?;
                 self.mutate(|project| {
                     Box::pin(async move {
                         Ok((
@@ -381,7 +390,7 @@ impl Host for KoharuHost {
             }
             "move_page" => {
                 let arguments: MovePage = arguments(&call)?;
-                let page = entity(&arguments.page)?;
+                let page = self.resolve(&arguments.page).await?;
                 self.mutate(|project| {
                     Box::pin(async move {
                         Ok((
@@ -394,7 +403,7 @@ impl Host for KoharuHost {
             }
             "delete_pages" => {
                 let arguments: DeletePages = arguments(&call)?;
-                let pages = entities(&arguments.pages)?;
+                let pages = self.resolve_all(&arguments.pages).await?;
                 self.mutate(|project| {
                     Box::pin(async move {
                         Ok((
@@ -407,7 +416,7 @@ impl Host for KoharuHost {
             }
             "add_text_box" => {
                 let arguments: AddTextBox = arguments(&call)?;
-                let page = entity(&arguments.page)?;
+                let page = self.resolve(&arguments.page).await?;
                 let frame = Frame {
                     x: arguments.x,
                     y: arguments.y,
@@ -425,7 +434,7 @@ impl Host for KoharuHost {
             }
             "set_source_text" => {
                 let arguments: SetText = arguments(&call)?;
-                let element = entity(&arguments.element)?;
+                let element = self.resolve(&arguments.element).await?;
                 self.mutate(|project| {
                     Box::pin(async move {
                         Ok((
@@ -438,7 +447,7 @@ impl Host for KoharuHost {
             }
             "set_translation" => {
                 let arguments: SetTranslation = arguments(&call)?;
-                let element = entity(&arguments.element)?;
+                let element = self.resolve(&arguments.element).await?;
                 self.mutate(|project| {
                     Box::pin(async move {
                         Ok((
@@ -449,44 +458,9 @@ impl Host for KoharuHost {
                 })
                 .await
             }
-            "set_typography" => {
-                let arguments: SetTypography = arguments(&call)?;
-                let element = entity(&arguments.element)?;
-                let typography = Typography {
-                    preferred_font: arguments.preferred_font,
-                    font_weight: arguments.font_weight,
-                    font_style: arguments.font_style.map(Into::into),
-                    size: arguments.size,
-                    auto_fit: arguments.auto_fit,
-                    color: arguments.color,
-                    stroke_color: arguments.stroke_color,
-                    stroke_width: arguments.stroke_width,
-                    alignment: arguments.alignment.map(Into::into),
-                    writing_mode: arguments.writing_mode.map(Into::into),
-                    line_breaking: arguments.line_breaking.map(Into::into),
-                };
-                let laid_out_size = self.handle.state::<Desktop>().presented_font_size(element);
-                self.mutate(|project| {
-                    Box::pin(async move {
-                        Ok((
-                            project
-                                .set_typography(
-                                    vec![TypographyUpdate {
-                                        layer: element,
-                                        typography,
-                                    }],
-                                    |_| laid_out_size,
-                                )
-                                .await?,
-                            json!({ "element": element }),
-                        ))
-                    })
-                })
-                .await
-            }
             "set_geometry" => {
                 let arguments: SetGeometry = arguments(&call)?;
-                let element = entity(&arguments.element)?;
+                let element = self.resolve(&arguments.element).await?;
                 let points = arguments
                     .points
                     .into_iter()
@@ -512,7 +486,7 @@ impl Host for KoharuHost {
             }
             "set_visibility" => {
                 let arguments: SetVisibility = arguments(&call)?;
-                let elements = entities(&arguments.elements)?;
+                let elements = self.resolve_all(&arguments.elements).await?;
                 self.mutate(|project| {
                     Box::pin(async move {
                         Ok((
@@ -531,12 +505,7 @@ impl Host for KoharuHost {
             }
             "delete_elements" => {
                 let arguments: DeleteElements = arguments(&call)?;
-                let snapshot = self.snapshot().await?;
-                let elements = arguments
-                    .elements
-                    .iter()
-                    .map(|element| typesetting::address(&snapshot, element))
-                    .collect::<Result<Vec<_>>>()?;
+                let elements = self.resolve_all(&arguments.elements).await?;
                 self.mutate(|project| {
                     Box::pin(async move {
                         Ok((
@@ -549,8 +518,8 @@ impl Host for KoharuHost {
             }
             "move_element" => {
                 let arguments: MoveElement = arguments(&call)?;
-                let element = entity(&arguments.element)?;
-                let parent = entity(&arguments.parent)?;
+                let element = self.resolve(&arguments.element).await?;
+                let parent = self.resolve(&arguments.parent).await?;
                 self.mutate(|project| {
                     Box::pin(async move {
                         Ok((
@@ -663,7 +632,7 @@ impl Host for KoharuHost {
             }
             "add_text_layer" => {
                 let arguments: typesetting::AddTextLayer = arguments(&call)?;
-                let page = typesetting::address(&self.snapshot().await?, &arguments.page)?;
+                let page = self.resolve(&arguments.page).await?;
                 let text = match (arguments.text, arguments.lines) {
                     (Some(_), Some(_)) => bail!("give either text or lines, not both"),
                     (text, lines) => text.or_else(|| lines.map(|lines| lines.join("\n"))),
@@ -696,7 +665,14 @@ impl Host for KoharuHost {
                     .mutate(|project| {
                         Box::pin(async move {
                             let commit = project
-                                .add_text_layer(page, frame, source_language, text, typography)
+                                .add_text_layer(
+                                    page,
+                                    frame,
+                                    source_language,
+                                    arguments.source,
+                                    text,
+                                    typography,
+                                )
                                 .await?;
                             let layer = commit.1;
                             Ok((commit.0, json!({ "element": layer })))
@@ -732,9 +708,25 @@ impl Host for KoharuHost {
                 } else {
                     None
                 };
+                let pages = if arguments.wants("balloons") {
+                    snapshot.pages().map(|page| page.id()).collect::<Vec<_>>()
+                } else if arguments.wants("fit") {
+                    let mut pages = check
+                        .texts
+                        .iter()
+                        .filter(|issue| issue.fit.is_some())
+                        .map(|issue| issue.page)
+                        .collect::<Vec<_>>();
+                    pages.dedup();
+                    pages
+                } else {
+                    Vec::new()
+                };
+                let layers = typesetting::measured_layers(&desktop, &snapshot, &pages).await?;
                 let check = typesetting::AgentCheck {
                     check,
                     cleaned_without_text,
+                    layers,
                 };
                 Invocation::read(typesetting::chapter_issues(&snapshot, check, &arguments)?)
             }
@@ -787,10 +779,6 @@ fn arguments<T: for<'de> Deserialize<'de>>(call: &ToolCall) -> Result<T> {
 pub(super) fn entity(value: &str) -> Result<EntityId> {
     serde_json::from_value(Value::String(value.to_owned()))
         .with_context(|| format!("invalid entity ID {value}"))
-}
-
-fn entities(values: &[String]) -> Result<Vec<EntityId>> {
-    values.iter().map(|value| entity(value)).collect()
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -920,26 +908,6 @@ impl From<AgentWritingMode> for koharu_scene::WritingMode {
             AgentWritingMode::Vertical => Self::Vertical,
         }
     }
-}
-
-#[derive(Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-struct SetTypography {
-    element: String,
-    preferred_font: Option<String>,
-    font_weight: Option<u16>,
-    font_style: Option<AgentFontStyle>,
-    size: Option<f32>,
-    auto_fit: bool,
-    color: Option<[u8; 4]>,
-    stroke_color: Option<[u8; 4]>,
-    stroke_width: Option<f32>,
-    alignment: Option<AgentTextAlignment>,
-    writing_mode: Option<AgentWritingMode>,
-    /// Where lines may break; automatic (hyphenating a word as a last
-    /// resort) when absent.
-    #[serde(default)]
-    line_breaking: Option<AgentLineBreaking>,
 }
 
 #[derive(Deserialize, JsonSchema)]

@@ -184,8 +184,9 @@ Known gaps after the rebuild:
   rotation and typography changes that commits nothing), `apply_layers`
   (the same changes plus source text and visibility, on any pages, one
   undo step; `flow: balloon` drops a layer's box so it follows the balloon's
-  shape), `add_text_layer` (a text layer with its translation and
-  typography in a region, an empty balloon or an unboxed lettering box;
+  shape; a typography change names only the fields it changes, the others
+  keep their values), `add_text_layer` (a text layer with its source,
+  translation and typography in a region, an empty balloon or an unboxed lettering box;
   inside a balloon it flows in the balloon; without a colour it is black,
   or white on a dark ground), `chapter_text` (one
   line per layer: number, role, source and translation, under a line per
@@ -196,10 +197,16 @@ Known gaps after the rebuild:
   on request; on book "2" a 46-layer page went from 65 KB to 8 KB and the
   chapter text from 97 KB to 20 KB. `crop` and `preview_layers` can put the
   source beside the result and outline the layers' boxes with their
-  numbers, the measured balloon insides and the unboxed lettering; images
-  state their scale. Pages and layers can be named by id or by address
-  (`45`, `45#13`). `check_chapter` answers one line per issue after a count
-  by kind and can keep only some kinds, `style` among them (shown translated text whose font and colour were never chosen); `apply_layers` can stay quiet for
+  numbers, the measured balloon insides, the shape a balloon flow lays each
+  text in and the unboxed lettering; images state their scale. Every tool
+  takes pages and layers by id or by address (`45`, `45#13`). `check_chapter` answers one line per issue after a count
+  by kind and can keep only some kinds, `style` among them (shown translated text whose font and colour were never chosen);
+  a fit line carries the drawn size, the widest line against its room and
+  the largest size the box takes; `balloons`, asked for by kind since it
+  renders every page, lists shown translated text in a balloon that crosses
+  its inside, sits off the centre of its lobe by more than an eighth, is
+  small, or is set under 85% of the page's median balloon size (a larger
+  shout is left alone); `apply_layers` can stay quiet for
   text passes and confirm an OCR reading as it is; layers carry their OCR
   confidence; `hide_untranslated` hides every shown untranslated layer and
   `merge_text_layers` joins a sound effect detected in pieces;
@@ -214,7 +221,11 @@ Known gaps after the rebuild:
   lettering with flat tone and no shown translated layer covers them,
   compared against the visible enhancement when there is one. A
   layer sharing a balloon is measured in its own part of it, the part the
-  renderer lays it out in (`balloon_flow_shapes`). A
+  renderer lays it out in (`balloon_flow_shapes`). A lone text in a joined
+  balloon flows in its largest lobe, cut at a neck shorter than about 0.7 of
+  the square root of the smaller side's area, instead of across every lobe;
+  a tail or a shallow dent keeps the whole balloon. The source position does
+  not decide: a merged layer keeps only its first part's source region. A
   short word in a tall free-text box stacks one letter per line only when
   its author gave no line breaks. Unknown
   argument fields are refused. The server's instructions give the agent
