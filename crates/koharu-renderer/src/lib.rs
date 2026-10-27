@@ -22,6 +22,7 @@ pub use frame::{
     RenderDependency, RenderDiagnostic, RenderedLine, RetentionStats, TextMetadata,
 };
 pub use layout::WritingMode;
+pub use perspective::Perspective;
 pub use renderer::{Renderer, balloon_flow_shapes};
 pub use text_renderer::measured_stroke_width;
 pub use types::{FontFace, FontFamily, FontMetadata, FontRange, FontSource, FontStyle, TextAlign};

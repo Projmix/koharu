@@ -29,6 +29,7 @@ use crate::commands::{
 use super::host::{
     AgentFontStyle, AgentLineBreaking, AgentTextAlignment, AgentWritingMode, entity,
 };
+use super::lines::{Along, MINIMUM_STRENGTH, printed_lines};
 
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -124,7 +125,8 @@ pub(super) struct TrialChange {
     #[serde(default)]
     region: Option<[f64; 4]>,
     /// Turn the new box about its centre by this many degrees, clockwise;
-    /// 180 sets text upside down. Needs region.
+    /// 180 sets text upside down. Needs region, or with corners turns the
+    /// text on the surface about its centre.
     #[serde(default)]
     angle: Option<f32>,
     /// `balloon` drops the layer's box and flows it in the balloon that holds
@@ -133,9 +135,12 @@ pub(super) struct TrialChange {
     /// sets a box again.
     #[serde(default)]
     flow: Option<TrialFlow>,
-    /// `along_source` lays one horizontal line along the source lettering:
-    /// the box of its detected region, turned to its slant, a Japanese column
-    /// turned 90 degrees to read top to bottom. Instead of region and angle.
+    /// `along_source` lays the text along the source lettering: the box of
+    /// its detected region turned to the slant of the printed lines measured
+    /// on the page (source_lines), a lone Japanese column turned 90 degrees
+    /// to read top to bottom. Instead of region and angle. With corners it
+    /// turns the text on the surface until its lines take the slant of the
+    /// lines printed inside the corners.
     /// A drawn line that stretches a sound (a long wavy or straight stroke
     /// after a kana, OCR'd as 〜 or ー) is art when the clean view still shows
     /// it: letter only the sound before it, in that kana's place and size,
@@ -147,7 +152,9 @@ pub(super) struct TrialChange {
     /// top-right, bottom-right, bottom-left as the lettering reads, e.g. the
     /// column or screen the original text is printed in. The text is laid out
     /// flat in a box the size of that surface and drawn in perspective onto
-    /// it. Instead of region and angle; a region alone sets a flat box again.
+    /// it, its lines along the surface's top and bottom edges unless angle or
+    /// orient turns them. Instead of region; a region alone sets a flat box
+    /// again. A surface seen nearly square-on takes a turned region instead.
     #[serde(default)]
     corners: Option<[[f64; 2]; 4]>,
     /// Typography fields to change; the others keep their current values.
@@ -308,6 +315,7 @@ pub(super) async fn page_layers(
                     .map(|position| position + 1)
             );
             measure_balloon(&clean, &mut value, &shapes);
+            measure_source_lines(snapshot, &source, layer.id(), &mut value)?;
             if let Some(region) = layer.content()?.source_region()? {
                 filled.extend(
                     snapshot
@@ -1310,7 +1318,8 @@ pub(super) async fn preview_layers(
             bail!("element {layer} is not a layer of page {page}");
         }
     }
-    let steps = steps(snapshot, arguments.changes, |_| None)?;
+    let sources = orient_sources(snapshot, &arguments.changes).await?;
+    let steps = steps(snapshot, arguments.changes, &sources, |_| None)?;
     let patch = snapshot.patch(|edit| {
         for step in steps {
             step(edit)?;
@@ -1356,8 +1365,10 @@ pub(super) async fn preview_layers(
     let mut image = rasterize(desktop, &frame).await?;
     let clean = render_image(desktop, &without_text(&trial, page)?, page).await?;
     let shapes = koharu_renderer::balloon_flow_shapes(&trial, page)?;
-    for value in &mut layers {
+    let printed = base_image(snapshot, page).await?;
+    for (value, layer) in layers.iter_mut().zip(&changed) {
         measure_balloon(&clean, value, &shapes);
+        measure_source_lines(&trial, &printed, *layer, value)?;
     }
     if arguments.outline {
         draw_outlines(&mut image, &trial, &frame, &clean, page, &changed, scale)?;
@@ -1639,7 +1650,26 @@ pub(super) fn translated_boxes(snapshot: &Snapshot, page: EntityId) -> Result<Ve
 /// The box and slant of `layer`'s source lettering, for one line laid along
 /// it: the detected region's long side gives the direction, so a Japanese
 /// column turns 90 degrees and reads top to bottom.
-fn along_source(snapshot: &Snapshot, layer: EntityId) -> Result<([f64; 4], f32)> {
+/// The page images `changes` that orient along the source measure on, by page.
+pub(super) async fn orient_sources(
+    snapshot: &Snapshot,
+    changes: &[TrialChange],
+) -> Result<HashMap<EntityId, RgbaImage>> {
+    let mut sources = HashMap::new();
+    for change in changes.iter().filter(|change| change.orient.is_some()) {
+        let page = owning_page(snapshot, address(snapshot, &change.element)?)?;
+        if !sources.contains_key(&page) {
+            sources.insert(page, base_image(snapshot, page).await?);
+        }
+    }
+    Ok(sources)
+}
+
+fn along_source(
+    snapshot: &Snapshot,
+    layer: EntityId,
+    sources: &HashMap<EntityId, RgbaImage>,
+) -> Result<([f64; 4], f32)> {
     let geometry = snapshot
         .text_layer(layer)?
         .content()?
@@ -1672,6 +1702,40 @@ fn along_source(snapshot: &Snapshot, layer: EntityId) -> Result<([f64; 4], f32)>
     let (cx, cy) = (sum_x / count, sum_y / count);
     let (width, height) = (along.0.hypot(along.1), across.0.hypot(across.1));
     let angle = if angle.abs() < 3.0 { 0.0 } else { angle };
+    // The detector's boxes are upright; the slant of lettering printed on a
+    // tilted surface is in its pixels.
+    if angle == 0.0
+        && let Some(lines) = sources
+            .get(&owning_page(snapshot, layer)?)
+            .and_then(|image| {
+                printed_lines(
+                    image,
+                    &geometry
+                        .points
+                        .iter()
+                        .map(|point| [point.x, point.y])
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .filter(|lines| lines.strength >= MINIMUM_STRENGTH && lines.angle.abs() >= 1.0)
+    {
+        let [x, y, width, height] = lines.ink_box(lines.angle);
+        // A lone column reads top to bottom.
+        return Ok(if height > width * 1.5 {
+            (
+                [
+                    x + (width - height) / 2.0,
+                    y + (height - width) / 2.0,
+                    height,
+                    width,
+                ]
+                .map(f64::round),
+                (lines.angle + 90.0) as f32,
+            )
+        } else {
+            ([x, y, width, height].map(f64::round), lines.angle as f32)
+        });
+    }
     Ok((
         [cx - width / 2.0, cy - height / 2.0, width, height].map(f64::round),
         angle as f32,
@@ -1870,6 +1934,7 @@ pub(super) fn elements(snapshot: &Snapshot, changes: &[TrialChange]) -> Result<V
 pub(super) fn steps(
     snapshot: &Snapshot,
     changes: Vec<TrialChange>,
+    sources: &HashMap<EntityId, RgbaImage>,
     laid_out_size: impl Fn(EntityId) -> Option<f32>,
 ) -> Result<Vec<EditStep>> {
     let mut steps = Vec::new();
@@ -1902,9 +1967,31 @@ pub(super) fn steps(
             steps.push(balloon_flow_step(snapshot, layer)?);
         }
         if let Some(corners) = change.corners {
-            if change.region.is_some() || change.angle.is_some() || change.orient.is_some() {
-                bail!("give {layer} either corners or a region, angle and orient, not both");
+            if change.region.is_some() {
+                bail!("give {layer} either corners or a region, not both");
             }
+            let corners = match (change.angle, change.orient) {
+                (Some(_), Some(_)) => {
+                    bail!("give {layer}'s corners either an angle or orient, not both")
+                }
+                (Some(turn), None) => Surface::new(corners)
+                    .with_context(|| format!("{layer}'s corners make no convex quadrilateral"))?
+                    .turned(f64::from(turn)),
+                (None, Some(TrialOrient::AlongSource)) => {
+                    let lines = sources
+                        .get(&owning_page(snapshot, layer)?)
+                        .and_then(|image| printed_lines(image, &corners))
+                        .filter(|lines| lines.strength >= MINIMUM_STRENGTH)
+                        .with_context(|| {
+                            format!("no printed lines were measured inside {layer}'s corners")
+                        })?;
+                    let surface = Surface::new(corners).with_context(|| {
+                        format!("{layer}'s corners make no convex quadrilateral")
+                    })?;
+                    surface.turned(surface.turn_to(lines.angle))
+                }
+                (None, None) => corners,
+            };
             let (frame, unit) = frame_from_corners(corners)
                 .with_context(|| format!("{layer}'s corners make no convex quadrilateral"))?;
             let geometry = Project::geometry_from_frame(frame)?;
@@ -1924,11 +2011,12 @@ pub(super) fn steps(
             }));
         }
         let (region, angle) = match change.orient {
+            _ if change.corners.is_some() => (None, None),
             Some(TrialOrient::AlongSource) => {
                 if change.region.is_some() || change.angle.is_some() {
                     bail!("give {layer} either orient or a region and angle, not both");
                 }
-                let (region, angle) = along_source(snapshot, layer)?;
+                let (region, angle) = along_source(snapshot, layer, sources)?;
                 (Some(region), Some(angle))
             }
             None => (change.region, change.angle),
@@ -2025,9 +2113,11 @@ pub(super) async fn report(
         let clean = render_image(desktop, &without_text(snapshot, page)?, page).await?;
         let shapes = koharu_renderer::balloon_flow_shapes(snapshot, page)?;
         let numbers = numbering(snapshot, page)?;
+        let source = base_image(snapshot, page).await?;
         for layer in members {
             let mut value = layer_value(snapshot, &frame, layer, numbers(layer))?;
             measure_balloon(&clean, &mut value, &shapes);
+            measure_source_lines(snapshot, &source, layer, &mut value)?;
             if !full {
                 value = compact_layer(&value);
             }
@@ -2245,6 +2335,122 @@ fn frame_from_corners(corners: [[f64; 2]; 4]) -> Option<(TextFrame, Vec<koharu_s
     Some((frame, unit))
 }
 
+/// A layer's frame drawn in perspective onto page corners: where the frame's
+/// points land on the page.
+struct Surface {
+    frame: TextFrame,
+    perspective: koharu_renderer::Perspective,
+}
+
+impl Surface {
+    fn new(corners: [[f64; 2]; 4]) -> Option<Self> {
+        let (frame, unit) = frame_from_corners(corners)?;
+        if !koharu_scene::valid_perspective(&unit) {
+            return None;
+        }
+        let unit = [0, 1, 2, 3].map(|index| (unit[index].x as f32, unit[index].y as f32));
+        Some(Self {
+            perspective: koharu_renderer::Perspective::new(frame.width, frame.height, unit),
+            frame,
+        })
+    }
+
+    fn page(&self, x: f64, y: f64) -> [f64; 2] {
+        let (width, height) = (f64::from(self.frame.width), f64::from(self.frame.height));
+        let (x, y) = self.perspective.apply(x, y);
+        let (dx, dy) = (x - width * 0.5, y - height * 0.5);
+        let (sin, cos) = f64::from(self.frame.angle_degrees).to_radians().sin_cos();
+        [
+            f64::from(self.frame.x) + width * 0.5 + dx * cos - dy * sin,
+            f64::from(self.frame.y) + height * 0.5 + dx * sin + dy * cos,
+        ]
+    }
+
+    /// The page slant, degrees clockwise, of text lines turned by `turn`
+    /// degrees on the surface, at its centre.
+    fn slant(&self, turn: f64) -> f64 {
+        let (cx, cy) = (
+            f64::from(self.frame.width) * 0.5,
+            f64::from(self.frame.height) * 0.5,
+        );
+        let (sin, cos) = turn.to_radians().sin_cos();
+        let [x0, y0] = self.page(cx, cy);
+        let [x1, y1] = self.page(cx + cos, cy + sin);
+        (y1 - y0).atan2(x1 - x0).to_degrees()
+    }
+
+    /// The turn on the surface that sets text lines at page `slant`.
+    fn turn_to(&self, slant: f64) -> f64 {
+        let mut turn = 0.0;
+        for _ in 0..24 {
+            let miss = (slant - self.slant(turn) + 180.0).rem_euclid(360.0) - 180.0;
+            if miss.abs() < 0.01 {
+                break;
+            }
+            turn += miss;
+        }
+        turn
+    }
+
+    /// The page corners of the frame turned by `turn` degrees about its
+    /// centre on the surface.
+    fn turned(&self, turn: f64) -> [[f64; 2]; 4] {
+        let (width, height) = (f64::from(self.frame.width), f64::from(self.frame.height));
+        let (sin, cos) = turn.to_radians().sin_cos();
+        [(-0.5, -0.5), (0.5, -0.5), (0.5, 0.5), (-0.5, 0.5)].map(|(u, v)| {
+            let (x, y) = (u * width, v * height);
+            self.page(
+                width * 0.5 + x * cos - y * sin,
+                height * 0.5 + x * sin + y * cos,
+            )
+        })
+    }
+}
+
+/// Records on `value` the slant of the lettering printed under `layer` on
+/// `source` (inside its corners, or its detected source region), the slant
+/// its text is drawn at and the difference, wrapped to a quarter turn.
+fn measure_source_lines(
+    snapshot: &Snapshot,
+    source: &RgbaImage,
+    layer: EntityId,
+    value: &mut Value,
+) -> Result<()> {
+    let corners = serde_json::from_value::<[[f64; 2]; 4]>(value["corners"].clone()).ok();
+    let polygon = match corners {
+        Some(corners) => corners.to_vec(),
+        None => match snapshot.text_layer(layer)?.content()?.source_region()? {
+            Some(region) => region
+                .geometry()?
+                .points
+                .iter()
+                .map(|point| [point.x, point.y])
+                .collect(),
+            None => return Ok(()),
+        },
+    };
+    let Some(lines) =
+        printed_lines(source, &polygon).filter(|lines| lines.strength >= MINIMUM_STRENGTH)
+    else {
+        return Ok(());
+    };
+    let text = match corners.and_then(Surface::new) {
+        Some(surface) => surface.slant(0.0),
+        None => value["angle"].as_f64().unwrap_or(0.0),
+    };
+    let delta = (text - lines.angle + 45.0).rem_euclid(90.0) - 45.0;
+    value["source_lines"] = json!({
+        "angle": lines.angle,
+        "along": match lines.along {
+            Along::Rows => "rows",
+            Along::Columns => "columns",
+        },
+        "text_angle": round_pixel(text),
+        "delta": round_pixel(delta),
+    });
+    Ok(())
+}
+
 /// The page corners of a layer drawn in perspective: `unit` corners placed
 /// by its unturned `frame_box` turned by `angle` about its centre.
 fn corners_on_page(frame_box: [f64; 4], angle: f32, unit: &[koharu_scene::Point]) -> Vec<[f64; 2]> {
@@ -2315,6 +2521,8 @@ fn compact_layer(value: &Value) -> Value {
         ("off_centre", &value["balloon"]["off_centre"]),
         ("edge_gap", &value["balloon"]["edge_gap"]),
         ("fits_up_to", &rendered["fits_up_to"]),
+        ("corners", &value["corners"]),
+        ("source_lines", &value["source_lines"]),
     ] {
         if !field.is_null() {
             compact.insert(key.to_owned(), field.clone());
@@ -3257,6 +3465,26 @@ mod tests {
     }
 
     #[test]
+    fn text_turns_on_a_surface_to_the_printed_slant() {
+        // A flat, upright surface: a turn on it is a turn on the page.
+        let flat = Surface::new([[100.0, 100.0], [300.0, 100.0], [300.0, 200.0], [100.0, 200.0]])
+            .unwrap();
+        assert!((flat.slant(0.0)).abs() < 1e-6);
+        assert!((flat.turn_to(-12.0) + 12.0).abs() < 0.05);
+        // A receding column: whatever the turn, the drawn lines reach the
+        // slant asked for.
+        let column =
+            Surface::new([[410.0, 220.0], [612.0, 251.0], [598.0, 530.0], [380.0, 488.0]])
+                .unwrap();
+        for slant in [-14.0, 0.0, 9.0] {
+            let turn = column.turn_to(slant);
+            assert!((column.slant(turn) - slant).abs() < 0.05, "{slant} {turn}");
+            let turned = Surface::new(column.turned(turn)).unwrap();
+            assert!((turned.slant(0.0) - slant).abs() < 0.5, "{slant}");
+        }
+    }
+
+    #[test]
     fn surface_corners_come_back_from_the_frame_they_set() {
         // A newspaper column tilted and seen from its lower left.
         let corners = [
@@ -3375,7 +3603,7 @@ mod tests {
 
         let change: TrialChange =
             serde_json::from_value(json!({ "element": "1#1", "text": "Привет" })).unwrap();
-        let retexted = steps(&session.snapshot(), vec![change], |_| None).unwrap();
+        let retexted = steps(&session.snapshot(), vec![change], &HashMap::new(), |_| None).unwrap();
         let mut edit = session.snapshot().edit();
         for step in retexted {
             step(&mut edit).unwrap();
@@ -3408,7 +3636,7 @@ mod tests {
         let change: TrialChange =
             serde_json::from_value(json!({ "element": "1#1", "typography": { "size": 22.0 } }))
                 .unwrap();
-        let resized = steps(&session.snapshot(), vec![change], |_| None).unwrap();
+        let resized = steps(&session.snapshot(), vec![change], &HashMap::new(), |_| None).unwrap();
         let mut edit = session.snapshot().edit();
         for step in resized {
             step(&mut edit).unwrap();

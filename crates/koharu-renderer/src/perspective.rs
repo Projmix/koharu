@@ -20,7 +20,7 @@ const FLATTEN_TOLERANCE: f64 = 0.05;
 /// The projective map from a `width` x `height` frame onto corners given in
 /// units of that frame.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct Perspective {
+pub struct Perspective {
     width: f64,
     height: f64,
     /// Unit square to quadrilateral, after Heckbert's closed form:
@@ -29,7 +29,8 @@ pub(crate) struct Perspective {
 }
 
 impl Perspective {
-    pub(crate) fn new(width: f32, height: f32, corners: [(f32, f32); 4]) -> Self {
+    #[must_use]
+    pub fn new(width: f32, height: f32, corners: [(f32, f32); 4]) -> Self {
         let [(x0, y0), (x1, y1), (x2, y2), (x3, y3)] =
             corners.map(|(x, y)| (f64::from(x), f64::from(y)));
         let (dx1, dy1) = (x1 - x2, y1 - y2);
@@ -68,6 +69,13 @@ impl Perspective {
             (a * u + b * v + c) / w * self.width,
             (d * u + e * v + f) / w * self.height,
         )
+    }
+
+    /// Where frame point `(x, y)` is drawn, in frame coordinates.
+    #[must_use]
+    pub fn apply(&self, x: f64, y: f64) -> (f64, f64) {
+        let point = self.map(Point::new(x, y));
+        (point.x, point.y)
     }
 
     /// The bounds of `bounds` once mapped; a convex quadrilateral's corners

@@ -1,4 +1,5 @@
 mod host;
+mod lines;
 pub(crate) mod mcp;
 mod typesetting;
 

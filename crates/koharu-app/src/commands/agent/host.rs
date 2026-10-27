@@ -303,7 +303,7 @@ impl Host for KoharuHost {
                     ),
                     definition::<typesetting::PageLayers>(
                         "page_layers",
-                        "List a page's text layers in their numbered order: text, role, box (as set, with angle when turned), balloon box and the largest box inside the balloon around the text (measured on the page's pixels when the balloon is closed), typography, what the renderer drew (font, size, auto_fit_max: the largest size auto-fit may choose, small: below 1.2% of the page width, layout box, each line with its width and room, hyphenated words, warning and what overflowed), and lettering: whether the cleaning removed the source lettering and its tone, with check_color when the fill is the opposite tone. Also reading (an approximate reading order from geometry: panels right to left in rows from the top, layers inside a panel the same way; check it on pages with asides), cleaned_without_text (places the cleaning removed lettering with no shown translated layer over them), flow (balloon: laid out in the balloon's shape with no box of its own; box: in its box), the balloon's interior (box and centre of the lobe holding the text, without tail and bumps), off_centre (drawn block centre minus that centre, px) and edge_gap (narrowest gap between a line and the balloon's inside, px; negative crosses it), fits_up_to (when auto-fit stopped at its ceiling: the largest size the box takes, to set as a fixed size), empty_balloons (balloons with no text layer, for add_text_layer) and the edge lines of the neighbouring pages. Pages and layers can be named by id or by address: 45 for page 45, 45#13 for its layer 13.",
+                        "List a page's text layers in their numbered order: text, role, box (as set, with angle when turned), balloon box and the largest box inside the balloon around the text (measured on the page's pixels when the balloon is closed), typography, what the renderer drew (font, size, auto_fit_max: the largest size auto-fit may choose, small: below 1.2% of the page width, layout box, each line with its width and room, hyphenated words, warning and what overflowed), and lettering: whether the cleaning removed the source lettering and its tone, with check_color when the fill is the opposite tone. Also reading (an approximate reading order from geometry: panels right to left in rows from the top, layers inside a panel the same way; check it on pages with asides), cleaned_without_text (places the cleaning removed lettering with no shown translated layer over them), flow (balloon: laid out in the balloon's shape with no box of its own; box: in its box), the balloon's interior (box and centre of the lobe holding the text, without tail and bumps), off_centre (drawn block centre minus that centre, px) and edge_gap (narrowest gap between a line and the balloon's inside, px; negative crosses it), fits_up_to (when auto-fit stopped at its ceiling: the largest size the box takes, to set as a fixed size), corners (a layer drawn in perspective) and source_lines (the slant of the lettering printed under the layer, inside its corners or its detected region, measured on the page's pixels: angle, rows or columns, text_angle the slant its text is drawn at, delta between them), empty_balloons (balloons with no text layer, for add_text_layer) and the edge lines of the neighbouring pages. Pages and layers can be named by id or by address: 45 for page 45, 45#13 for its layer 13.",
                     ),
                     definition::<typesetting::Crop>(
                         "crop",
@@ -564,17 +564,24 @@ impl Host for KoharuHost {
                     .iter()
                     .map(|layer| (*layer, desktop.presented_font_size(*layer)))
                     .collect::<Vec<_>>();
+                let sources =
+                    typesetting::orient_sources(&self.snapshot().await?, &arguments.changes)
+                        .await?;
                 let mut invocation = self
                     .mutate(|project| {
                         Box::pin(async move {
                             let snapshot = project.snapshot();
-                            let steps =
-                                typesetting::steps(&snapshot, arguments.changes, |layer| {
+                            let steps = typesetting::steps(
+                                &snapshot,
+                                arguments.changes,
+                                &sources,
+                                |layer| {
                                     sizes
                                         .iter()
                                         .find(|(candidate, _)| *candidate == layer)
                                         .and_then(|(_, size)| *size)
-                                })?;
+                                },
+                            )?;
                             Ok((
                                 project.apply_steps(steps).await?,
                                 json!({ "changed": true }),

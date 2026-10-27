@@ -221,7 +221,13 @@ Known gaps after the rebuild:
   printed on (a newspaper column, a screen, a board): the layer gets a frame
   the size of that surface, turned like it, and the text laid out flat in
   it is drawn in perspective onto the corners; page_layers reports them, a
-  plain region makes the box flat again. The scene keeps the corners on the
+  plain region makes the box flat again. `source_lines` reports the slant
+  of the lettering printed under a layer, measured on the page's pixels
+  (the projection of the ink across its rows or columns is sharpest along
+  them), with the slant the text is drawn at and their difference;
+  `orient: along_source` takes that slant for an upright detected region,
+  and with `corners` turns the text on the surface to it, while `angle`
+  with `corners` turns it by hand. The scene keeps the corners on the
   text layout in units of the frame, so moving, resizing or turning a layer
   carries them; the renderer maps every glyph outline (and its outline
   stroke, one band per contour) through the projective map as filled paths,

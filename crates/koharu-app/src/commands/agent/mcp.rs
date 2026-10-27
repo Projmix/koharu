@@ -99,7 +99,13 @@ shape is wrong. Similar balloons on a page get one size; a typography change \
 names only the fields it changes. Lettering printed on a newspaper, a \
 screen, a board or a sign takes corners: the four page-pixel corners of the \
 surface it is printed in, one layer per headline, column or caption, so the \
-text is drawn in perspective with the surface.
+text is drawn in perspective with the surface. Its lines take the slant of \
+the printed ones: source_lines in page_layers and every result gives the \
+slant measured on the print, the text's own slant and their delta; orient: \
+along_source sets it (with corners it turns the text on the surface), and \
+angle with corners turns it by hand. Keep delta within a degree. A surface \
+seen nearly square-on takes orient: along_source on its own, a turned box, \
+instead of corners.
 5. Finish with check_chapter until it reports nothing, then check_chapter \
 with kinds balloons, about 30 pages per call (pages [1, 30], [31, 60], ...), \
 until it reports nothing, and hide_untranslated for \
