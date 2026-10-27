@@ -252,7 +252,11 @@ Known gaps after the rebuild:
   assets (`mask`, `unmasked`); `source` holds the masked result, so render,
   export, Clone Stamp and cleaning read the layer as it shows. Removing the
   mask restores the whole layer. A red tint per layer is a canvas view
-  choice only; exports never carry it.
+  choice only; exports never carry it. Cleaning keeps the owner's paint on
+  top, but a Restore is the owner's later edit of that spot, made from the
+  page with the paint in it: its layer goes above the paint and is not cut
+  by it, so it shows even over a merged, page-sized paint layer. A cleaning
+  result the paint covers entirely adds no layer.
 - Fork updater against `Projmix/koharu` releases (`docs/fork-releases.md`).
 - Research notes in `docs/research/` and plans in `docs/superpowers/plans/`.
 - Scan enhancement stage before detection, run only when selected:

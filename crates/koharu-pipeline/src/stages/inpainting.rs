@@ -538,28 +538,21 @@ impl CleanupTarget {
         }
         let mut overlay = cleanup_overlay(image, &self.mask, full_page, self.restore_bounds);
         lock_flat_fill(&mut overlay, &self.mask, full_page, &self.flat_fill);
-        exclude_paint_from_cleanup(&mut overlay, self.paint.as_ref());
+        // Cleaning keeps the owner's paint on top. A restoration is the
+        // owner's own later edit of that spot, made from the page with the
+        // paint in it, so it covers the paint: a merged, page-sized paint
+        // layer would otherwise hide and cut away every restoration.
+        if intent != Some(InpaintingIntent::Restore) {
+            exclude_paint_from_cleanup(&mut overlay, self.paint.as_ref());
+        }
+        if overlay.pixels().all(|pixel| pixel[3] == 0) {
+            return finish(input.scene.edit());
+        }
         let mut bytes = Cursor::new(Vec::new());
         let width = overlay.width();
         let height = overlay.height();
         DynamicImage::ImageRgba8(overlay).write_to(&mut bytes, ImageFormat::Png)?;
-        let at = match intent {
-            Some(InpaintingIntent::Remove) | None => {
-                // Keep editable text separate; cover every raster that supplied the model input.
-                let mut at = At::Start;
-                for child in input.scene.children(page)? {
-                    for entity in input.scene.subtree(child)? {
-                        if input.scene.component::<RasterLayer>(entity.id())?.is_some() {
-                            at = At::After(child);
-                            break;
-                        }
-                    }
-                }
-                at
-            }
-            Some(InpaintingIntent::Restore) => restoration_layer_placement(&input.scene, page)?,
-        };
-        let entity = edit.add_entity(page, at)?;
+        let entity = edit.add_entity(page, cleanup_layer_placement(&input.scene, page)?)?;
         edit.set(
             entity,
             &RasterLayer {
@@ -730,23 +723,22 @@ pub(crate) fn cleaned(
     Ok(false)
 }
 
-fn restoration_layer_placement(
+/// Above every raster layer, below the editable text: a result covers each
+/// layer that supplied the model input, and a later result the earlier ones.
+fn cleanup_layer_placement(
     scene: &koharu_scene::Snapshot,
     page: koharu_scene::EntityId,
 ) -> Result<At> {
-    if let Some(paint) = scene.children(page)?.find(|entity| {
-        scene
-            .component::<RasterLayer>(*entity)
-            .ok()
-            .flatten()
-            .is_some_and(|layer| layer.kind == RasterLayerKind::Paint)
-    }) {
-        return Ok(At::Before(paint));
+    let mut at = At::Start;
+    for child in scene.children(page)? {
+        for entity in scene.subtree(child)? {
+            if scene.component::<RasterLayer>(entity.id())?.is_some() {
+                at = At::After(child);
+                break;
+            }
+        }
     }
-    Ok(scene
-        .page(page)?
-        .text_group()?
-        .map_or(At::End, |group| At::Before(group.id())))
+    Ok(at)
 }
 
 #[derive(Clone, Debug)]
@@ -2800,7 +2792,100 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn repeated_restoration_layers_stack_above_cleanup_and_below_paint() {
+    async fn a_restoration_shows_over_page_sized_paint_and_an_empty_result_adds_no_layer() {
+        let mut session = koharu_scene::Session::memory().await.unwrap();
+        let mut ids = None;
+        let patch = session
+            .snapshot()
+            .patch(|edit| {
+                let page =
+                    edit.add_page(koharu_scene::PageDraft::new("page", 4.0, 4.0), At::End)?;
+                let paint = edit.add_entity(page, At::End)?;
+                edit.set(
+                    paint,
+                    &RasterLayer {
+                        origin: Origin::User,
+                        name: "Paint".to_owned(),
+                        kind: RasterLayerKind::Paint,
+                    },
+                )?;
+                ids = Some((page, paint));
+                Ok(())
+            })
+            .unwrap();
+        let snapshot = session.commit(patch).await.unwrap().snapshot;
+        let (page, paint) = ids.unwrap();
+        let mut mask = GrayImage::new(4, 4);
+        for y in 1..3 {
+            for x in 1..3 {
+                mask.put_pixel(x, y, Luma([255]));
+            }
+        }
+        // Merged layers: paint covering the whole page.
+        let target = CleanupTarget {
+            dimensions: (4, 4),
+            mask: mask.clone(),
+            paint: Some(RgbaImage::from_pixel(4, 4, Rgba([1, 2, 3, 255]))),
+            restore_bounds: mask_bounds(&mask),
+            flat_fill: Vec::new(),
+        };
+        let input = |intent| {
+            StageInput::new(
+                snapshot.clone(),
+                page,
+                None,
+                None,
+                Arc::new(crate::ImageCache::default()),
+                Some(crate::InpaintingMask {
+                    page,
+                    png: Arc::from(Vec::<u8>::new()),
+                    intent,
+                }),
+            )
+        };
+
+        let restored = target
+            .patch(
+                &input(InpaintingIntent::Restore),
+                "test",
+                &RgbaImage::from_pixel(2, 2, Rgba([9, 8, 7, 255])),
+                false,
+                &[],
+            )
+            .unwrap();
+        let after = session.commit(restored).await.unwrap().snapshot;
+        let children = after.children(page).unwrap().collect::<Vec<_>>();
+        assert_eq!(children.len(), 2);
+        assert_eq!(children[0], paint);
+        let asset = after
+            .asset(children[1], &AssetRole::new("source").unwrap())
+            .unwrap()
+            .unwrap();
+        let layer = image::load_from_memory(&after.read_blob(asset.blob).await.unwrap())
+            .unwrap()
+            .to_rgba8();
+        assert_eq!(layer.get_pixel(1, 1), &Rgba([9, 8, 7, 255]));
+        assert_eq!(layer.get_pixel(0, 0)[3], 0);
+
+        // Remove keeps the paint on top: under page-sized paint nothing is left.
+        let target = CleanupTarget {
+            restore_bounds: None,
+            ..target
+        };
+        let removed = target
+            .patch(
+                &input(InpaintingIntent::Remove),
+                "test",
+                &RgbaImage::from_pixel(4, 4, Rgba([9, 8, 7, 255])),
+                false,
+                &[],
+            )
+            .unwrap();
+        assert!(removed.is_empty());
+    }
+
+    #[tokio::test]
+    async fn repeated_restoration_layers_stack_above_cleanup_and_paint() {
         let mut session = koharu_scene::Session::memory().await.unwrap();
         let mut page = None;
         let mut old_cleanup = None;
@@ -2841,7 +2926,7 @@ mod tests {
         let mut restorations = Vec::new();
         for _ in 0..2 {
             let snapshot = session.snapshot();
-            let at = restoration_layer_placement(&snapshot, page).unwrap();
+            let at = cleanup_layer_placement(&snapshot, page).unwrap();
             let mut restoration = None;
             let patch = snapshot
                 .patch(|edit| {
@@ -2871,9 +2956,9 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![
                 old_cleanup.unwrap(),
+                paint.unwrap(),
                 restorations[0],
                 restorations[1],
-                paint.unwrap(),
             ]
         );
     }
