@@ -211,6 +211,10 @@ pub(super) struct CheckChapterArguments {
     /// JSON instead of one line per issue.
     #[serde(default)]
     pub(super) full: bool,
+    /// First and last page number, from 1, to check; every page when
+    /// absent. Check a long chapter's slow kinds in ranges of about 30 pages.
+    #[serde(default)]
+    pub(super) pages: Option<[usize; 2]>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -706,7 +710,17 @@ impl CheckChapterArguments {
             None => !matches!(kind, "cleaned" | "balloons"),
         }
     }
+
+    /// Whether page `number` (from 1) is in the checked range.
+    pub(super) fn covers(&self, number: usize) -> bool {
+        self.pages
+            .is_none_or(|[first, last]| (first..=last).contains(&number))
+    }
 }
+
+/// Pages a check renders run this many at a time: rendering and the pixel
+/// work overlap without holding every page image at once.
+const CONCURRENT_PAGES: usize = 4;
 
 /// `pages`' text layers as `page_layers` reports them, keyed by layer.
 pub(super) async fn measured_layers(
@@ -714,21 +728,37 @@ pub(super) async fn measured_layers(
     snapshot: &Snapshot,
     pages: &[EntityId],
 ) -> Result<HashMap<EntityId, Value>> {
-    let mut layers = HashMap::new();
-    for page in pages {
-        let Some(group) = snapshot.page(*page)?.text_group()? else {
-            continue;
-        };
-        let frame = desktop.renderer().render(snapshot, *page).await?;
-        let clean = render_image(desktop, &without_text(snapshot, *page)?, *page).await?;
-        let shapes = koharu_renderer::balloon_flow_shapes(snapshot, *page)?;
-        for (index, layer) in group.text_layers()?.enumerate() {
-            let mut value = layer_value(snapshot, &frame, layer.id(), index + 1)?;
-            measure_balloon(&clean, &mut value, &shapes);
-            layers.insert(layer.id(), value);
-        }
-    }
-    Ok(layers)
+    use futures::{StreamExt as _, TryStreamExt as _};
+    let pages = futures::stream::iter(pages.iter().copied())
+        .map(|page| async move {
+            let Some(group) = snapshot.page(page)?.text_group()? else {
+                return Ok(Vec::new());
+            };
+            let layers = group
+                .text_layers()?
+                .map(|layer| layer.id())
+                .collect::<Vec<_>>();
+            let frame = desktop.renderer().render(snapshot, page).await?;
+            let clean = render_image(desktop, &without_text(snapshot, page)?, page).await?;
+            let shapes = koharu_renderer::balloon_flow_shapes(snapshot, page)?;
+            let snapshot = snapshot.clone();
+            tokio_rayon::spawn(move || {
+                layers
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, layer)| {
+                        let mut value = layer_value(&snapshot, &frame, layer, index + 1)?;
+                        measure_balloon(&clean, &mut value, &shapes);
+                        Ok((layer, value))
+                    })
+                    .collect::<Result<Vec<_>>>()
+            })
+            .await
+        })
+        .buffer_unordered(CONCURRENT_PAGES)
+        .try_collect::<Vec<_>>()
+        .await?;
+    Ok(pages.into_iter().flatten().collect())
 }
 
 /// What a fit warning needs to be fixed without another call: the drawn
@@ -838,21 +868,25 @@ fn page_balloon_issues(layers: &[&Value]) -> Vec<Vec<String>> {
         .collect()
 }
 
-/// Every page's places cleaned without a translated layer over them.
+/// `pages`' places cleaned without a translated layer over them.
 pub(super) async fn chapter_cleaned_without_text(
     desktop: &Desktop,
     snapshot: &Snapshot,
+    pages: &[EntityId],
 ) -> Result<Vec<(EntityId, Vec<[f64; 4]>)>> {
-    let mut pages = Vec::new();
-    for page in snapshot.pages().map(|page| page.id()).collect::<Vec<_>>() {
-        let source = base_image(snapshot, page).await?;
-        let clean = render_image(desktop, &without_text(snapshot, page)?, page).await?;
-        let covered = translated_boxes(snapshot, page)?;
-        let places =
-            tokio_rayon::spawn(move || cleaned_without_text(&source, &clean, &covered)).await;
-        pages.push((page, places));
-    }
-    Ok(pages)
+    use futures::{StreamExt as _, TryStreamExt as _};
+    futures::stream::iter(pages.iter().copied())
+        .map(|page| async move {
+            let source = base_image(snapshot, page).await?;
+            let clean = render_image(desktop, &without_text(snapshot, page)?, page).await?;
+            let covered = translated_boxes(snapshot, page)?;
+            let places =
+                tokio_rayon::spawn(move || cleaned_without_text(&source, &clean, &covered)).await;
+            anyhow::Ok((page, places))
+        })
+        .buffered(CONCURRENT_PAGES)
+        .try_collect()
+        .await
 }
 
 pub(super) fn chapter_issues(
@@ -883,7 +917,11 @@ pub(super) fn chapter_issues(
     let mut texts = Vec::new();
     let mut lines = Vec::new();
     let mut counts = std::collections::BTreeMap::<&str, usize>::new();
+    let covered = |page: EntityId| arguments.covers(page_number(page));
     for issue in check.texts {
+        if !covered(issue.page) {
+            continue;
+        }
         let mut kinds = Vec::new();
         if let Some(fit) = issue.fit {
             let details = measured
@@ -970,7 +1008,7 @@ pub(super) fn chapter_issues(
     }
     let mut automatic_style = Vec::new();
     if wanted("style") {
-        for page in &pages {
+        for page in pages.iter().filter(|page| covered(**page)) {
             for layer in automatic_style_layers(snapshot, *page)? {
                 *counts.entry("style").or_default() += 1;
                 let address = format!(
@@ -998,6 +1036,9 @@ pub(super) fn chapter_issues(
     let mut unboxed_text = Vec::new();
     if wanted("unboxed") {
         for issue in check.unboxed_text {
+            if !covered(issue.page) {
+                continue;
+            }
             let boxes = koharu_pipeline::open_unboxed_text(snapshot, issue.page)?
                 .into_iter()
                 .map(|flag| [flag.x, flag.y, flag.width, flag.height].map(f64::round))

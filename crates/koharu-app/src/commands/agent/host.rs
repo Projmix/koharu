@@ -703,18 +703,27 @@ impl Host for KoharuHost {
                 let snapshot = self.snapshot().await?;
                 let desktop = self.handle.state::<Desktop>();
                 let check = output::chapter_check(&snapshot, &desktop, source, target).await?;
+                let checked = snapshot
+                    .pages()
+                    .enumerate()
+                    .filter(|(index, _)| arguments.covers(index + 1))
+                    .map(|(_, page)| page.id())
+                    .collect::<Vec<_>>();
                 let cleaned_without_text = if arguments.wants("cleaned") {
-                    Some(typesetting::chapter_cleaned_without_text(&desktop, &snapshot).await?)
+                    Some(
+                        typesetting::chapter_cleaned_without_text(&desktop, &snapshot, &checked)
+                            .await?,
+                    )
                 } else {
                     None
                 };
                 let pages = if arguments.wants("balloons") {
-                    snapshot.pages().map(|page| page.id()).collect::<Vec<_>>()
+                    checked
                 } else if arguments.wants("fit") {
                     let mut pages = check
                         .texts
                         .iter()
-                        .filter(|issue| issue.fit.is_some())
+                        .filter(|issue| issue.fit.is_some() && checked.contains(&issue.page))
                         .map(|issue| issue.page)
                         .collect::<Vec<_>>();
                     pages.dedup();

@@ -93,7 +93,8 @@ lobe. Give a layer its own box only where the green outline shows the flow \
 shape is wrong. Similar balloons on a page get one size; a typography change \
 names only the fields it changes.
 5. Finish with check_chapter until it reports nothing, then check_chapter \
-with kinds balloons until it reports nothing, and hide_untranslated for \
+with kinds balloons, about 30 pages per call (pages [1, 30], [31, 60], ...), \
+until it reports nothing, and hide_untranslated for \
 lettering left untranslated on purpose. Crop every page once more after the \
 last change.
 
