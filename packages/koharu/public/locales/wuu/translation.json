@@ -89,7 +89,10 @@
     "regenerateCleanup": "重新生成清理",
     "regenerateCleanupDescription": "使用已配置的清理模型和新的随机种子重新清理此页",
     "cleanupDone": "清理已完成",
-    "cleanupDoneDescription": "保留此页的清理结果：自动清理（包括云端编辑）将跳过此页。手动移除和恢复仍可使用。"
+    "cleanupDoneDescription": "保留此页的清理结果：自动清理（包括云端编辑）将跳过此页。手动移除和恢复仍可使用。",
+    "perspective": {
+      "handle": "拖动以移动此角，双击使文字恢复平面。按住 Ctrl 拖动框的角可设置透视。"
+    }
   },
   "colorPicker": {
     "brushColor": "笔刷颜色",

@@ -56,6 +56,7 @@ import {
 } from '@koharu/bridge/canvas'
 import {
   commands,
+  type EntityId,
   type Frame,
   type Layer,
   type LayerCommit,
@@ -454,6 +455,12 @@ export function CanvasWorkspace() {
     },
     [pageId],
   )
+
+  const setPerspective = useCallback((layer: EntityId, corners: Point[] | null) => {
+    void enqueueEdit(() => call(commands.setPerspective, [{ layer, corners }]))
+      .then(() => refresh(projectKey, pagesKey, pageKey))
+      .catch(() => undefined)
+  }, [])
 
   const cancelGesture = useCallback(() => {
     const current = gesture.current
@@ -1530,6 +1537,7 @@ export function CanvasWorkspace() {
               onTransformStart={beginTransform}
               onTransformFrame={updateTransform}
               onTransformEnd={finishTransform}
+              onPerspective={setPerspective}
             />
           )}
           {page && canvasState.status === 'error' && (

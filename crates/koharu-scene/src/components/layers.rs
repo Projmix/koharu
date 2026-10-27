@@ -10,7 +10,7 @@ use crate::{
     id::validate_namespaced,
 };
 
-use super::Origin;
+use super::{Origin, Point};
 
 #[revisioned(revision = 2)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Type)]
@@ -90,7 +90,7 @@ pub enum TextLayoutKind {
     Paragraph,
 }
 
-#[revisioned(revision = 2)]
+#[revisioned(revision = 3)]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Type)]
 pub struct TextLayout {
     pub origin: Origin,
@@ -98,6 +98,39 @@ pub struct TextLayout {
     /// Overrides the axes inferred from geometry when a frame is transformed.
     #[revision(start = 2)]
     pub angle_degrees: Option<f32>,
+    /// Lettering printed on a surface seen at an angle (a newspaper, a phone
+    /// screen, a board): the text is laid out in its frame as usual, then
+    /// drawn mapped onto this quadrilateral. Its top-left, top-right,
+    /// bottom-right and bottom-left corners are in units of the frame's width
+    /// and height, from its top-left corner, so moving, resizing or turning
+    /// the frame carries the distortion with it.
+    #[revision(start = 3)]
+    pub perspective: Option<Vec<Point>>,
+}
+
+/// The farthest a perspective corner may sit from its frame, in frame sizes.
+const PERSPECTIVE_REACH: f64 = 8.0;
+
+/// Whether `corners` are four finite corners of a convex quadrilateral turning
+/// the same way as the frame, within reach of the frame.
+#[must_use]
+pub fn valid_perspective(corners: &[Point]) -> bool {
+    let [a, b, c, d] = corners else {
+        return false;
+    };
+    if corners.iter().any(|point| {
+        !point.x.is_finite()
+            || !point.y.is_finite()
+            || point.x.abs() > PERSPECTIVE_REACH
+            || point.y.abs() > PERSPECTIVE_REACH
+    }) {
+        return false;
+    }
+    let turn =
+        |o: &Point, p: &Point, q: &Point| (p.x - o.x) * (q.y - o.y) - (p.y - o.y) * (q.x - o.x);
+    [turn(a, b, c), turn(b, c, d), turn(c, d, a), turn(d, a, b)]
+        .into_iter()
+        .all(|value| value > 1e-6)
 }
 
 impl Component for TextLayout {
@@ -106,6 +139,15 @@ impl Component for TextLayout {
     fn validate(&self, _context: &ValidationContext<'_>) -> Result<()> {
         if self.angle_degrees.is_some_and(|angle| !angle.is_finite()) {
             return Err(Error::invalid("text layout angle must be finite"));
+        }
+        if self
+            .perspective
+            .as_ref()
+            .is_some_and(|corners| !valid_perspective(corners))
+        {
+            return Err(Error::invalid(
+                "text perspective must be four corners of a convex quadrilateral",
+            ));
         }
         self.origin.validate()
     }

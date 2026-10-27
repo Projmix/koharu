@@ -31,7 +31,7 @@ pub use components::{
     Region, RegionKind, Relation, RelationKind, SourceText, SpeechKind, SpeechMarkup,
     TextAlignment, TextContent, TextDirection, TextGroup, TextLayout, TextLayoutKind, TextRole,
     Translation, TranslationReview, TranslationReviewReason, Typography, UnboxedText,
-    UnboxedTextReview, Visibility, WritingMode,
+    UnboxedTextReview, Visibility, WritingMode, valid_perspective,
 };
 pub use document::{AnalysisRegionRef, GroupRef, TextContentRef, TextLayerRef};
 pub use edit::{At, Edit, RemovePolicy};

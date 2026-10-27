@@ -205,9 +205,13 @@ pub(crate) async fn build(
                 top: rendered.top,
                 pixels: rendered.image,
                 hidden: false,
+                // A PSD text layer takes an affine transform only, so text
+                // in perspective stays its rendered pixels.
                 text: match options.text_layer_mode {
-                    TextLayerMode::Rasterized => None,
-                    TextLayerMode::Editable => Some(text_metadata(index, text, &font_set)),
+                    TextLayerMode::Editable if !text.perspective => {
+                        Some(text_metadata(index, text, &font_set))
+                    }
+                    TextLayerMode::Editable | TextLayerMode::Rasterized => None,
                 },
             });
         }
@@ -409,6 +413,7 @@ mod tests {
             alignment: TextAlign::Center,
             writing_mode: WritingMode::Horizontal,
             angle_degrees: 0.0,
+            perspective: false,
         }
     }
 

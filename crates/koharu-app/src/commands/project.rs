@@ -26,7 +26,7 @@ use tokio::sync::Mutex;
 
 use super::{
     canvas::Point,
-    editing::{GeometryUpdate, TypographyUpdate},
+    editing::{GeometryUpdate, PerspectiveUpdate, TypographyUpdate},
 };
 
 /// A checked change to apply inside a larger edit, so several commit as one.
@@ -119,6 +119,9 @@ pub enum Layer {
         parent: Option<EntityId>,
         geometry: Option<Geometry>,
         angle_degrees: Option<f32>,
+        /// Corners, in units of the frame, the text is drawn onto in
+        /// perspective: top-left, top-right, bottom-right, bottom-left.
+        perspective: Option<Vec<Point>>,
         visibility: LayerVisibility,
         content: Box<TextContent>,
         typography: Option<Typography>,
@@ -1119,6 +1122,7 @@ impl Project {
                             origin: Origin::User,
                             kind: block.layout,
                             angle_degrees: block.angle_degrees,
+                            perspective: None,
                         },
                     )?;
                     Self::set_clipboard_layer_components(edit, layer, block, offset)?;
@@ -1306,6 +1310,7 @@ impl Project {
                     origin: Origin::User,
                     kind: TextLayoutKind::Paragraph,
                     angle_degrees: None,
+                    perspective: None,
                 },
             )?;
             edit.set(layer, &typography)?;
@@ -1383,6 +1388,7 @@ impl Project {
                     origin: Origin::User,
                     kind,
                     angle_degrees: Some(frame.angle_degrees),
+                    perspective: None,
                 },
             )?;
             layer = Some(added_layer);
@@ -1836,6 +1842,7 @@ impl Project {
                     edit.promote_entity_to_user(content)?;
                     layout.origin = Origin::User;
                     layout.angle_degrees = None;
+                    layout.perspective = None;
                     edit.set(update.layer, &layout)?;
                 }
                 match update.points {
@@ -1854,6 +1861,59 @@ impl Project {
                     )?,
                     None => edit.remove::<SceneGeometry>(update.layer)?,
                 }
+            }
+            Ok(())
+        }))
+    }
+
+    /// Draws text layers in perspective onto `corners` (in units of each
+    /// layer's frame), or flat again without them.
+    pub(crate) async fn set_perspective(
+        &mut self,
+        updates: Vec<PerspectiveUpdate>,
+    ) -> Result<Commit> {
+        let step = Self::perspective_step(&self.snapshot(), updates)?;
+        let patch = self.snapshot().patch(step)?;
+        self.commit(patch).await
+    }
+
+    /// `set_perspective`'s change, checked against `snapshot`, as a step.
+    pub(crate) fn perspective_step(
+        snapshot: &Snapshot,
+        updates: Vec<PerspectiveUpdate>,
+    ) -> Result<EditStep> {
+        let updates = updates
+            .into_iter()
+            .map(|update| {
+                let mut layout = snapshot
+                    .component::<SceneTextLayout>(update.layer)?
+                    .context("only text layers can be drawn in perspective")?;
+                let corners = update.corners.map(|corners| {
+                    corners
+                        .into_iter()
+                        .map(|point| ScenePoint {
+                            x: point.x,
+                            y: point.y,
+                        })
+                        .collect::<Vec<_>>()
+                });
+                if corners
+                    .as_ref()
+                    .is_some_and(|corners| !koharu_scene::valid_perspective(corners))
+                {
+                    bail!("perspective corners must make a convex quadrilateral");
+                }
+                layout.origin = Origin::User;
+                layout.perspective = corners;
+                let content = Self::text_content(snapshot, update.layer)?;
+                Ok((update.layer, content, layout))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Box::new(move |edit| {
+            for (layer, content, layout) in updates {
+                edit.promote_entity_to_user(layer)?;
+                edit.promote_entity_to_user(content)?;
+                edit.set(layer, &layout)?;
             }
             Ok(())
         }))
@@ -3095,6 +3155,15 @@ impl Project {
                     .component::<SceneGeometry>(layer)?
                     .map(Self::geometry_view),
                 angle_degrees: layout.angle_degrees,
+                perspective: layout.perspective.as_ref().map(|corners| {
+                    corners
+                        .iter()
+                        .map(|point| Point {
+                            x: point.x,
+                            y: point.y,
+                        })
+                        .collect()
+                }),
                 visibility,
                 content: Box::new(TextContent {
                     id: content.id(),
@@ -3763,6 +3832,7 @@ mod tests {
                     origin: Origin::User,
                     kind: TextLayoutKind::Paragraph,
                     angle_degrees: None,
+                    perspective: None,
                 },
             )
             .unwrap();
@@ -3851,6 +3921,7 @@ mod tests {
                     origin: Origin::User,
                     kind: TextLayoutKind::Paragraph,
                     angle_degrees: None,
+                    perspective: None,
                 },
             )
             .unwrap();
@@ -3982,6 +4053,7 @@ mod tests {
                     origin: Origin::User,
                     kind: TextLayoutKind::Paragraph,
                     angle_degrees: None,
+                    perspective: None,
                 },
             )
             .unwrap();
@@ -4087,6 +4159,7 @@ mod tests {
                     origin: Origin::User,
                     kind: TextLayoutKind::Paragraph,
                     angle_degrees: None,
+                    perspective: None,
                 },
             )
             .unwrap();
@@ -4121,6 +4194,7 @@ mod tests {
                     origin: Origin::User,
                     kind: TextLayoutKind::Paragraph,
                     angle_degrees: None,
+                    perspective: None,
                 },
             )
             .unwrap();
@@ -4206,6 +4280,7 @@ mod tests {
             origin: Origin::User,
             kind: TextLayoutKind::Paragraph,
             angle_degrees: None,
+            perspective: None,
         };
         let moved = setup
             .add_text_layer(source_page, At::End, content, &layout)
@@ -4544,6 +4619,7 @@ mod tests {
             origin: Origin::User,
             kind: TextLayoutKind::Paragraph,
             angle_degrees: None,
+            perspective: None,
         };
         let mut layers = Vec::new();
         for _ in 0..4 {
@@ -4707,6 +4783,7 @@ mod tests {
                     origin: Origin::User,
                     kind: TextLayoutKind::Paragraph,
                     angle_degrees: None,
+                    perspective: None,
                 },
             )
             .unwrap();
@@ -4760,6 +4837,7 @@ mod tests {
             origin: Origin::User,
             kind: TextLayoutKind::Paragraph,
             angle_degrees: None,
+            perspective: None,
         };
         let first = setup
             .add_text_layer(page, At::End, content, &layout)
@@ -4957,6 +5035,7 @@ mod tests {
                     origin: Origin::User,
                     kind: TextLayoutKind::Paragraph,
                     angle_degrees: None,
+                    perspective: None,
                 },
             )
             .unwrap();

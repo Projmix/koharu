@@ -50,6 +50,7 @@ interface CanvasOverlayProps {
   onTransformStart: (elements: TransformFrame[]) => void
   onTransformFrame: (elements: TransformFrame[]) => void
   onTransformEnd: () => void
+  onPerspective: (layer: EntityId, corners: Point[] | null) => void
 }
 
 export function CanvasOverlay({
@@ -69,6 +70,7 @@ export function CanvasOverlay({
   onTransformStart,
   onTransformFrame,
   onTransformEnd,
+  onPerspective,
 }: CanvasOverlayProps) {
   const root = useRef<HTMLDivElement>(null)
   // Subscribed here so a camera change re-renders the overlay alone, not the whole workspace.
@@ -211,6 +213,16 @@ export function CanvasOverlay({
           frame={selectionControl.frame}
           camera={camera}
           edgesOnly={false}
+          perspective={
+            selectionControl.element === selectedTextLayer?.id
+              ? selectedTextLayer.perspective
+              : null
+          }
+          onPerspective={
+            selectionControl.element === selectedTextLayer?.id
+              ? (corners) => onPerspective(selectedTextLayer.id, corners)
+              : undefined
+          }
           onTransformStart={onTransformStart}
           onTransformFrame={onTransformFrame}
           onTransformEnd={onTransformEnd}

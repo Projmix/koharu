@@ -76,6 +76,7 @@ export const commands = {
 	importCharacters: (source: string) => __TAURI_INVOKE<number>("import_characters", { source }),
 	setTypography: (updates: TypographyUpdate[]) => __TAURI_INVOKE<null>("set_typography", { updates: updates.map(i=>({...i,typography:({...i.typography,size:i.typography.size==null?i.typography.size:i.typography.size,stroke_width:i.typography.stroke_width==null?i.typography.stroke_width:i.typography.stroke_width})})) }),
 	setGeometry: (updates: GeometryUpdate[]) => __TAURI_INVOKE<null>("set_geometry", { updates: updates.map(i=>({...i,points:i.points==null?i.points:i.points.map(i=>i)})) }),
+	setPerspective: (updates: PerspectiveUpdate[]) => __TAURI_INVOKE<null>("set_perspective", { updates: updates.map(i=>({...i,corners:i.corners==null?i.corners:i.corners.map(i=>i)})) }),
 	setVisibility: (layers: EntityId[], visible: boolean | null, opacity: number | null) => __TAURI_INVOKE<null>("set_visibility", { layers, visible, opacity: opacity==null?opacity:opacity }),
 	deleteLayers: (layers: EntityId[]) => __TAURI_INVOKE<null>("delete_layers", { layers }),
 	/**  Adds a reveal mask that hides the whole layer, or removes it. */
@@ -525,7 +526,12 @@ export type LanguageChoice = {
 	name: string,
 };
 
-export type Layer = { type: "group"; id: EntityId; parent: EntityId | null; visibility: LayerVisibility; name: string; role: GroupRole | null } | { type: "text"; id: EntityId; parent: EntityId | null; geometry: Geometry | null; angle_degrees: number | null; visibility: LayerVisibility; content: TextContent; typography: Typography | null; layout: TextLayoutKind; automatic_region: EntityId | null } | { type: "raster"; id: EntityId; parent: EntityId | null; visibility: LayerVisibility; image: string | null; name: string; kind: RasterLayerKind; 
+export type Layer = { type: "group"; id: EntityId; parent: EntityId | null; visibility: LayerVisibility; name: string; role: GroupRole | null } | { type: "text"; id: EntityId; parent: EntityId | null; geometry: Geometry | null; angle_degrees: number | null; 
+/**
+ *  Corners, in units of the frame, the text is drawn onto in
+ *  perspective: top-left, top-right, bottom-right, bottom-left.
+ */
+perspective: Point[] | null; visibility: LayerVisibility; content: TextContent; typography: Typography | null; layout: TextLayoutKind; automatic_region: EntityId | null } | { type: "raster"; id: EntityId; parent: EntityId | null; visibility: LayerVisibility; image: string | null; name: string; kind: RasterLayerKind; 
 /**  The layer shows only where its reveal mask is painted. */
 masked: boolean } | { type: "image"; id: EntityId; parent: EntityId | null; geometry: Geometry; visibility: LayerVisibility; image: string } | { type: "artwork"; id: EntityId; parent: EntityId | null; geometry: Geometry; visibility: LayerVisibility; image: string };
 
@@ -688,6 +694,15 @@ export type PageWarning = {
 export type PaintBrush = {
 	diameter: number,
 	color: [number, number, number, number],
+};
+
+/**
+ *  A text layer's perspective corners, in units of its frame; none draws it
+ *  flat again.
+ */
+export type PerspectiveUpdate = {
+	layer: EntityId,
+	corners: Point[] | null,
 };
 
 export type PipelineConfig = {

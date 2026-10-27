@@ -560,6 +560,7 @@ fn write_region<'a>(
             origin: Origin::Generated(generation.clone()),
             kind: TextLayoutKind::Paragraph,
             angle_degrees: None,
+            perspective: None,
         },
     )?;
     write_text_role(edit, content, text_role, generation)
@@ -3293,6 +3294,7 @@ mod tests {
                         origin: Origin::User,
                         kind: TextLayoutKind::Paragraph,
                         angle_degrees: None,
+                        perspective: None,
                     },
                 )?;
                 link_dialogue_regions(

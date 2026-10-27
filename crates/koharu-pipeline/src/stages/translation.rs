@@ -2099,6 +2099,7 @@ mod tests {
                     origin: Origin::User,
                     kind: TextLayoutKind::Paragraph,
                     angle_degrees: None,
+                    perspective: None,
                 },
             )
             .unwrap();

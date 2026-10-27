@@ -89,7 +89,10 @@
     "regenerateCleanup": "Régénérer le nettoyage",
     "regenerateCleanupDescription": "Nettoyer à nouveau cette page avec le modèle de nettoyage configuré et une nouvelle graine",
     "cleanupDone": "Nettoyage terminé",
-    "cleanupDoneDescription": "Garder le nettoyage de cette page tel quel : le nettoyage automatique, y compris l'édition dans le cloud, l'ignore. La suppression et la restauration fonctionnent toujours."
+    "cleanupDoneDescription": "Garder le nettoyage de cette page tel quel : le nettoyage automatique, y compris l'édition dans le cloud, l'ignore. La suppression et la restauration fonctionnent toujours.",
+    "perspective": {
+      "handle": "Faites glisser pour déplacer ce coin ; double-cliquez pour remettre le texte à plat. Ctrl+glisser un coin du cadre applique une perspective."
+    }
   },
   "colorPicker": {
     "brushColor": "Couleur du pinceau",

@@ -7,6 +7,7 @@ mod fonts;
 mod frame;
 mod images;
 mod layout;
+mod perspective;
 mod renderer;
 mod script;
 mod segment;

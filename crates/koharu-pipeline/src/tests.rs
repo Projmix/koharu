@@ -92,6 +92,7 @@ async fn stop_after_a_page_keeps_completed_progress() {
                         origin: koharu_scene::Origin::User,
                         kind: koharu_scene::TextLayoutKind::Paragraph,
                         angle_degrees: None,
+                        perspective: None,
                     },
                 )?;
                 edit.set(
@@ -229,6 +230,7 @@ async fn failed_scene_markup_records_a_missing_page_and_chapter_translation_stil
                     origin: koharu_scene::Origin::User,
                     kind: koharu_scene::TextLayoutKind::Paragraph,
                     angle_degrees: None,
+                    perspective: None,
                 },
             )?;
             edit.set(

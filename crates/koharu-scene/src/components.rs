@@ -22,7 +22,7 @@ pub use assets::{Asset, AssetInput, AssetMetadata, AssetRole};
 pub use groups::{Group, TextGroup};
 pub use layers::{
     CleanupDone, FontStyle, LineBreaking, RasterLayer, RasterLayerKind, TextAlignment, TextLayout,
-    TextLayoutKind, Typography, WritingMode,
+    TextLayoutKind, Typography, WritingMode, valid_perspective,
 };
 pub use markup::{
     Character, CharacterId, CharacterList, Gender, ObservedText, PageMarkup, PageMarkupMissing,

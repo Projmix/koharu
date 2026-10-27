@@ -110,6 +110,7 @@ async fn scene_input(restoration: bool) -> StageInput {
                     origin: Origin::User,
                     kind: koharu_scene::TextLayoutKind::Paragraph,
                     angle_degrees: None,
+                    perspective: None,
                 },
             )?;
             page = Some(id);

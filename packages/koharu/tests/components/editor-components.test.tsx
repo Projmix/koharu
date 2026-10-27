@@ -123,6 +123,7 @@ const ocrApiModels: Model[] = [
 const textLayer: Layer = {
   type: 'text',
   angle_degrees: 0,
+  perspective: null,
   id: 'element',
   parent: 'page',
   geometry: {

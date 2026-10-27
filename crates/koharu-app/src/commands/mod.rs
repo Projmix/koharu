@@ -99,6 +99,7 @@ pub fn bindings() -> tauri_specta::Builder<tauri_runtime_cef::CefRuntime> {
             editing::import_characters,
             editing::set_typography,
             editing::set_geometry,
+            editing::set_perspective,
             editing::set_visibility,
             editing::delete_layers,
             editing::set_reveal_mask,

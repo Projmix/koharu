@@ -184,9 +184,11 @@ const TYPESETTING: &str = "Proofreading and typesetting (chapter.json lists laye
 /// How a translated chapter is proofread and lettered, whoever does it: the
 /// file exchange here and an agent working through Koharu's tools.
 pub const LETTERING_RULES: &str = "- Proofread every layer against the original lettering and the art, in context of the whole chapter. Fix mistranslations, lines that contradict the scene or the lines around them, wrong gender agreement, inconsistent names and terms, rudeness or profanity the source does not have, and explicit, sexual or profane wording that the source has but the translation lost, softened or left out. Keep the register of the source.\n\
+- Lettering printed on an object in the story (a newspaper or magazine, a phone, TV or computer screen, a board, a sign, a poster, a letter) is translated exactly and in full: every headline, line, number, name and caption, in the original's order and structure, a headline as a headline and each line or block as its own; never shortened, summarised, merged, embellished or reworded for style.\n\
 - Then typeset every layer so the page reads like professionally lettered manga:\n\
   - Text in a balloon is centred, fills most of the balloon's inside without touching its outline, is coloured like the original lettering (dark on a light balloon, light on a dark one) and has no outline. Similar balloons on a page get similar sizes.\n\
   - Text on art (narration, thoughts, signs outside balloons) stays readable: the original lettering's colour with an outline in a contrasting colour, stroke_width about a tenth of the font size.\n\
+  - Lettering printed on an object lies on that object: each block (headline, column, caption, message) in its original's place and proportion, in perspective with the surface when the surface is seen at an angle, coloured like the original print with no outline.\n\
   - A sound effect uses the sound-effect font, is large like the original, takes the original's colour with a contrasting outline, and its box covers the area of the original sound effect.\n\
   - A drawn line that stretches a sound (a long wavy or straight stroke after a kana, read as 〜 or ー) is art when the cleaned page still shows it: letter only the sound before it, in that kana's place and size, and let the line carry the length; never stretch letters along it.\n\
   - Clear every warning: a larger box inside the balloon or the free space, a smaller size, or a shorter translation with the same meaning.\n\
@@ -779,6 +781,7 @@ impl ChapterTranslation {
                     origin: Origin::User,
                     kind: TextLayoutKind::Paragraph,
                     angle_degrees: None,
+                    perspective: None,
                 },
             )?;
             edit.set(

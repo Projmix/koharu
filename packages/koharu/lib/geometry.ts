@@ -446,6 +446,31 @@ export function rotateFrame(frame: Frame, start: Point, point: Point): Frame {
   return { ...frame, angle_degrees: normalizeDegrees(frame.angle_degrees + delta) }
 }
 
+/** `point` on the page in units of `frame`, from its top-left corner along its turned axes. */
+export function frameUnitPoint(frame: Frame, point: Point): Point {
+  const radians = (frame.angle_degrees * Math.PI) / 180
+  const cos = Math.cos(radians)
+  const sin = Math.sin(radians)
+  const x = point.x - (frame.x + frame.width * 0.5)
+  const y = point.y - (frame.y + frame.height * 0.5)
+  return {
+    x: (x * cos + y * sin) / frame.width + 0.5,
+    y: (-x * sin + y * cos) / frame.height + 0.5,
+  }
+}
+
+/** Whether four corners make a convex quadrilateral turning like the frame's own. */
+export function convexCorners(corners: Point[]): boolean {
+  if (corners.length !== 4 || corners.some((corner) => !finite(corner.x, corner.y))) return false
+  return corners.every((origin, index) => {
+    const next = corners[(index + 1) % 4]
+    const after = corners[(index + 2) % 4]
+    return (
+      (next.x - origin.x) * (after.y - origin.y) - (next.y - origin.y) * (after.x - origin.x) > 1e-6
+    )
+  })
+}
+
 export function translateFrames(originals: TransformFrame[], delta: Point): TransformFrame[] {
   return originals.map(({ element, frame }) => ({
     element,

@@ -91,7 +91,10 @@ the balloon's shape and centres it; a lone text in a joined balloon flows in \
 its largest lobe, so lettering that sits in two lobes gets one layer per \
 lobe. Give a layer its own box only where the green outline shows the flow \
 shape is wrong. Similar balloons on a page get one size; a typography change \
-names only the fields it changes.
+names only the fields it changes. Lettering printed on a newspaper, a \
+screen, a board or a sign takes corners: the four page-pixel corners of the \
+surface it is printed in, one layer per headline, column or caption, so the \
+text is drawn in perspective with the surface.
 5. Finish with check_chapter until it reports nothing, then check_chapter \
 with kinds balloons, about 30 pages per call (pages [1, 30], [31, 60], ...), \
 until it reports nothing, and hide_untranslated for \

@@ -7,13 +7,15 @@ use koharu_rasterizer::{
     PreparedGlyph, PreparedGlyphRun, PreparedResource, PreparedScene, PreparedSceneCommand,
     ResourceId,
 };
-use vello::kurbo::Affine;
+use skrifa::{GlyphId, MetadataProvider, instance::Size, outline::DrawSettings};
+use vello::kurbo::{Affine, BezPath};
 
 use crate::{
     Error, FontStyle, HyphenationPolicy, LayoutRun, RenderBounds, RenderDiagnostic, RenderedLine,
     Result as RenderResult, TextAlign, TextLayout, WritingMode,
     bubble::LayoutBox,
-    fonts::{Fonts, font_key},
+    fonts::{Font, Fonts, font_key},
+    perspective::{OutlinePath, Perspective},
     script::is_chinese_or_japanese_text,
 };
 
@@ -47,6 +49,9 @@ pub(crate) struct TextNodeDescriptor {
     pub(crate) word_spacing: f32,
     pub(crate) text_inset: [f32; 4],
     pub(crate) point_text: bool,
+    /// Corners, in units of the frame, of the quadrilateral the laid-out
+    /// frame is drawn onto; see `koharu_scene::TextLayout::perspective`.
+    pub(crate) perspective: Option<[(f32, f32); 4]>,
 }
 
 pub(crate) struct RenderedTextNode {
@@ -130,6 +135,7 @@ impl TextRenderer {
         writing_mode: WritingMode,
         options: &TextRenderOptions,
         transform: Affine,
+        perspective: Option<&Perspective>,
     ) {
         // The border is drawn first as an outward-only dilation of the glyph outline (see
         // `draw_layout`), then the ordinary fill is drawn on top in the foreground color. Unlike a
@@ -146,6 +152,7 @@ impl TextRenderer {
                 writing_mode,
                 options,
                 transform,
+                perspective,
                 GlyphPaint {
                     color: stroke.color,
                     dilation_px: stroke.width_px,
@@ -159,6 +166,7 @@ impl TextRenderer {
             writing_mode,
             options,
             transform,
+            perspective,
             GlyphPaint {
                 color: options.color,
                 dilation_px: 0.0,
@@ -320,6 +328,9 @@ impl TextRenderer {
         };
         let mut scene = PreparedScene::default();
         let mut resources = Vec::new();
+        let perspective = descriptor
+            .perspective
+            .map(|corners| Perspective::new(descriptor.width, descriptor.height, corners));
         if let Some(mut stroke) = descriptor.stroke {
             if descriptor.measured_stroke {
                 stroke.width_px = measured_stroke_width(stroke.width_px, layout.font_size);
@@ -333,6 +344,7 @@ impl TextRenderer {
             descriptor.writing_mode,
             &options,
             transform,
+            perspective.as_ref(),
         );
         let mut diagnostics = Vec::new();
         if layout.font_size + f32::EPSILON < descriptor.minimum_font_size {
@@ -360,22 +372,29 @@ impl TextRenderer {
         let stroke_padding = options
             .stroke
             .map_or(0.0, |stroke| stroke.width_px.max(0.0));
+        let layout_bounds = if descriptor.point_text {
+            rendered_bounds
+        } else {
+            bounds.into()
+        };
+        let local_bounds = RenderBounds {
+            x: rendered_bounds.x - stroke_padding,
+            y: rendered_bounds.y - stroke_padding,
+            width: rendered_bounds.width + stroke_padding * 2.0,
+            height: rendered_bounds.height + stroke_padding * 2.0,
+        };
+        let warped = |bounds| {
+            perspective
+                .as_ref()
+                .map_or(bounds, |perspective| perspective.map_bounds(bounds))
+        };
         Ok(RenderedTextNode {
             scene: Arc::new(scene),
             resources: resources.into(),
-            local_bounds: RenderBounds {
-                x: rendered_bounds.x - stroke_padding,
-                y: rendered_bounds.y - stroke_padding,
-                width: rendered_bounds.width + stroke_padding * 2.0,
-                height: rendered_bounds.height + stroke_padding * 2.0,
-            },
+            local_bounds: warped(local_bounds),
             metadata: RenderedTextMetadata {
-                rendered_bounds,
-                layout_bounds: if descriptor.point_text {
-                    rendered_bounds
-                } else {
-                    bounds.into()
-                },
+                rendered_bounds: warped(rendered_bounds),
+                layout_bounds: warped(layout_bounds),
                 post_script_fonts: fonts
                     .iter()
                     .map(|font| font.post_script_name().to_owned())
@@ -445,6 +464,7 @@ fn placement(rect: LayoutBox, width: f32, height: f32) -> (f32, f32) {
 }
 
 /// Color and outward dilation for one glyph draw pass (border or ordinary fill).
+#[derive(Clone, Copy)]
 struct GlyphPaint {
     color: [u8; 4],
     dilation_px: f32,
@@ -457,6 +477,7 @@ fn draw_layout(
     writing_mode: WritingMode,
     options: &TextRenderOptions,
     transform: Affine,
+    perspective: Option<&Perspective>,
     paint: GlyphPaint,
 ) {
     for line in &layout.lines {
@@ -488,6 +509,19 @@ fn draw_layout(
                 pen_y -= glyph.y_advance;
             }
 
+            if let Some(perspective) = perspective {
+                draw_warped_glyphs(
+                    scene,
+                    perspective,
+                    font,
+                    layout.font_size,
+                    &glyphs,
+                    transform,
+                    paint,
+                );
+                start = end;
+                continue;
+            }
             let font_id = ResourceId::for_font(font.bytes());
             if !resources.iter().any(|candidate| candidate.id() == font_id) {
                 resources.push(PreparedResource::font_shared(font.shared_bytes()));
@@ -515,6 +549,47 @@ fn draw_layout(
                 }));
             start = end;
         }
+    }
+}
+
+/// `glyphs` of one font as warped outlines. Synthetic bold grows the outline
+/// by the pixel a glyph run's `embolden` would.
+fn draw_warped_glyphs(
+    scene: &mut PreparedScene,
+    perspective: &Perspective,
+    font: &Font,
+    font_size: f32,
+    glyphs: &[PreparedGlyph],
+    transform: Affine,
+    paint: GlyphPaint,
+) {
+    let Ok(font_ref) = font.skrifa_ref() else {
+        return;
+    };
+    let outlines = font_ref.outline_glyphs();
+    let skew = font.synthetic_skew().map_or(Affine::IDENTITY, |angle| {
+        Affine::skew(-(angle.to_radians().tan() as f64), 0.0)
+    });
+    let dilation = f64::from(paint.dilation_px) + if font.synthetic_bold() { 1.0 } else { 0.0 };
+    for glyph in glyphs {
+        let Some(outline) = outlines.get(GlyphId::new(glyph.id)) else {
+            continue;
+        };
+        let mut path = BezPath::new();
+        if outline
+            .draw(
+                DrawSettings::unhinted(Size::new(font_size), font.location()),
+                &mut OutlinePath(&mut path),
+            )
+            .is_err()
+        {
+            continue;
+        }
+        let placement = transform
+            * Affine::translate((f64::from(glyph.x), f64::from(glyph.y)))
+            * skew
+            * Affine::scale_non_uniform(1.0, -1.0);
+        perspective.glyph(&mut scene.commands, &path, placement, dilation, paint.color);
     }
 }
 
@@ -558,6 +633,7 @@ mod tests {
             word_spacing: 0.0,
             text_inset: [0.0; 4],
             point_text: false,
+            perspective: None,
         };
         let bounds = LayoutBox {
             x: 0.0,
@@ -621,6 +697,7 @@ mod tests {
                 word_spacing: 0.0,
                 text_inset: [0.0; 4],
                 point_text: false,
+                perspective: None,
             };
             let rendered = TextRenderer::new()
                 .render_descriptor(&descriptor, &fonts)
@@ -651,6 +728,7 @@ mod tests {
             WritingMode::Horizontal,
             &TextRenderOptions::default(),
             Affine::IDENTITY,
+            None,
         );
         assert_eq!(resources.len(), 1);
         assert!(matches!(

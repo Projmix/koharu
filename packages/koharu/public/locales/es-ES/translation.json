@@ -89,7 +89,10 @@
     "regenerateCleanup": "Regenerar limpieza",
     "regenerateCleanupDescription": "Vuelve a limpiar esta página con el modelo de limpieza configurado y una semilla nueva",
     "cleanupDone": "Limpieza terminada",
-    "cleanupDoneDescription": "Conserva la limpieza de esta página tal como está: la limpieza automática, incluida la edición en la nube, la omite. Quitar y restaurar siguen funcionando."
+    "cleanupDoneDescription": "Conserva la limpieza de esta página tal como está: la limpieza automática, incluida la edición en la nube, la omite. Quitar y restaurar siguen funcionando.",
+    "perspective": {
+      "handle": "Arrastra para mover esta esquina; haz doble clic para volver a dejar el texto plano. Ctrl+arrastrar una esquina del cuadro aplica perspectiva."
+    }
   },
   "colorPicker": {
     "brushColor": "Color del pincel",

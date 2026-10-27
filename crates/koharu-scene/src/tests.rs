@@ -118,6 +118,7 @@ async fn duplicate_pages_clone_complete_subtrees_and_internal_relations_atomical
                     origin: Origin::User,
                     kind: TextLayoutKind::Paragraph,
                     angle_degrees: None,
+                    perspective: None,
                 },
             )?;
             edit.add_relation(
@@ -235,6 +236,7 @@ async fn duplicate_pages_reject_cross_page_text_dependencies_before_commit() {
                     origin: Origin::User,
                     kind: TextLayoutKind::Paragraph,
                     angle_degrees: None,
+                    perspective: None,
                 },
             )?;
             source_page = Some(source);
@@ -311,7 +313,7 @@ async fn built_in_component_schema_revisions_are_explicit() {
         ],
         [1; 18]
     );
-    assert_eq!(schema::<TextLayout>(), 2);
+    assert_eq!(schema::<TextLayout>(), 3);
 }
 
 #[tokio::test]
@@ -792,6 +794,7 @@ async fn text_analysis_content_and_presentation_have_distinct_ownership() {
                     origin: Origin::User,
                     kind: TextLayoutKind::Paragraph,
                     angle_degrees: None,
+                    perspective: None,
                 },
             )?;
             edit.relate::<RecognizedFrom>(content, region)?;
@@ -834,6 +837,7 @@ async fn text_group_owns_the_canonical_text_order() {
                     origin: Origin::User,
                     kind: TextLayoutKind::Paragraph,
                     angle_degrees: None,
+                    perspective: None,
                 },
             )?;
             let second_content = edit.add_text_content(page, At::End)?;
@@ -845,6 +849,7 @@ async fn text_group_owns_the_canonical_text_order() {
                     origin: Origin::User,
                     kind: TextLayoutKind::Paragraph,
                     angle_degrees: None,
+                    perspective: None,
                 },
             )?;
             ids = Some((page, first, second));
@@ -900,6 +905,7 @@ async fn typed_relations_enforce_endpoints_and_functional_cardinality() {
                 origin: Origin::User,
                 kind: TextLayoutKind::Paragraph,
                 angle_degrees: None,
+                perspective: None,
             },
         )?;
         edit.relate::<Presents>(layer, region)?;
@@ -919,6 +925,7 @@ async fn typed_relations_enforce_endpoints_and_functional_cardinality() {
                 origin: Origin::User,
                 kind: TextLayoutKind::Paragraph,
                 angle_degrees: None,
+                perspective: None,
             },
         )?;
         edit.relate::<Presents>(layer, second)?;
@@ -943,6 +950,7 @@ async fn typed_relations_enforce_endpoints_and_functional_cardinality() {
                 origin: Origin::User,
                 kind: TextLayoutKind::Paragraph,
                 angle_degrees: None,
+                perspective: None,
             },
         )?;
         edit.relate::<FitsTo>(layer, bubble)?;
@@ -973,6 +981,7 @@ async fn typed_relations_enforce_endpoints_and_functional_cardinality() {
                 origin: Origin::User,
                 kind: TextLayoutKind::Paragraph,
                 angle_degrees: None,
+                perspective: None,
             },
         )?;
         edit.relate::<FitsTo>(layer, text_region)?;
@@ -998,6 +1007,7 @@ async fn typed_relations_enforce_endpoints_and_functional_cardinality() {
                 origin: Origin::User,
                 kind: TextLayoutKind::Paragraph,
                 angle_degrees: None,
+                perspective: None,
             },
         )?;
         edit.relate::<FlowsIn>(layer, text_region)?;
@@ -1023,6 +1033,7 @@ async fn component_changes_cannot_invalidate_incident_typed_relations() {
                     origin: Origin::User,
                     kind: TextLayoutKind::Paragraph,
                     angle_degrees: None,
+                    perspective: None,
                 },
             )?);
             Ok(())
@@ -1224,6 +1235,7 @@ async fn independent_pipeline_components_rebase() {
                     origin: Origin::User,
                     kind: TextLayoutKind::Paragraph,
                     angle_degrees: None,
+                    perspective: None,
                 },
             )?;
             entities = Some((content, layer));

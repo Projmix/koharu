@@ -379,6 +379,8 @@ pub struct TextMetadata {
     pub alignment: TextAlign,
     pub writing_mode: WritingMode,
     pub angle_degrees: f32,
+    /// The text is drawn in perspective; an affine text box cannot hold it.
+    pub perspective: bool,
     pub lines: Arc<[RenderedLine]>,
     /// The largest size auto-fit could choose for this text, when it fits
     /// automatically.

@@ -216,7 +216,20 @@ Known gaps after the rebuild:
   `delete_elements` on a block that is not lettering also removes its text
   region, so cleaning leaves that art alone. A change can take
   `orient: along_source`: one horizontal line in the source lettering's box,
-  turned to its slant, a Japanese column turned 90 degrees. Layers carry a
+  turned to its slant, a Japanese column turned 90 degrees. A change can
+  instead take `corners`, the page corners of a surface the lettering is
+  printed on (a newspaper column, a screen, a board): the layer gets a frame
+  the size of that surface, turned like it, and the text laid out flat in
+  it is drawn in perspective onto the corners; page_layers reports them, a
+  plain region makes the box flat again. The scene keeps the corners on the
+  text layout in units of the frame, so moving, resizing or turning a layer
+  carries them; the renderer maps every glyph outline (and its outline
+  stroke, one band per contour) through the projective map as filled paths,
+  and PSD export keeps such a layer as pixels. In the app, Ctrl+drag on a
+  corner handle moves that corner alone (Photoshop's Distort), round
+  handles move the corners afterwards and a double-click on one makes the
+  text flat again. The lettering rules translate text printed on an object
+  exactly and in full, in the original's structure. Layers carry a
   reading order computed from geometry (panels right to left in rows from
   the top, layers inside a panel the same way), and chapter_text lists them
   in it. page_layers and check_chapter (`cleaned`, asked for by kind since it

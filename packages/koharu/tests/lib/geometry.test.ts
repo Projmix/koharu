@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  convexCorners,
+  frameUnitPoint,
   framePoints,
   geometryFrame,
   hitTestEditorSelection,
@@ -122,6 +124,7 @@ function textLayer(
     parent: 'page',
     geometry: null,
     angle_degrees: null,
+    perspective: null,
     visibility: { visible: true, opacity: 1 },
     content: {
       id: `${id}-content`,
@@ -149,3 +152,25 @@ function region(id: string, points: number[][]): AnalysisRegion {
     label: null,
   }
 }
+
+describe('perspective corners', () => {
+  it('reads a page point in units of a turned frame', () => {
+    const frame: Frame = { x: 100, y: 50, width: 200, height: 100, angle_degrees: 90 }
+    // Turned a quarter, the frame's top-left corner sits at its centre plus (50, -100).
+    const [topLeft] = framePoints(frame)
+    const unit = frameUnitPoint(frame, topLeft)
+    expect(unit.x).toBeCloseTo(0)
+    expect(unit.y).toBeCloseTo(0)
+  })
+
+  it('refuses corners that fold the text over itself', () => {
+    const square = [
+      { x: 0, y: 0 },
+      { x: 1, y: 0 },
+      { x: 1, y: 1 },
+      { x: 0, y: 1 },
+    ]
+    expect(convexCorners(square)).toBe(true)
+    expect(convexCorners([square[0], square[2], square[1], square[3]])).toBe(false)
+  })
+})

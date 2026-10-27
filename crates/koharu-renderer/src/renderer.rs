@@ -18,11 +18,7 @@ use koharu_scene::{
 };
 use parking_lot::Mutex;
 use rayon::prelude::*;
-use skrifa::{
-    GlyphId, MetadataProvider,
-    instance::Size,
-    outline::{DrawSettings, OutlinePen},
-};
+use skrifa::{GlyphId, MetadataProvider, instance::Size, outline::DrawSettings};
 use tokio_rayon::AsyncThreadPool as _;
 use vello::{
     Scene,
@@ -488,6 +484,7 @@ enum DraftMetadata {
         alignment: TextAlign,
         writing_mode: WritingMode,
         angle_degrees: f32,
+        perspective: bool,
     },
 }
 
@@ -793,12 +790,20 @@ impl Traversal<'_> {
         } else {
             self.fit(entity, dependencies)?
         };
+        let perspective = layout
+            .perspective
+            .as_deref()
+            .and_then(|corners| match corners {
+                [a, b, c, d] => Some([a, b, c, d].map(|point| (point.x as f32, point.y as f32))),
+                _ => None,
+            });
         let (geometry, frame, balloon_contour) = if let Some(geometry) = authored {
             let Some(frame) = geometry_frame(&geometry, layout.angle_degrees) else {
                 return Ok(None);
             };
             let balloon = placement
                 .as_ref()
+                .filter(|_| perspective.is_none())
                 .and_then(|placement| placement.balloon_contour.as_ref())
                 .map(|_| contour(&geometry, frame));
             (geometry, frame, balloon)
@@ -903,6 +908,7 @@ impl Traversal<'_> {
             word_spacing: 0.0,
             text_inset: [4.0; 4],
             point_text: !is_bubble && layout.kind == TextLayoutKind::Point,
+            perspective,
         };
         Ok(Some(LayerDraft {
             entity,
@@ -917,6 +923,7 @@ impl Traversal<'_> {
                 alignment,
                 writing_mode,
                 angle_degrees: frame.angle_degrees,
+                perspective: perspective.is_some(),
             },
             dependencies: dependencies.iter().cloned().collect(),
         }))
@@ -1373,6 +1380,7 @@ fn assemble_frame(
                 alignment,
                 writing_mode,
                 angle_degrees,
+                perspective,
             } => {
                 let metadata = node
                     .text
@@ -1389,6 +1397,7 @@ fn assemble_frame(
                     alignment,
                     writing_mode,
                     angle_degrees,
+                    perspective,
                     lines: metadata.lines.clone(),
                     auto_fit_ceiling: metadata.auto_fit_ceiling,
                     fits_up_to: metadata.fits_up_to,
@@ -1976,7 +1985,7 @@ fn draw_font_preview(scene: &mut Scene, layout: &crate::LayoutRun<'_>) -> anyhow
                 let mut path = BezPath::new();
                 outline.draw(
                     DrawSettings::unhinted(Size::new(layout.font_size), glyph.font.location()),
-                    &mut PreviewOutline(&mut path),
+                    &mut crate::perspective::OutlinePath(&mut path),
                 )?;
                 let transform = Affine::translate((
                     f64::from(baseline_x + pen_x + glyph.x_offset),
@@ -1989,37 +1998,6 @@ fn draw_font_preview(scene: &mut Scene, layout: &crate::LayoutRun<'_>) -> anyhow
         }
     }
     Ok(())
-}
-
-struct PreviewOutline<'a>(&'a mut BezPath);
-
-impl OutlinePen for PreviewOutline<'_> {
-    fn move_to(&mut self, x: f32, y: f32) {
-        self.0.move_to((f64::from(x), f64::from(y)));
-    }
-
-    fn line_to(&mut self, x: f32, y: f32) {
-        self.0.line_to((f64::from(x), f64::from(y)));
-    }
-
-    fn quad_to(&mut self, cx0: f32, cy0: f32, x: f32, y: f32) {
-        self.0.quad_to(
-            (f64::from(cx0), f64::from(cy0)),
-            (f64::from(x), f64::from(y)),
-        );
-    }
-
-    fn curve_to(&mut self, cx0: f32, cy0: f32, cx1: f32, cy1: f32, x: f32, y: f32) {
-        self.0.curve_to(
-            (f64::from(cx0), f64::from(cy0)),
-            (f64::from(cx1), f64::from(cy1)),
-            (f64::from(x), f64::from(y)),
-        );
-    }
-
-    fn close(&mut self) {
-        self.0.close_path();
-    }
 }
 
 #[cfg(test)]
@@ -2212,6 +2190,7 @@ mod tests {
                         origin: Origin::User,
                         kind: TextLayoutKind::Paragraph,
                         angle_degrees: Some(0.0),
+                        perspective: None,
                     },
                 )?;
                 edit.set(text, &Geometry::rectangle(10.0, 10.0, 80.0, 40.0))?;
@@ -2280,6 +2259,7 @@ mod tests {
                         origin: Origin::User,
                         kind: TextLayoutKind::Paragraph,
                         angle_degrees: Some(0.0),
+                        perspective: None,
                     },
                 )?;
                 edit.set(text, &Geometry::rectangle(10.0, 10.0, 80.0, 40.0))?;
@@ -2346,6 +2326,7 @@ mod tests {
                         origin: Origin::User,
                         kind: TextLayoutKind::Paragraph,
                         angle_degrees: Some(0.0),
+                        perspective: None,
                     },
                 )?;
                 edit.set(text, &Geometry::rectangle(10.0, 10.0, 80.0, 40.0))?;
@@ -2434,6 +2415,7 @@ mod tests {
                         origin: Origin::User,
                         kind: TextLayoutKind::Paragraph,
                         angle_degrees: Some(0.0),
+                        perspective: None,
                     },
                 )?;
                 edit.set(first, &Geometry::rectangle(10.0, 10.0, 80.0, 40.0))?;
@@ -2460,6 +2442,7 @@ mod tests {
                         origin: Origin::User,
                         kind: TextLayoutKind::Paragraph,
                         angle_degrees: Some(0.0),
+                        perspective: None,
                     },
                 )?;
                 edit.set(second, &Geometry::rectangle(100.0, 10.0, 80.0, 40.0))?;
@@ -2564,6 +2547,7 @@ mod tests {
                             origin: Origin::User,
                             kind: TextLayoutKind::Paragraph,
                             angle_degrees: None,
+                            perspective: None,
                         },
                     )?;
                     edit.relate::<FitsTo>(layer, region)?;
@@ -2646,6 +2630,7 @@ mod tests {
                             origin: Origin::User,
                             kind: TextLayoutKind::Paragraph,
                             angle_degrees: None,
+                            perspective: None,
                         },
                     )?;
                     edit.relate::<RecognizedFrom>(content, region)?;
@@ -2811,6 +2796,79 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn perspective_text_is_drawn_as_outlines_inside_its_quadrilateral() {
+        let mut session = Session::memory().await.unwrap();
+        let mut ids = None;
+        let create = session
+            .snapshot()
+            .patch(|edit| {
+                let page = edit.add_page(PageDraft::new("page", 200.0, 120.0), At::End)?;
+                let content = edit.add_text_content(page, At::End)?;
+                edit.set(
+                    content,
+                    &SourceText {
+                        text: Authored::user("ニュース".to_owned()),
+                        language: None,
+                    },
+                )?;
+                edit.set(
+                    content,
+                    &Translation {
+                        text: Authored::user("НОВОСТИ".to_owned()),
+                        language: None,
+                    },
+                )?;
+                // A board seen from below: its top edge is half as wide.
+                let corners = [(0.25, 0.0), (0.75, 0.0), (1.0, 1.0), (0.0, 1.0)]
+                    .map(|(x, y)| koharu_scene::Point { x, y })
+                    .to_vec();
+                let layer = edit.add_text_layer(
+                    page,
+                    At::End,
+                    content,
+                    &SceneTextLayout {
+                        origin: Origin::User,
+                        kind: TextLayoutKind::Paragraph,
+                        angle_degrees: Some(0.0),
+                        perspective: Some(corners),
+                    },
+                )?;
+                edit.set(layer, &Geometry::rectangle(20.0, 20.0, 160.0, 80.0))?;
+                ids = Some((page, layer));
+                Ok(())
+            })
+            .unwrap();
+        let snapshot = session.commit(create).await.unwrap().snapshot;
+        let (page, layer) = ids.unwrap();
+        let font = crate::fonts::FontSystem::new().first_font().unwrap();
+        let renderer = Renderer::with_typesetting(TypesettingConfig {
+            font_families: vec![font.family_name().to_owned()],
+            kind_fonts: KindFonts::default(),
+        });
+        let frame = renderer.render(&snapshot, page).await.unwrap();
+        let drawn = frame.layer(layer).unwrap();
+        let LayerKind::Text(text) = drawn.kind() else {
+            panic!("a text layer");
+        };
+        assert!(text.perspective);
+        let commands = &drawn.0.node.scene.commands;
+        assert!(!commands.is_empty());
+        assert!(commands.iter().all(|command| matches!(
+            command,
+            koharu_rasterizer::PreparedSceneCommand::FillPath(_)
+        )));
+        let bounds = drawn.bounds();
+        assert!(
+            bounds.x >= 20.0 - 1.0 && bounds.x + bounds.width <= 180.0 + 1.0,
+            "{bounds:?}"
+        );
+        assert!(
+            bounds.y >= 20.0 - 1.0 && bounds.y + bounds.height <= 100.0 + 1.0,
+            "{bounds:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn text_that_matches_the_image_under_it_is_low_contrast() {
         let mut session = Session::memory().await.unwrap();
         let source = AssetRole::new("source").unwrap();
@@ -2858,6 +2916,7 @@ mod tests {
                             origin: Origin::User,
                             kind: TextLayoutKind::Paragraph,
                             angle_degrees: Some(0.0),
+                            perspective: None,
                         },
                     )?;
                     edit.set(layer, &Geometry::rectangle(x, 10.0, 80.0, 40.0))?;

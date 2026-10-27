@@ -285,6 +285,7 @@ describe('canvas interaction adapter', () => {
       parent: 'text-group',
       geometry: layer.geometry,
       angle_degrees: null,
+      perspective: null,
       visibility: { visible: true, opacity: 1 },
       content: {
         id: `${id}-content`,
@@ -821,6 +822,7 @@ describe('canvas interaction adapter', () => {
       parent: 'page',
       geometry: null,
       angle_degrees: null,
+      perspective: null,
       visibility: { visible: true, opacity: 1 },
       content: {
         id: `${id}-content`,
@@ -931,6 +933,7 @@ describe('canvas interaction adapter', () => {
           parent: 'page',
           geometry: null,
           angle_degrees: null,
+          perspective: null,
           visibility: { visible: true, opacity: 1 },
           content: {
             id: 'ocr-content',

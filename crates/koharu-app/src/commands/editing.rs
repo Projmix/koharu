@@ -29,6 +29,14 @@ pub struct GeometryUpdate {
     pub points: Option<Vec<Point>>,
 }
 
+/// A text layer's perspective corners, in units of its frame; none draws it
+/// flat again.
+#[derive(Clone, Debug, Deserialize, Type)]
+pub struct PerspectiveUpdate {
+    pub layer: EntityId,
+    pub corners: Option<Vec<Point>>,
+}
+
 #[derive(Clone, Debug, Deserialize, Type)]
 pub struct TypographyUpdate {
     pub layer: EntityId,
@@ -387,6 +395,26 @@ pub(crate) async fn set_geometry(
         let mut project = project.project.lock().await;
         let project = project.as_mut().context("no project is open")?;
         let commit = project.set_geometry(updates).await?;
+        project.record_commit(&commit);
+        (commit, project.active_page())
+    };
+    let canvas = synchronize_canvas(&desktop, &commit, page).await?;
+    canvas_channel.channel.publish(canvas);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn set_perspective(
+    updates: Vec<PerspectiveUpdate>,
+    desktop: State<'_, Desktop>,
+    project: State<'_, CurrentProject>,
+    canvas_channel: State<'_, CanvasChannel>,
+) -> Result<(), Error> {
+    let (commit, page) = {
+        let mut project = project.project.lock().await;
+        let project = project.as_mut().context("no project is open")?;
+        let commit = project.set_perspective(updates).await?;
         project.record_commit(&commit);
         (commit, project.active_page())
     };

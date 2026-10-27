@@ -142,6 +142,14 @@ pub(super) struct TrialChange {
     /// and let the line carry the length; never stretch letters along it.
     #[serde(default)]
     orient: Option<TrialOrient>,
+    /// Letter on a surface seen at an angle (a newspaper, a phone or TV
+    /// screen, a board, a sign): its four corners in page pixels, top-left,
+    /// top-right, bottom-right, bottom-left as the lettering reads, e.g. the
+    /// column or screen the original text is printed in. The text is laid out
+    /// flat in a box the size of that surface and drawn in perspective onto
+    /// it. Instead of region and angle; a region alone sets a flat box again.
+    #[serde(default)]
+    corners: Option<[[f64; 2]; 4]>,
     /// Typography fields to change; the others keep their current values.
     #[serde(default)]
     typography: Option<TrialTypography>,
@@ -1886,10 +1894,34 @@ pub(super) fn steps(
             steps.push(Project::source_step(snapshot, layer, source)?);
         }
         if change.flow == Some(TrialFlow::Balloon) {
-            if change.region.is_some() {
-                bail!("give {layer} either a region or flow balloon, not both");
+            if change.region.is_some() || change.corners.is_some() {
+                bail!(
+                    "give {layer} either a region, corners or flow balloon, not one with another"
+                );
             }
             steps.push(balloon_flow_step(snapshot, layer)?);
+        }
+        if let Some(corners) = change.corners {
+            if change.region.is_some() || change.angle.is_some() || change.orient.is_some() {
+                bail!("give {layer} either corners or a region, angle and orient, not both");
+            }
+            let (frame, unit) = frame_from_corners(corners)
+                .with_context(|| format!("{layer}'s corners make no convex quadrilateral"))?;
+            let geometry = Project::geometry_from_frame(frame)?;
+            let mut layout = snapshot
+                .component::<SceneTextLayout>(layer)?
+                .context("only text layers take corners")?;
+            layout.origin = Origin::User;
+            layout.angle_degrees = Some(frame.angle_degrees);
+            layout.perspective = Some(unit);
+            if !koharu_scene::valid_perspective(layout.perspective.as_deref().unwrap_or_default()) {
+                bail!("{layer}'s corners make no convex quadrilateral");
+            }
+            steps.push(Box::new(move |edit| {
+                edit.promote_entity_to_user(layer)?;
+                edit.set(layer, &geometry)?;
+                edit.set(layer, &layout)
+            }));
         }
         let (region, angle) = match change.orient {
             Some(TrialOrient::AlongSource) => {
@@ -1916,6 +1948,7 @@ pub(super) fn steps(
                 .context("only text layers can turn")?;
             layout.origin = Origin::User;
             layout.angle_degrees = Some(angle);
+            layout.perspective = None;
             steps.push(Box::new(move |edit| {
                 edit.promote_entity_to_user(layer)?;
                 edit.set(layer, &geometry)?;
@@ -2117,6 +2150,12 @@ fn layer_value(
         "translated_text": content.translation()?.map(|translation| translation.text.value),
         "box": frame_box,
         "angle": angle,
+        "corners": text
+            .layout()?
+            .perspective
+            .as_deref()
+            .zip(frame_box)
+            .map(|(unit, frame_box)| corners_on_page(frame_box, angle.unwrap_or(0.0), unit)),
         "flow": if snapshot.component::<Geometry>(layer)?.is_none() && balloon.is_some() {
             "balloon"
         } else {
@@ -2156,6 +2195,77 @@ fn layer_value(
 const SMALL_TEXT_SHARE: f64 = 0.012;
 
 /// The box `geometry` is once turned back by `angle` degrees about its centre.
+/// The frame a surface's page `corners` (top-left, top-right, bottom-right,
+/// bottom-left) are seen in, and the corners in units of that frame: the frame
+/// is centred on the corners, turned like the surface's top and bottom edges
+/// on average, and as large as its edges on average, so text laid out in it
+/// keeps the surface's own proportions.
+fn frame_from_corners(corners: [[f64; 2]; 4]) -> Option<(TextFrame, Vec<koharu_scene::Point>)> {
+    let [top_left, top_right, bottom_right, bottom_left] = corners;
+    let edge = |from: [f64; 2], to: [f64; 2]| [to[0] - from[0], to[1] - from[1]];
+    let length = |[x, y]: [f64; 2]| x.hypot(y);
+    let (top, bottom) = (edge(top_left, top_right), edge(bottom_left, bottom_right));
+    let (left, right) = (edge(top_left, bottom_left), edge(top_right, bottom_right));
+    let (top_length, bottom_length) = (length(top), length(bottom));
+    if !(top_length > 0.0 && bottom_length > 0.0) {
+        return None;
+    }
+    let direction = [
+        top[0] / top_length + bottom[0] / bottom_length,
+        top[1] / top_length + bottom[1] / bottom_length,
+    ];
+    let angle = direction[1].atan2(direction[0]);
+    let width = (top_length + bottom_length) * 0.5;
+    let height = (length(left) + length(right)) * 0.5;
+    if !(width > 1.0 && height > 1.0) {
+        return None;
+    }
+    let centre = [
+        corners.iter().map(|point| point[0]).sum::<f64>() * 0.25,
+        corners.iter().map(|point| point[1]).sum::<f64>() * 0.25,
+    ];
+    let (sin, cos) = angle.sin_cos();
+    let unit = corners
+        .iter()
+        .map(|point| {
+            let (x, y) = (point[0] - centre[0], point[1] - centre[1]);
+            koharu_scene::Point {
+                x: (x * cos + y * sin) / width + 0.5,
+                y: (-x * sin + y * cos) / height + 0.5,
+            }
+        })
+        .collect();
+    let frame = TextFrame {
+        x: (centre[0] - width * 0.5) as f32,
+        y: (centre[1] - height * 0.5) as f32,
+        width: width as f32,
+        height: height as f32,
+        angle_degrees: angle.to_degrees() as f32,
+    };
+    Some((frame, unit))
+}
+
+/// The page corners of a layer drawn in perspective: `unit` corners placed
+/// by its unturned `frame_box` turned by `angle` about its centre.
+fn corners_on_page(frame_box: [f64; 4], angle: f32, unit: &[koharu_scene::Point]) -> Vec<[f64; 2]> {
+    let [x, y, width, height] = frame_box;
+    let centre = [x + width * 0.5, y + height * 0.5];
+    let (sin, cos) = f64::from(angle).to_radians().sin_cos();
+    unit.iter()
+        .map(|point| {
+            let (dx, dy) = ((point.x - 0.5) * width, (point.y - 0.5) * height);
+            [
+                round_pixel(centre[0] + dx * cos - dy * sin),
+                round_pixel(centre[1] + dx * sin + dy * cos),
+            ]
+        })
+        .collect()
+}
+
+fn round_pixel(value: f64) -> f64 {
+    (value * 10.0).round() / 10.0
+}
+
 fn unturned(geometry: &Geometry, angle: f32) -> Option<[f64; 4]> {
     let (sin, cos) = f64::from(angle).to_radians().sin_cos();
     let points = geometry
@@ -3127,6 +3237,7 @@ mod tests {
                                 origin: Origin::User,
                                 kind: koharu_scene::TextLayoutKind::Paragraph,
                                 angle_degrees: None,
+                                perspective: None,
                             },
                         )
                         .unwrap(),
@@ -3143,6 +3254,37 @@ mod tests {
         );
         assert!(address(&snapshot, "3#1").is_err());
         assert!(address(&snapshot, "2#9").is_err());
+    }
+
+    #[test]
+    fn surface_corners_come_back_from_the_frame_they_set() {
+        // A newspaper column tilted and seen from its lower left.
+        let corners = [
+            [410.0, 220.0],
+            [612.0, 251.0],
+            [598.0, 530.0],
+            [380.0, 488.0],
+        ];
+        let (frame, unit) = frame_from_corners(corners).unwrap();
+        assert!(koharu_scene::valid_perspective(&unit));
+        let frame_box = [
+            f64::from(frame.x),
+            f64::from(frame.y),
+            f64::from(frame.width),
+            f64::from(frame.height),
+        ];
+        for (back, corner) in corners_on_page(frame_box, frame.angle_degrees, &unit)
+            .into_iter()
+            .zip(corners)
+        {
+            assert!((back[0] - corner[0]).abs() < 0.2 && (back[1] - corner[1]).abs() < 0.2);
+        }
+        // Corners out of order cross and are refused.
+        let crossed = [corners[0], corners[2], corners[1], corners[3]];
+        assert!(
+            frame_from_corners(crossed)
+                .is_none_or(|(_, unit)| !koharu_scene::valid_perspective(&unit))
+        );
     }
 
     #[test]
@@ -3200,6 +3342,7 @@ mod tests {
                     origin: Origin::User,
                     kind: koharu_scene::TextLayoutKind::Paragraph,
                     angle_degrees: None,
+                    perspective: None,
                 },
             )
             .unwrap();
@@ -3329,6 +3472,7 @@ mod tests {
                         origin: Origin::User,
                         kind: koharu_scene::TextLayoutKind::Paragraph,
                         angle_degrees: None,
+                        perspective: None,
                     },
                 )
                 .unwrap();
@@ -3397,6 +3541,7 @@ mod tests {
                     origin: Origin::User,
                     kind: koharu_scene::TextLayoutKind::Paragraph,
                     angle_degrees: None,
+                    perspective: None,
                 },
             )
             .unwrap();
