@@ -243,11 +243,13 @@ pub(super) struct MergeTextLayers {
 pub(super) struct CheckChapterArguments {
     /// Kinds to list: fit, translation, ocr, cleaning, hidden, unboxed,
     /// style (shown translated text whose font and colour were never chosen),
-    /// and two slow kinds listed only when asked for: cleaned (lettering the
-    /// cleaning removed with no translated layer over it) and balloons (shown
-    /// translated text in a balloon that crosses its inside, sits off its
-    /// centre, is small, or is set well below the page's usual balloon size);
-    /// every other kind when absent.
+    /// and three slow kinds listed only when asked for: cleaned (lettering
+    /// the cleaning removed with no translated layer over it), balloons
+    /// (shown translated text in a balloon that crosses its inside, sits off
+    /// its centre, is small, or is set well below the size of similar
+    /// balloons) and lettering (shown translated text whose fill tone or
+    /// outline differs from the source lettering's); every other kind when
+    /// absent.
     #[serde(default)]
     pub(super) kinds: Option<Vec<String>>,
     /// JSON instead of one line per issue.
@@ -381,10 +383,27 @@ pub(super) async fn page_layers(
                                 .all(|light| *light != (tone == "light")),
                             None => false,
                         };
+                    // The source's outline is the style to repeat: outlined
+                    // lettering wants an outline, plain lettering none.
+                    let outlined = typography["stroke_width"]
+                        .as_f64()
+                        .is_some_and(|width| width >= 1.0);
+                    // Text on art takes an outline for readability even
+                    // where the source has none; in a balloon it follows
+                    // the source either way.
+                    let check_outline = value["visible"] == json!(true)
+                        && lettering.tone.is_some()
+                        && if lettering.outline.is_some() {
+                            !outlined
+                        } else {
+                            outlined && value["balloon"].is_object()
+                        };
                     value["lettering"] = json!({
                         "left": lettering.left,
                         "tone": lettering.tone,
+                        "outline": lettering.outline,
                         "check_color": mismatch.then_some(true),
+                        "check_outline": check_outline.then_some(true),
                     });
                 }
             }
@@ -455,12 +474,18 @@ pub(super) async fn page_layers(
 
 struct Lettering {
     left: &'static str,
+    /// The tone of the lettering's fill.
     tone: Option<&'static str>,
+    /// The tone of its outline, when it has one.
+    outline: Option<&'static str>,
 }
 
 /// What the cleaning did to the source lettering in a text region: how many
 /// of its strong edges the clean page still shows (enhancement moves tones,
 /// not edges), and the tone of the pixels it removed, the lettering's own.
+/// Outlined lettering (dark text ringed in white over screentone) leaves
+/// both tones removed: the one lying deeper inside the strokes, farther
+/// from the pixels the cleaning kept, is the fill, the other the outline.
 fn lettering(source: &RgbaImage, clean: &RgbaImage, [x, y, width, height]: [f64; 4]) -> Lettering {
     let luma = |image: &RgbaImage, px: u32, py: u32| {
         let pixel = image.get_pixel(px, py);
@@ -477,6 +502,8 @@ fn lettering(source: &RgbaImage, clean: &RgbaImage, [x, y, width, height]: [f64;
         dx.max(dy) > 60
     };
     let (mut before, mut after) = (0u64, 0u64);
+    let (columns, rows) = ((right - left) as usize, (bottom - top) as usize);
+    let mut kept = vec![true; columns * rows];
     let mut removed = Vec::new();
     for py in top..bottom {
         for px in left..right {
@@ -485,9 +512,37 @@ fn lettering(source: &RgbaImage, clean: &RgbaImage, [x, y, width, height]: [f64;
             let (from, to) = (luma(source, px, py), luma(clean, px, py));
             if from.abs_diff(to) > 80 {
                 removed.push(from);
+                kept[(py - top) as usize * columns + (px - left) as usize] = false;
             }
         }
     }
+    let depth = chamfer(&kept, columns, rows);
+    let (mut dark, mut light) = ((0u64, 0u64), (0u64, 0u64));
+    for py in top..bottom {
+        for px in left..right {
+            let at = (py - top) as usize * columns + (px - left) as usize;
+            if kept[at] {
+                continue;
+            }
+            let class = if luma(source, px, py) < 128 {
+                &mut dark
+            } else {
+                &mut light
+            };
+            class.0 += 1;
+            class.1 += u64::from(depth[at]);
+        }
+    }
+    // Both tones in force, each at least a sixth of what the cleaning took.
+    let total = dark.0 + light.0;
+    let outlined = total >= 32 && dark.0 * 6 >= total && light.0 * 6 >= total;
+    let (fill, outline) = if !outlined {
+        (None, None)
+    } else if dark.1 * light.0 >= light.1 * dark.0 {
+        (Some("dark"), Some("light"))
+    } else {
+        (Some("light"), Some("dark"))
+    };
     let left = if before == 0 {
         "none"
     } else {
@@ -500,15 +555,21 @@ fn lettering(source: &RgbaImage, clean: &RgbaImage, [x, y, width, height]: [f64;
             "partly"
         }
     };
-    let tone = (removed.len() >= 16).then(|| {
-        let middle = removed.len() / 2;
-        if *removed.select_nth_unstable(middle).1 < 128 {
-            "dark"
-        } else {
-            "light"
-        }
+    let tone = fill.or_else(|| {
+        (removed.len() >= 16).then(|| {
+            let middle = removed.len() / 2;
+            if *removed.select_nth_unstable(middle).1 < 128 {
+                "dark"
+            } else {
+                "light"
+            }
+        })
     });
-    Lettering { left, tone }
+    Lettering {
+        left,
+        tone,
+        outline,
+    }
 }
 
 fn read_box(value: &Value) -> Option<[f64; 4]> {
@@ -765,15 +826,18 @@ pub(super) struct AgentCheck {
     /// pages the asked kinds need: every page for balloons, else those with
     /// a fit issue.
     pub(super) layers: HashMap<EntityId, Value>,
+    /// Shown layers whose colour or outline differs from the source
+    /// lettering's, as `page_layers` reports them, by page.
+    pub(super) lettering: Option<Vec<(EntityId, Vec<Value>)>>,
 }
 
 impl CheckChapterArguments {
-    /// Every kind is listed by default except `cleaned` and `balloons`,
-    /// which render every page and are asked for by name.
+    /// Every kind is listed by default except `cleaned`, `balloons` and
+    /// `lettering`, which render every page and are asked for by name.
     pub(super) fn wants(&self, kind: &str) -> bool {
         match &self.kinds {
             Some(kinds) => kinds.iter().any(|wanted| wanted == kind),
-            None => !matches!(kind, "cleaned" | "balloons"),
+            None => !matches!(kind, "cleaned" | "balloons" | "lettering"),
         }
     }
 
@@ -954,6 +1018,34 @@ fn page_balloon_issues(layers: &[&Value]) -> Vec<Vec<String>> {
         .collect()
 }
 
+/// `pages`' shown layers whose colour or outline differs from the source
+/// lettering's, measured as `page_layers` does.
+pub(super) async fn chapter_lettering(
+    desktop: &Desktop,
+    snapshot: &Snapshot,
+    pages: &[EntityId],
+) -> Result<Vec<(EntityId, Vec<Value>)>> {
+    use futures::{StreamExt as _, TryStreamExt as _};
+    futures::stream::iter(pages.iter().copied())
+        .map(|page| async move {
+            let value = page_layers(desktop, snapshot, page).await?;
+            let layers = value["layers"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|layer| {
+                    layer["lettering"]["check_color"] == json!(true)
+                        || layer["lettering"]["check_outline"] == json!(true)
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            anyhow::Ok((page, layers))
+        })
+        .buffered(CONCURRENT_PAGES)
+        .try_collect()
+        .await
+}
+
 /// `pages`' places cleaned without a translated layer over them.
 pub(super) async fn chapter_cleaned_without_text(
     desktop: &Desktop,
@@ -984,6 +1076,7 @@ pub(super) fn chapter_issues(
         check,
         cleaned_without_text: cleaned_places,
         layers: measured,
+        lettering,
     } = check;
     let wanted = |kind: &str| arguments.wants(kind);
     let pages = snapshot.pages().map(|page| page.id()).collect::<Vec<_>>();
@@ -1183,6 +1276,37 @@ pub(super) fn chapter_issues(
             }
         }
     }
+    let mut styled = Vec::new();
+    for (page, layers) in lettering.into_iter().flatten() {
+        for value in layers {
+            let address = format!("{}#{}", page_number(page), value["number"]);
+            let source = &value["lettering"];
+            let mut found = Vec::new();
+            if source["check_color"] == json!(true) {
+                found.push(format!(
+                    "color source_fill={}",
+                    source["tone"].as_str().unwrap_or("?")
+                ));
+            }
+            if source["check_outline"] == json!(true) {
+                found.push(match source["outline"].as_str() {
+                    Some(outline) => format!("outline_missing source_outline={outline}"),
+                    None => "outline_extra source_has_none".to_owned(),
+                });
+            }
+            *counts.entry("lettering").or_default() += 1;
+            if arguments.full {
+                styled.push(json!({ "address": address, "lettering": source }));
+            } else {
+                let text = value["translated_text"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .replace('\n', " / ");
+                let text = text.chars().take(48).collect::<String>();
+                lines.push(format!("{address} {} | {text}", found.join(" ")));
+            }
+        }
+    }
     let mut cleaned = Vec::new();
     if let Some(places) = cleaned_places {
         for (page, boxes) in places {
@@ -1212,6 +1336,7 @@ pub(super) fn chapter_issues(
             "automatic_style": automatic_style,
             "cleaned_without_text": cleaned,
             "balloons": balloons,
+            "lettering": styled,
             "counts": counts,
         }));
     }
@@ -2613,6 +2738,9 @@ fn measure_source_lines(
         },
         "text_angle": round_pixel(text),
         "delta": round_pixel(delta),
+        // Below about 1.5 the print is faint or partly covered (a finger on
+        // a phone, art across a sign): check the slant by eye.
+        "strength": (lines.strength * 100.0).round() / 100.0,
     });
     Ok(())
 }
@@ -3557,6 +3685,35 @@ mod tests {
     use koharu_scene::Point as ScenePoint;
 
     use super::*;
+
+    #[test]
+    fn outlined_lettering_names_its_fill_and_outline() {
+        // Dark strokes ringed in white over a mid-grey screentone, and the
+        // same strokes plain on white paper; the cleaning leaves the ground.
+        let page = |ground: u8, outline: bool| {
+            RgbaImage::from_fn(120, 60, |x, y| {
+                let stroke = (20..100).contains(&x) && (y % 20) >= 6 && (y % 20) < 14;
+                let ring =
+                    outline && (16..104).contains(&x) && (y % 20) >= 2 && (y % 20) < 18 && !stroke;
+                image::Rgba(if stroke {
+                    [10, 10, 10, 255]
+                } else if ring {
+                    [250, 250, 250, 255]
+                } else {
+                    [ground, ground, ground, 255]
+                })
+            })
+        };
+        let clean =
+            |ground: u8| RgbaImage::from_pixel(120, 60, image::Rgba([ground, ground, ground, 255]));
+        let outlined = lettering(&page(130, true), &clean(130), [0.0, 0.0, 120.0, 60.0]);
+        assert_eq!(
+            (outlined.tone, outlined.outline),
+            (Some("dark"), Some("light"))
+        );
+        let plain = lettering(&page(255, false), &clean(255), [0.0, 0.0, 120.0, 60.0]);
+        assert_eq!((plain.tone, plain.outline), (Some("dark"), None));
+    }
 
     #[test]
     fn lettering_cleaned_away_without_a_layer_is_found() {

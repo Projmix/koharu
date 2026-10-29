@@ -226,6 +226,13 @@ Known gaps after the rebuild:
   translation's; low contrast comes with the readable colour, a new layer's
   colour follows the mean tone under it; `run_pipeline` with `local_ocr`
   reads with the local models only, never the paid API pass;
+  page_layers' lettering names the source's outline tone too (the tone
+  lying deeper in the strokes is the fill), with check_outline when a
+  layer drops an outline the source has or adds one in a balloon whose
+  source has none, and check_chapter's slow `lettering` kind lists those
+  and wrong fills; the lettering rules repeat the original's style in a
+  balloon rather than forbidding an outline; source_lines carries the
+  measure's strength;
   `delete_elements` on a block that is not lettering also removes its text
   region, so cleaning leaves that art alone. A change can take
   `orient: along_source`: one horizontal line in the source lettering's box,

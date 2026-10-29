@@ -107,9 +107,11 @@ angle with corners turns it by hand. Keep delta within a degree. A surface \
 seen nearly square-on takes orient: along_source on its own, a turned box, \
 instead of corners.
 5. Finish with check_chapter until it reports nothing, then check_chapter \
-with kinds balloons, about 30 pages per call (pages [1, 30], [31, 60], ...), \
+with kinds balloons and lettering, about 30 pages per call (pages [1, 30], [31, 60], ...), \
 until it reports nothing, and hide_untranslated for \
-lettering left untranslated on purpose. Crop every page once more after the \
+lettering left untranslated on purpose (lettering the reader reads as it \
+is, such as English on a sign or a phone screen, stays as drawn: its layer \
+is hidden). Crop every page once more after the \
 last change.
 
 Pages and layers take addresses: 45 is page 45, 45#13 its layer 13. Your \
