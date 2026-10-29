@@ -351,61 +351,7 @@ pub(super) async fn page_layers(
                         .relations_from_as::<koharu_scene::Inside>(region.id())
                         .map(|relation| relation.value().target),
                 );
-                if let Some(bounds) = snapshot
-                    .component::<Geometry>(region.id())?
-                    .as_ref()
-                    .and_then(extent)
-                {
-                    let lettering = lettering(&source, &clean, bounds);
-                    // Detection can swap fill and outline; the removed
-                    // lettering shows which tone the source used. Outlined
-                    // text matches when either paint has that tone.
-                    let light = |color: &Value| {
-                        let color = color.as_array()?;
-                        let channel = |index: usize| color.get(index)?.as_f64();
-                        Some(
-                            channel(0)? * 0.299 + channel(1)? * 0.587 + channel(2)? * 0.114 > 128.0,
-                        )
-                    };
-                    let typography = &value["typography"];
-                    let mut paints = vec![light(&typography["color"])];
-                    if typography["stroke_width"]
-                        .as_f64()
-                        .is_some_and(|width| width >= 1.0)
-                    {
-                        paints.push(light(&typography["stroke_color"]));
-                    }
-                    let mismatch = value["visible"] == json!(true)
-                        && match lettering.tone {
-                            Some(tone) => paints
-                                .iter()
-                                .flatten()
-                                .all(|light| *light != (tone == "light")),
-                            None => false,
-                        };
-                    // The source's outline is the style to repeat: outlined
-                    // lettering wants an outline, plain lettering none.
-                    let outlined = typography["stroke_width"]
-                        .as_f64()
-                        .is_some_and(|width| width >= 1.0);
-                    // Text on art takes an outline for readability even
-                    // where the source has none; in a balloon it follows
-                    // the source either way.
-                    let check_outline = value["visible"] == json!(true)
-                        && lettering.tone.is_some()
-                        && if lettering.outline.is_some() {
-                            !outlined
-                        } else {
-                            outlined && value["balloon"].is_object()
-                        };
-                    value["lettering"] = json!({
-                        "left": lettering.left,
-                        "tone": lettering.tone,
-                        "outline": lettering.outline,
-                        "check_color": mismatch.then_some(true),
-                        "check_outline": check_outline.then_some(true),
-                    });
-                }
+                measure_lettering(snapshot, &source, &clean, region.id(), &mut value)?;
             }
             if let Some(balloon) = layer.balloon_target()? {
                 filled.push(balloon.id());
@@ -472,6 +418,73 @@ pub(super) async fn page_layers(
     }))
 }
 
+/// Records on `value` what the cleaning did to the source lettering of a
+/// layer read from `region`, and whether the layer's fill and outline follow
+/// it.
+fn measure_lettering(
+    snapshot: &Snapshot,
+    source: &RgbaImage,
+    clean: &RgbaImage,
+    region: EntityId,
+    value: &mut Value,
+) -> Result<()> {
+    let Some(bounds) = snapshot
+        .component::<Geometry>(region)?
+        .as_ref()
+        .and_then(extent)
+    else {
+        return Ok(());
+    };
+    let lettering = lettering(source, clean, bounds);
+    // Detection can swap fill and outline; the removed
+    // lettering shows which tone the source used. Outlined
+    // text matches when either paint has that tone.
+    let light = |color: &Value| {
+        let color = color.as_array()?;
+        let channel = |index: usize| color.get(index)?.as_f64();
+        Some(channel(0)? * 0.299 + channel(1)? * 0.587 + channel(2)? * 0.114 > 128.0)
+    };
+    let typography = &value["typography"];
+    let mut paints = vec![light(&typography["color"])];
+    if typography["stroke_width"]
+        .as_f64()
+        .is_some_and(|width| width >= 1.0)
+    {
+        paints.push(light(&typography["stroke_color"]));
+    }
+    let mismatch = value["visible"] == json!(true)
+        && match lettering.tone {
+            Some(tone) => paints
+                .iter()
+                .flatten()
+                .all(|light| *light != (tone == "light")),
+            None => false,
+        };
+    // The source's outline is the style to repeat: outlined
+    // lettering wants an outline, plain lettering none.
+    let outlined = typography["stroke_width"]
+        .as_f64()
+        .is_some_and(|width| width >= 1.0);
+    // Text on art takes an outline for readability even
+    // where the source has none; in a balloon it follows
+    // the source either way.
+    let check_outline = value["visible"] == json!(true)
+        && lettering.tone.is_some()
+        && if lettering.outline.is_some() {
+            !outlined
+        } else {
+            outlined && value["balloon"].is_object()
+        };
+    value["lettering"] = json!({
+        "left": lettering.left,
+        "tone": lettering.tone,
+        "outline": lettering.outline,
+        "check_color": mismatch.then_some(true),
+        "check_outline": check_outline.then_some(true),
+    });
+    Ok(())
+}
+
 struct Lettering {
     left: &'static str,
     /// The tone of the lettering's fill.
@@ -483,9 +496,8 @@ struct Lettering {
 /// What the cleaning did to the source lettering in a text region: how many
 /// of its strong edges the clean page still shows (enhancement moves tones,
 /// not edges), and the tone of the pixels it removed, the lettering's own.
-/// Outlined lettering (dark text ringed in white over screentone) leaves
-/// both tones removed: the one lying deeper inside the strokes, farther
-/// from the pixels the cleaning kept, is the fill, the other the outline.
+/// Outlined lettering is dark text ringed in white over screentone (or the
+/// reverse): a ring that stands out from the ground the cleaning left.
 fn lettering(source: &RgbaImage, clean: &RgbaImage, [x, y, width, height]: [f64; 4]) -> Lettering {
     let luma = |image: &RgbaImage, px: u32, py: u32| {
         let pixel = image.get_pixel(px, py);
@@ -501,6 +513,38 @@ fn lettering(source: &RgbaImage, clean: &RgbaImage, [x, y, width, height]: [f64;
         let dy = luma(image, px, py + 1).abs_diff(luma(image, px, py - 1));
         dx.max(dy) > 60
     };
+    // Mean tones: a screentone is dots, and a cleaning that redraws it moves
+    // them, so the lettering is what differs between the source's tone over
+    // three pixels and the clean ground over seven.
+    // Summed tables over the region and a seven-pixel margin give any mean
+    // in four reads.
+    let (width_all, height_all) = clean.dimensions().min(source.dimensions());
+    let (x_from, y_from) = (left.saturating_sub(7), top.saturating_sub(7));
+    let (x_to, y_to) = ((right + 7).min(width_all), (bottom + 7).min(height_all));
+    let table = |image: &RgbaImage| {
+        let (w, h) = ((x_to - x_from) as usize, (y_to - y_from) as usize);
+        let mut sums = vec![0u64; (w + 1) * (h + 1)];
+        for row in 0..h {
+            let mut line = 0u64;
+            for column in 0..w {
+                line += u64::from(luma(image, x_from + column as u32, y_from + row as u32));
+                sums[(row + 1) * (w + 1) + column + 1] = sums[row * (w + 1) + column + 1] + line;
+            }
+        }
+        (sums, w + 1)
+    };
+    let (source_sums, clean_sums) = (table(source), table(clean));
+    let mean = |sums: &(Vec<u64>, usize), px: u32, py: u32, reach: u32| {
+        let (sums, stride) = sums;
+        let x0 = px.saturating_sub(reach).max(x_from) - x_from;
+        let y0 = py.saturating_sub(reach).max(y_from) - y_from;
+        let x1 = (px + reach + 1).min(x_to) - x_from;
+        let y1 = (py + reach + 1).min(y_to) - y_from;
+        let at = |x: u32, y: u32| sums[y as usize * stride + x as usize];
+        let total = at(x1, y1) + at(x0, y0) - at(x0, y1) - at(x1, y0);
+        (total / u64::from((x1 - x0) * (y1 - y0)).max(1)) as u32
+    };
+    let ground = |px: u32, py: u32| mean(&clean_sums, px, py, 3);
     let (mut before, mut after) = (0u64, 0u64);
     let (columns, rows) = ((right - left) as usize, (bottom - top) as usize);
     let mut kept = vec![true; columns * rows];
@@ -509,39 +553,103 @@ fn lettering(source: &RgbaImage, clean: &RgbaImage, [x, y, width, height]: [f64;
         for px in left..right {
             before += u64::from(edge(source, px, py));
             after += u64::from(edge(clean, px, py));
-            let (from, to) = (luma(source, px, py), luma(clean, px, py));
-            if from.abs_diff(to) > 80 {
-                removed.push(from);
+            // Both the pixel and its neighbourhood differ from the ground: a
+            // dot of screentone averages into it, and the light fringe
+            // around a stroke is ground-coloured itself.
+            let (own, from, to) = (
+                luma(source, px, py),
+                mean(&source_sums, px, py, 1),
+                ground(px, py),
+            );
+            if from.abs_diff(to) > 80 && own.abs_diff(to) > 80 {
+                removed.push(own);
                 kept[(py - top) as usize * columns + (px - left) as usize] = false;
             }
         }
     }
-    let depth = chamfer(&kept, columns, rows);
-    let (mut dark, mut light) = ((0u64, 0u64), (0u64, 0u64));
-    for py in top..bottom {
-        for px in left..right {
-            let at = (py - top) as usize * columns + (px - left) as usize;
-            if kept[at] {
-                continue;
+    // An outline is a ring of the opposite tone just outside the strokes
+    // that stands out from the ground the cleaning left there: three pixels
+    // out from a removed stroke, the source is far lighter (or darker) than
+    // the clean page. In a white balloon the ring and the ground agree, so
+    // plain text reads as plain; redrawn screentone does not form a ring.
+    let removed_at = |px: u32, py: u32| {
+        px >= left
+            && px < right
+            && py >= top
+            && py < bottom
+            && !kept[(py - top) as usize * columns + (px - left) as usize]
+    };
+    // The share of the ring three pixels out from strokes of one tone that
+    // is far lighter (dark fill) or darker (light fill) than the ground the
+    // cleaning left there.
+    let ringed = |fill_dark: bool| {
+        let (mut ring, mut ringed) = (0u64, 0u64);
+        for py in top..bottom {
+            for px in left..right {
+                if !removed_at(px, py) || (luma(source, px, py) < 128) != fill_dark {
+                    continue;
+                }
+                for (dx, dy) in [(3i64, 0i64), (-3, 0), (0, 3), (0, -3)] {
+                    let (nx, ny) = (i64::from(px) + dx, i64::from(py) + dy);
+                    // A tight detected box can cut the ring: it may reach
+                    // into the margin the tables cover.
+                    if nx < i64::from(x_from)
+                        || ny < i64::from(y_from)
+                        || nx >= i64::from(x_to)
+                        || ny >= i64::from(y_to)
+                    {
+                        continue;
+                    }
+                    let (nx, ny) = (nx as u32, ny as u32);
+                    if removed_at(nx, ny) && (luma(source, nx, ny) < 128) == fill_dark {
+                        continue;
+                    }
+                    ring += 1;
+                    let (from, to) = (mean(&source_sums, nx, ny, 1), ground(nx, ny));
+                    ringed += u64::from(if fill_dark {
+                        from > to + 30
+                    } else {
+                        to > from + 30
+                    });
+                }
             }
-            let class = if luma(source, px, py) < 128 {
-                &mut dark
-            } else {
-                &mut light
-            };
-            class.0 += 1;
-            class.1 += u64::from(depth[at]);
         }
-    }
-    // Both tones in force, each at least a sixth of what the cleaning took.
-    let total = dark.0 + light.0;
-    let outlined = total >= 32 && dark.0 * 6 >= total && light.0 * 6 >= total;
-    let (fill, outline) = if !outlined {
-        (None, None)
-    } else if dark.1 * light.0 >= light.1 * dark.0 {
-        (Some("dark"), Some("light"))
+        (ring >= 64).then(|| ringed as f64 / ring as f64)
+    };
+    // The fill is the tone whose strokes the ring surrounds best; an outline
+    // as thick as the strokes outweighs them, so the median cannot tell.
+    // A fill holds at least a quarter of what the cleaning removed: the light
+    // anti-aliased fringe of dark text is not a light fill with a dark ring.
+    let dark_share =
+        removed.iter().filter(|tone| **tone < 128).count() as f64 / removed.len().max(1) as f64;
+    let (dark_ring, light_ring) = if removed.len() >= 16 {
+        (
+            (dark_share >= 0.25).then(|| ringed(true)).flatten(),
+            (dark_share <= 0.75).then(|| ringed(false)).flatten(),
+        )
     } else {
-        (Some("light"), Some("dark"))
+        (None, None)
+    };
+    let (fill, outline) = match (dark_ring, light_ring) {
+        // Where there is no ring the share stays near nothing; a real one
+        // reaches past a third (0.45 on Osananajimi 6#10: a white ring on
+        // tone, with strokes whose inner pixels look into other strokes).
+        (Some(dark), light) if dark >= 0.35 && dark >= light.unwrap_or(0.0) => {
+            (Some("dark"), Some("light"))
+        }
+        (_, Some(light)) if light >= 0.35 => (Some("light"), Some("dark")),
+        _ => (
+            (removed.len() >= 16).then(|| {
+                let mut tones = removed.clone();
+                let middle = tones.len() / 2;
+                if *tones.select_nth_unstable(middle).1 < 128 {
+                    "dark"
+                } else {
+                    "light"
+                }
+            }),
+            None,
+        ),
     };
     let left = if before == 0 {
         "none"
@@ -555,19 +663,9 @@ fn lettering(source: &RgbaImage, clean: &RgbaImage, [x, y, width, height]: [f64;
             "partly"
         }
     };
-    let tone = fill.or_else(|| {
-        (removed.len() >= 16).then(|| {
-            let middle = removed.len() / 2;
-            if *removed.select_nth_unstable(middle).1 < 128 {
-                "dark"
-            } else {
-                "light"
-            }
-        })
-    });
     Lettering {
         left,
-        tone,
+        tone: fill,
         outline,
     }
 }
@@ -1028,18 +1126,26 @@ pub(super) async fn chapter_lettering(
     use futures::{StreamExt as _, TryStreamExt as _};
     futures::stream::iter(pages.iter().copied())
         .map(|page| async move {
-            let value = page_layers(desktop, snapshot, page).await?;
-            let layers = value["layers"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter(|layer| {
-                    layer["lettering"]["check_color"] == json!(true)
-                        || layer["lettering"]["check_outline"] == json!(true)
-                })
-                .cloned()
-                .collect::<Vec<_>>();
-            anyhow::Ok((page, layers))
+            let Some(group) = snapshot.page(page)?.text_group()? else {
+                return anyhow::Ok((page, Vec::new()));
+            };
+            let frame = desktop.renderer().render(snapshot, page).await?;
+            let clean = render_image(desktop, &without_text(snapshot, page)?, page).await?;
+            let source = base_image(snapshot, page).await?;
+            let mut layers = Vec::new();
+            for (index, layer) in group.text_layers()?.enumerate() {
+                let Some(region) = layer.content()?.source_region()? else {
+                    continue;
+                };
+                let mut value = layer_value(snapshot, &frame, layer.id(), index + 1)?;
+                measure_lettering(snapshot, &source, &clean, region.id(), &mut value)?;
+                if value["lettering"]["check_color"] == json!(true)
+                    || value["lettering"]["check_outline"] == json!(true)
+                {
+                    layers.push(value);
+                }
+            }
+            Ok((page, layers))
         })
         .buffered(CONCURRENT_PAGES)
         .try_collect()
@@ -3712,6 +3818,41 @@ mod tests {
             (Some("dark"), Some("light"))
         );
         let plain = lettering(&page(255, false), &clean(255), [0.0, 0.0, 120.0, 60.0]);
+        assert_eq!((plain.tone, plain.outline), (Some("dark"), None));
+
+        // On a dotted screentone the cleaning redrew one dot over: the dots
+        // are ground, not lettering, either way.
+        let dots = |shift: u32| {
+            move |x: u32, y: u32| {
+                if (x + shift) % 2 == 0 && y % 2 == 0 {
+                    [0, 0, 0, 255]
+                } else {
+                    [255, 255, 255, 255]
+                }
+            }
+        };
+        let toned = |outline: bool| {
+            let ground = dots(0);
+            RgbaImage::from_fn(120, 60, |x, y| {
+                let stroke = (20..100).contains(&x) && (y % 20) >= 6 && (y % 20) < 14;
+                let ring =
+                    outline && (16..104).contains(&x) && (y % 20) >= 2 && (y % 20) < 18 && !stroke;
+                image::Rgba(if stroke {
+                    [10, 10, 10, 255]
+                } else if ring {
+                    [250, 250, 250, 255]
+                } else {
+                    ground(x, y)
+                })
+            })
+        };
+        let redrawn = RgbaImage::from_fn(120, 60, |x, y| image::Rgba(dots(1)(x, y)));
+        let outlined = lettering(&toned(true), &redrawn, [0.0, 0.0, 120.0, 60.0]);
+        assert_eq!(
+            (outlined.tone, outlined.outline),
+            (Some("dark"), Some("light"))
+        );
+        let plain = lettering(&toned(false), &redrawn, [0.0, 0.0, 120.0, 60.0]);
         assert_eq!((plain.tone, plain.outline), (Some("dark"), None));
     }
 
