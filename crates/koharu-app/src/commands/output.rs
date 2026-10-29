@@ -245,7 +245,9 @@ pub(crate) async fn chapter_check(
         let group_shown = shown(group.id())?;
         for layer in group.text_layers()? {
             let content = layer.content()?;
-            if !(group_shown && shown(layer.id())?) {
+            // A layer hidden on its own is out of the checks; one hidden only
+            // by its page's text group is still checked, and reported hidden.
+            if !shown(layer.id())? {
                 // Hidden text matters only when it would have shown a
                 // translation; an empty or deliberately removed block stays out.
                 if let Some(translation) = content
@@ -297,7 +299,16 @@ pub(crate) async fn chapter_check(
                 Some(region) => koharu_pipeline::cleaning_unverified(&snapshot, region.id())?,
                 None => false,
             };
-            if translation.is_some() || fit.is_some() || ocr_unverified || cleaning_unverified {
+            let hidden = !group_shown
+                && content
+                    .translation()?
+                    .is_some_and(|translation| !translation.text.value.trim().is_empty());
+            if translation.is_some()
+                || fit.is_some()
+                || ocr_unverified
+                || cleaning_unverified
+                || hidden
+            {
                 issues.push(ChapterIssue {
                     page,
                     element: layer.id(),
@@ -306,7 +317,7 @@ pub(crate) async fn chapter_check(
                     fit,
                     ocr_unverified,
                     cleaning_unverified,
-                    hidden: false,
+                    hidden,
                 });
             }
         }

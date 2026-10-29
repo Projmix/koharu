@@ -205,14 +205,27 @@ Known gaps after the rebuild:
   the largest size the box takes; `balloons`, asked for by kind since it
   renders every page, lists shown translated text in a balloon that crosses
   its inside, sits off the centre of its lobe by more than an eighth, is
-  small, or is set under 85% of the page's median balloon size (a larger
+  small, or is set under 85% of the median size of the page's balloons of a
+  similar width (a larger
   shout is left alone); `pages` limits a check to a range, so the slow kinds
   of a long chapter go in parts that each answer within an MCP client's
   request timeout, and those kinds render four pages at a time;
   `apply_layers` can stay quiet for
   text passes and confirm an OCR reading as it is; layers carry their OCR
   confidence; `hide_untranslated` hides every shown untranslated layer and
-  `merge_text_layers` joins a sound effect detected in pieces;
+  `merge_text_layers` joins a sound effect detected in pieces, keeping the
+  first layer's role and balloon flow, and a change's `role` renames what
+  a layer is (dialogue, onomatopoeia, free text);
+  a hidden text group is named as what hides a page's layers (one
+  check_chapter line per page, `hidden_by` in page_layers, a note on crops
+  and previews), and its layers are still checked; a balloon inside a
+  panel line or hatching cut short is `measured: partial` and reports no
+  crossing or centre; every edit names the layers it renumbered; a size
+  given alone turns auto-fit off, `line_breaking: automatic` resets it,
+  and a typography edit never takes the source's detected direction as the
+  translation's; low contrast comes with the readable colour, a new layer's
+  colour follows the mean tone under it; `run_pipeline` with `local_ocr`
+  reads with the local models only, never the paid API pass;
   `delete_elements` on a block that is not lettering also removes its text
   region, so cleaning leaves that art alone. A change can take
   `orient: along_source`: one horizontal line in the source lettering's box,

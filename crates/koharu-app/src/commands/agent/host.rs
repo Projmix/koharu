@@ -106,11 +106,24 @@ impl KoharuHost {
     where
         T: serde::Serialize + Send,
     {
-        let (commit, value, page, project) = {
+        let (commit, value, page, project, renumbered) = {
             let current = self.handle.state::<CurrentProject>();
             let mut current = current.project.lock().await;
             let project = current.as_mut().context("no project is open")?;
+            let before = typesetting::addresses(&project.snapshot())?;
             let (commit, value) = mutation(project).await?;
+            let after = typesetting::addresses(&commit.snapshot)?;
+            // Layer numbers follow page order: an edit that adds, removes or
+            // reorders layers moves the addresses of the others.
+            let renumbered = before
+                .iter()
+                .filter_map(|(layer, old)| {
+                    after
+                        .get(layer)
+                        .filter(|new| *new != old)
+                        .map(|new| (old.clone(), new.clone()))
+                })
+                .collect::<std::collections::BTreeMap<_, _>>();
             // An agent outside the app edits beside the owner: its edits stay
             // off the owner's undo history, so the owner's Ctrl+Z takes back
             // the owner's own last action and keeps their redo.
@@ -118,7 +131,13 @@ impl KoharuHost {
                 project.record_commit(&commit);
             }
             project.reconcile_page();
-            (commit, value, project.active_page(), project.info())
+            (
+                commit,
+                value,
+                project.active_page(),
+                project.info(),
+                renumbered,
+            )
         };
         let revision = commit.revision;
         self.synchronize(commit, page).await?;
@@ -132,6 +151,7 @@ impl KoharuHost {
             "revision": revision,
             "project": project,
             "result": value,
+            "renumbered": (!renumbered.is_empty()).then_some(renumbered),
         }))
     }
 
@@ -235,6 +255,7 @@ impl KoharuHost {
             progress: None,
             inpainting_mask: None,
             image_edit_reviewer,
+            local_ocr: arguments.local_ocr,
         };
         let result = self
             .handle
@@ -339,7 +360,7 @@ impl Host for KoharuHost {
                     ),
                     definition::<RunPipeline>(
                         "run_pipeline",
-                        "Run one stage of Koharu's configured pipeline on the whole project, some pages, or some text layers (ids or addresses: 45, 45#13). An agent outside the app runs detection, ocr or markup only.",
+                        "Run one stage of Koharu's configured pipeline on the whole project, some pages, or some text layers (ids or addresses: 45, 45#13). An agent outside the app runs detection, ocr or markup only. With ocr, local_ocr: true reads with the local models only and never sends text to the paid API.",
                     ),
                 ]
             })
@@ -888,13 +909,16 @@ pub(super) enum AgentLineBreaking {
     /// Keep the given lines: break only at line breaks in the text. Auto-fit
     /// shrinks the text to keep them; a fixed size that cannot overflows.
     Manual,
+    /// Wrap between words, hyphenating a word as a last resort.
+    Automatic,
 }
 
-impl From<AgentLineBreaking> for koharu_scene::LineBreaking {
-    fn from(value: AgentLineBreaking) -> Self {
-        match value {
-            AgentLineBreaking::WholeWords => Self::WholeWords,
-            AgentLineBreaking::Manual => Self::Manual,
+impl AgentLineBreaking {
+    pub(super) fn scene(self) -> Option<koharu_scene::LineBreaking> {
+        match self {
+            Self::WholeWords => Some(koharu_scene::LineBreaking::WholeWords),
+            Self::Manual => Some(koharu_scene::LineBreaking::Manual),
+            Self::Automatic => None,
         }
     }
 }
@@ -998,6 +1022,10 @@ impl From<AgentPipelineOperation> for Operation {
 #[serde(deny_unknown_fields)]
 struct RunPipeline {
     operation: AgentPipelineOperation,
+    /// With ocr: read with the local models only, never the paid API that a
+    /// hybrid OCR sends disagreements to.
+    #[serde(default)]
+    local_ocr: bool,
     #[serde(default)]
     pages: Vec<String>,
     #[serde(default)]

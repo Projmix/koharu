@@ -445,6 +445,8 @@ pub enum RenderDiagnostic {
     TextLowContrast {
         entity: EntityId,
         contrast: f32,
+        /// Black or white, whichever stands out more from that ground.
+        readable: [u8; 4],
     },
 }
 

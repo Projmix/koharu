@@ -381,6 +381,7 @@ pub(crate) async fn start_job(
             progress: None,
             inpainting_mask: request.inpainting_mask,
             image_edit_reviewer,
+            local_ocr: false,
         };
         request.progress = Some(Arc::new(move |event| {
             enum JobUpdate {

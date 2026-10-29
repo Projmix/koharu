@@ -783,6 +783,7 @@ mod tests {
         };
 
         let low_contrast = |entity| RenderDiagnostic::TextLowContrast {
+            readable: [0, 0, 0, 255],
             entity,
             contrast: 1.1,
         };

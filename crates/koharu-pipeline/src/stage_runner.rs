@@ -21,6 +21,7 @@ pub(crate) struct StageRunner {
     accelerator: AcceleratorGate,
     parallel_inpainting: bool,
     hybrid_ocr: bool,
+    api_ocr: bool,
 }
 
 impl StageRunner {
@@ -35,6 +36,7 @@ impl StageRunner {
             accelerator: AcceleratorGate::new(device, resources),
             parallel_inpainting: config.inpainting.method == crate::InpaintingMethod::Api,
             hybrid_ocr: config.ocr.method == crate::OcrMethod::LocalApi,
+            api_ocr: config.ocr.method == crate::OcrMethod::Api,
         })
     }
 
@@ -44,6 +46,10 @@ impl StageRunner {
 
     pub(crate) const fn hybrid_ocr(&self) -> bool {
         self.hybrid_ocr
+    }
+
+    pub(crate) const fn api_ocr(&self) -> bool {
+        self.api_ocr
     }
 
     /// What each stage has left to do on a project, judged by the same

@@ -1531,6 +1531,11 @@ fn low_contrast_diagnostics(layers: &[Layer]) -> Vec<RenderDiagnostic> {
             diagnostics.push(RenderDiagnostic::TextLowContrast {
                 entity: layer.entity(),
                 contrast,
+                readable: if against_ground([0, 0, 0, 255]) >= against_ground([255; 4]) {
+                    [0, 0, 0, 255]
+                } else {
+                    [255; 4]
+                },
             });
         }
     }
@@ -2964,7 +2969,9 @@ mod tests {
             .diagnostics()
             .iter()
             .filter_map(|diagnostic| match diagnostic {
-                RenderDiagnostic::TextLowContrast { entity, contrast } => {
+                RenderDiagnostic::TextLowContrast {
+                    entity, contrast, ..
+                } => {
                     assert!(*contrast < MIN_TEXT_CONTRAST);
                     Some(*entity)
                 }

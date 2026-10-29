@@ -83,9 +83,11 @@ pub(super) struct TrialTypography {
     font_weight: Option<u16>,
     #[serde(default)]
     font_style: Option<AgentFontStyle>,
-    /// Fixed size in page pixels; give auto_fit false with it.
+    /// Fixed size in page pixels; it turns auto-fit off unless auto_fit is
+    /// given too.
     #[serde(default)]
     size: Option<f32>,
+    /// True fits the text to its box, up to a page-scaled ceiling.
     #[serde(default)]
     auto_fit: Option<bool>,
     #[serde(default)]
@@ -100,7 +102,7 @@ pub(super) struct TrialTypography {
     #[serde(default)]
     writing_mode: Option<AgentWritingMode>,
     /// Where lines may break; automatic (hyphenating a word as a last
-    /// resort) when never set.
+    /// resort) when never set or set back to automatic.
     #[serde(default)]
     line_breaking: Option<AgentLineBreaking>,
 }
@@ -163,6 +165,30 @@ pub(super) struct TrialChange {
     /// Show or hide the layer.
     #[serde(default)]
     visible: Option<bool>,
+    /// What the lettering is, when detection or a merge named it wrongly.
+    #[serde(default)]
+    role: Option<TrialRole>,
+}
+
+#[derive(Clone, Copy, Deserialize, JsonSchema, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum TrialRole {
+    /// Speech or thought in a balloon.
+    Dialogue,
+    /// A sound effect.
+    Onomatopoeia,
+    /// Narration, a sign or other text outside balloons.
+    FreeText,
+}
+
+impl TrialRole {
+    fn kind(self) -> &'static str {
+        match self {
+            Self::Dialogue => "dev.koharu.text.dialogue",
+            Self::Onomatopoeia => "dev.koharu.text.onomatopoeia",
+            Self::FreeText => "dev.koharu.text.free-text",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Deserialize, JsonSchema, PartialEq)]
@@ -203,7 +229,8 @@ pub(super) struct HideUntranslated {
 #[serde(deny_unknown_fields)]
 pub(super) struct MergeTextLayers {
     /// Two or more layers of one page, in reading order; the first keeps the
-    /// merged text, the others go.
+    /// merged text, its role and its balloon flow, the others go. A role
+    /// change on apply_layers renames what the merged lettering is.
     pub(super) layers: Vec<String>,
     /// Put between the joined source texts and translations; nothing by
     /// default, as for one sound effect split in two.
@@ -512,7 +539,14 @@ fn measure_balloon(clean: &RgbaImage, value: &mut Value, shapes: &HashMap<Entity
                 "box": interior.bounds,
                 "centre": interior.centre,
             });
-            value["balloon"]["measured"] = json!("pixels");
+            // A panel line or hatching across a balloon closes the flood
+            // early: an inside far smaller than the detected balloon, or one
+            // the text's own box mostly lies outside of, is not the balloon.
+            let partial = read_box(&value["balloon"]["box"]).is_some_and(|balloon| {
+                interior.bounds[2] * interior.bounds[3] < balloon[2] * balloon[3] * 0.3
+            }) || read_box(&value["box"])
+                .is_some_and(|text| overlap(text, interior.bounds) < text[2] * text[3] * 0.5);
+            value["balloon"]["measured"] = json!(if partial { "partial" } else { "pixels" });
             if let Some(drawn) = read_box(&value["rendered"]["text_box"]) {
                 // How far the drawn block's centre sits from the lobe's
                 // centroid, and the narrowest gap between a line and the
@@ -564,6 +598,13 @@ fn measure_balloon(clean: &RgbaImage, value: &mut Value, shapes: &HashMap<Entity
         }
         None => {}
     }
+}
+
+/// The area two [x, y, width, height] boxes share.
+fn overlap(left: [f64; 4], right: [f64; 4]) -> f64 {
+    let width = (left[0] + left[2]).min(right[0] + right[2]) - left[0].max(right[0]);
+    let height = (left[1] + left[3]).min(right[1] + right[3]) - left[1].max(right[1]);
+    width.max(0.0) * height.max(0.0)
 }
 
 /// The chapter's pages in order with the text of each, for `chapter_text`.
@@ -695,6 +736,15 @@ pub(super) fn text_signatures(snapshot: &Snapshot) -> Result<Vec<(EntityId, u64)
         pages.push((page, hasher.finish()));
     }
     Ok(pages)
+}
+
+/// Whether `page`'s text group is hidden, which hides every text layer on it
+/// whatever the layer's own visibility.
+fn text_group_hidden(snapshot: &Snapshot, page: EntityId) -> Result<bool> {
+    Ok(match snapshot.page(page)?.text_group()? {
+        Some(group) => !shown(snapshot, group.id())?,
+        None => false,
+    })
 }
 
 fn shown(snapshot: &Snapshot, entity: EntityId) -> Result<bool> {
@@ -841,16 +891,30 @@ fn page_balloon_issues(layers: &[&Value]) -> Vec<Vec<String>> {
             && value["translated_text"]
                 .as_str()
                 .is_some_and(|text| !text.trim().is_empty())
-            && value["balloon"]["measured"] == "pixels"
+            && matches!(
+                value["balloon"]["measured"].as_str(),
+                Some("pixels" | "partial")
+            )
             && value["typography"]["writing_mode"] != "Vertical"
     };
-    let mut sizes = layers
-        .iter()
-        .filter(|value| lettered(value))
-        .filter_map(|value| value["rendered"]["font_size"].as_f64())
-        .collect::<Vec<_>>();
-    sizes.sort_by(f64::total_cmp);
-    let median = (sizes.len() >= 3).then(|| sizes[sizes.len() / 2]);
+    let width = |value: &Value| {
+        read_box(&value["balloon"]["interior"]["box"])
+            .or_else(|| read_box(&value["balloon"]["box"]))
+            .map(|bounds| bounds[2])
+    };
+    // A narrow balloon takes a smaller size than a wide one on the same page:
+    // text is compared with balloons of a similar width.
+    let median = |of: &Value| {
+        let own = width(of)?;
+        let mut sizes = layers
+            .iter()
+            .filter(|value| lettered(value))
+            .filter(|value| width(value).is_some_and(|other| (other / own - 1.0).abs() <= 0.35))
+            .filter_map(|value| value["rendered"]["font_size"].as_f64())
+            .collect::<Vec<_>>();
+        sizes.sort_by(f64::total_cmp);
+        (sizes.len() >= 3).then(|| sizes[sizes.len() / 2])
+    };
     layers
         .iter()
         .map(|value| {
@@ -859,7 +923,12 @@ fn page_balloon_issues(layers: &[&Value]) -> Vec<Vec<String>> {
                 return found;
             }
             let balloon = &value["balloon"];
-            if let Some(gap) = balloon["edge_gap"].as_f64().filter(|gap| *gap < -2.0) {
+            // A partial measure cannot tell a crossing or the centre.
+            let measured = balloon["measured"] == "pixels";
+            if let Some(gap) = balloon["edge_gap"]
+                .as_f64()
+                .filter(|gap| measured && *gap < -2.0)
+            {
                 found.push(format!("crosses={gap}"));
             }
             if let (Some([dx, dy]), Some([_, _, width, height])) = (
@@ -867,17 +936,18 @@ fn page_balloon_issues(layers: &[&Value]) -> Vec<Vec<String>> {
                     .as_array()
                     .and_then(|off| Some([off.first()?.as_f64()?, off.get(1)?.as_f64()?])),
                 read_box(&balloon["interior"]["box"]),
-            ) && (dx.abs() > width / 8.0 || dy.abs() > height / 8.0)
+            ) && measured
+                && (dx.abs() > width / 8.0 || dy.abs() > height / 8.0)
             {
                 found.push(format!("off_centre={dx},{dy}"));
             }
             let size = value["rendered"]["font_size"].as_f64();
             if value["rendered"]["small"] == true {
                 found.push(format!("small={}", size.unwrap_or_default()));
-            } else if let (Some(size), Some(median)) = (size, median)
+            } else if let (Some(size), Some(median)) = (size, median(value))
                 && size < median * 0.85
             {
-                found.push(format!("size={size} page_median={median}"));
+                found.push(format!("size={size} similar_median={median}"));
             }
             found
         })
@@ -934,6 +1004,7 @@ pub(super) fn chapter_issues(
     let mut lines = Vec::new();
     let mut counts = std::collections::BTreeMap::<&str, usize>::new();
     let covered = |page: EntityId| arguments.covers(page_number(page));
+    let mut hidden_groups = std::collections::BTreeMap::<usize, usize>::new();
     for issue in check.texts {
         if !covered(issue.page) {
             continue;
@@ -990,6 +1061,15 @@ pub(super) fn chapter_issues(
             json!({ "text_group": snapshot.page(issue.page)?.text_group()?.map(|group| group.id()) })
         };
         let address = format!("{}#{}", page_number(issue.page), numbers(issue.element));
+        // A hidden text group hides every layer of its page: one line says so.
+        if !arguments.full
+            && issue.hidden
+            && hidden_by.get("text_group").is_some()
+            && kinds.len() == 1
+        {
+            *hidden_groups.entry(page_number(issue.page)).or_default() += 1;
+            continue;
+        }
         if arguments.full {
             texts.push(json!({
                 "address": address,
@@ -1021,6 +1101,11 @@ pub(super) fn chapter_issues(
                     .join(" "),
             ));
         }
+    }
+    for (page, count) in hidden_groups {
+        lines.push(format!(
+            "{page} hidden_by=text_group layers={count} | the page's text group is hidden"
+        ));
     }
     let mut automatic_style = Vec::new();
     if wanted("style") {
@@ -1237,7 +1322,10 @@ pub(super) fn merge_steps(
             Some(translations.join(joiner)),
         )?);
     }
-    if right > left && bottom > top {
+    // A first layer flowing in its balloon keeps flowing: the merged text
+    // takes the balloon's shape rather than the boxes' union.
+    let flows = snapshot.text_layer(*first)?.frame()?.is_none();
+    if !flows && right > left && bottom > top {
         let points = [(left, top), (right, top), (right, bottom), (left, bottom)]
             .map(|(x, y)| Point { x, y })
             .to_vec();
@@ -1298,6 +1386,9 @@ pub(super) async fn crop(
             "region": region,
             "scale": scale,
             "layout": if arguments.compare { "source | view" } else { "view" },
+            "text_group_hidden": text_group_hidden(snapshot, page)?.then_some(
+                "the page's text group is hidden: none of its text layers is drawn",
+            ),
         }),
         png,
     ))
@@ -1390,6 +1481,9 @@ pub(super) async fn preview_layers(
             "region": region,
             "scale": scale,
             "layout": if arguments.compare { "source | preview" } else { "preview" },
+            "text_group_hidden": text_group_hidden(snapshot, page)?.then_some(
+                "the page's text group is hidden: none of its text layers is drawn",
+            ),
             "layers": layers,
         }),
         png,
@@ -1414,9 +1508,10 @@ impl TrialTypography {
             size: self
                 .size
                 .or_else(|| current.and_then(|current| current.size)),
-            auto_fit: self
-                .auto_fit
-                .unwrap_or_else(|| current.is_none_or(|current| current.auto_fit)),
+            auto_fit: self.auto_fit.unwrap_or_else(|| {
+                // A size given alone is the size to draw at.
+                self.size.is_none() && current.is_none_or(|current| current.auto_fit)
+            }),
             color: self
                 .color
                 .or_else(|| current.and_then(|current| current.color)),
@@ -1430,21 +1525,25 @@ impl TrialTypography {
                 .alignment
                 .map(Into::into)
                 .or_else(|| current.and_then(|current| current.alignment)),
-            writing_mode: self
-                .writing_mode
-                .map(Into::into)
-                .or_else(|| current.and_then(|current| current.writing_mode)),
-            line_breaking: self
-                .line_breaking
-                .map(Into::into)
-                .or_else(|| current.and_then(|current| current.line_breaking)),
+            // Detection records the source lettering's direction, which the
+            // renderer ignores for a translation; kept on a user edit it
+            // would turn the translation vertical.
+            writing_mode: self.writing_mode.map(Into::into).or_else(|| {
+                current
+                    .filter(|current| current.origin == koharu_scene::Origin::User)
+                    .and_then(|current| current.writing_mode)
+            }),
+            line_breaking: match self.line_breaking {
+                Some(breaking) => breaking.scene(),
+                None => current.and_then(|current| current.line_breaking),
+            },
         }
     }
 }
 
 /// The typography of a layer `add_text_layer` makes: the given one, black
-/// text by default, or white where the page under the region is dark (black
-/// ovals, night panels).
+/// text by default, or white where the page under the region is dark on
+/// average (black ovals, night panels).
 pub(super) async fn new_layer_typography(
     desktop: &Desktop,
     snapshot: &Snapshot,
@@ -1468,10 +1567,12 @@ pub(super) async fn new_layer_typography(
                 );
             }
         }
-        let dark = !levels.is_empty() && {
-            let middle = levels.len() / 2;
-            *levels.select_nth_unstable(middle).1 < 100
-        };
+        // The mean tone, not the median: on a tinted balloon the screentone's
+        // dots, or source lettering not cleaned yet, can make more than half
+        // the pixels dark while the ground still reads light.
+        let dark = !levels.is_empty()
+            && levels.iter().map(|level| u64::from(*level)).sum::<u64>()
+                < 100 * levels.len() as u64;
         typography.color = Some(if dark {
             [255, 255, 255, 255]
         } else {
@@ -1862,9 +1963,18 @@ fn balloon_flow_step(snapshot: &Snapshot, layer: EntityId) -> Result<EditStep> {
                 .map(|region| region.geometry())
                 .transpose()?
                 .or(text.frame()?)
-                .with_context(|| format!("{layer} has no box to find its balloon by"))?;
-            Project::containing_bubble(snapshot, page, &geometry)?
-                .with_context(|| format!("no detected balloon holds {layer}"))?
+                .with_context(|| {
+                    format!(
+                        "{} has no box to find its balloon by",
+                        named(snapshot, layer)
+                    )
+                })?;
+            Project::containing_bubble(snapshot, page, &geometry)?.with_context(|| {
+                format!(
+                    "no detected balloon holds {}: give it a region instead of flow balloon",
+                    named(snapshot, layer)
+                )
+            })?
         }
     };
     let bound = text.balloon_target()?.is_some();
@@ -1940,8 +2050,9 @@ pub(super) fn steps(
     let mut steps = Vec::new();
     for change in changes {
         let layer = address(snapshot, &change.element)?;
+        let name = named(snapshot, layer);
         let text = match (change.text, change.lines) {
-            (Some(_), Some(_)) => bail!("give {layer} either text or lines, not both"),
+            (Some(_), Some(_)) => bail!("give {name} either text or lines, not both"),
             (text, lines) => text.or_else(|| lines.map(|lines| lines.join("\n"))),
         };
         if let Some(text) = text {
@@ -1955,27 +2066,25 @@ pub(super) fn steps(
                 .content()?
                 .source()?
                 .map(|source| source.text.value)
-                .with_context(|| format!("{layer} has no source text to confirm"))?;
+                .with_context(|| format!("{name} has no source text to confirm"))?;
             steps.push(Project::source_step(snapshot, layer, source)?);
         }
         if change.flow == Some(TrialFlow::Balloon) {
             if change.region.is_some() || change.corners.is_some() {
-                bail!(
-                    "give {layer} either a region, corners or flow balloon, not one with another"
-                );
+                bail!("give {name} either a region, corners or flow balloon, not one with another");
             }
             steps.push(balloon_flow_step(snapshot, layer)?);
         }
         if let Some(corners) = change.corners {
             if change.region.is_some() {
-                bail!("give {layer} either corners or a region, not both");
+                bail!("give {name} either corners or a region, not both");
             }
             let corners = match (change.angle, change.orient) {
                 (Some(_), Some(_)) => {
-                    bail!("give {layer}'s corners either an angle or orient, not both")
+                    bail!("give {name}'s corners either an angle or orient, not both")
                 }
                 (Some(turn), None) => Surface::new(corners)
-                    .with_context(|| format!("{layer}'s corners make no convex quadrilateral"))?
+                    .with_context(|| format!("{name}'s corners make no convex quadrilateral"))?
                     .turned(f64::from(turn)),
                 (None, Some(TrialOrient::AlongSource)) => {
                     let lines = sources
@@ -1983,17 +2092,17 @@ pub(super) fn steps(
                         .and_then(|image| printed_lines(image, &corners))
                         .filter(|lines| lines.strength >= MINIMUM_STRENGTH)
                         .with_context(|| {
-                            format!("no printed lines were measured inside {layer}'s corners")
+                            format!("no printed lines were measured inside {name}'s corners")
                         })?;
                     let surface = Surface::new(corners).with_context(|| {
-                        format!("{layer}'s corners make no convex quadrilateral")
+                        format!("{name}'s corners make no convex quadrilateral")
                     })?;
                     surface.turned(surface.turn_to(lines.angle))
                 }
                 (None, None) => corners,
             };
             let (frame, unit) = frame_from_corners(corners)
-                .with_context(|| format!("{layer}'s corners make no convex quadrilateral"))?;
+                .with_context(|| format!("{name}'s corners make no convex quadrilateral"))?;
             let geometry = Project::geometry_from_frame(frame)?;
             let mut layout = snapshot
                 .component::<SceneTextLayout>(layer)?
@@ -2002,7 +2111,7 @@ pub(super) fn steps(
             layout.angle_degrees = Some(frame.angle_degrees);
             layout.perspective = Some(unit);
             if !koharu_scene::valid_perspective(layout.perspective.as_deref().unwrap_or_default()) {
-                bail!("{layer}'s corners make no convex quadrilateral");
+                bail!("{name}'s corners make no convex quadrilateral");
             }
             steps.push(Box::new(move |edit| {
                 edit.promote_entity_to_user(layer)?;
@@ -2014,7 +2123,7 @@ pub(super) fn steps(
             _ if change.corners.is_some() => (None, None),
             Some(TrialOrient::AlongSource) => {
                 if change.region.is_some() || change.angle.is_some() {
-                    bail!("give {layer} either orient or a region and angle, not both");
+                    bail!("give {name} either orient or a region and angle, not both");
                 }
                 let (region, angle) = along_source(snapshot, layer, sources)?;
                 (Some(region), Some(angle))
@@ -2023,7 +2132,7 @@ pub(super) fn steps(
         };
         if let Some(angle) = angle {
             let [x, y, width, height] =
-                region.with_context(|| format!("turning {layer} needs its region"))?;
+                region.with_context(|| format!("turning {name} needs its region"))?;
             let geometry = Project::geometry_from_frame(TextFrame {
                 x: x as f32,
                 y: y as f32,
@@ -2070,6 +2179,19 @@ pub(super) fn steps(
                 vec![TypographyUpdate { layer, typography }],
                 &laid_out_size,
             )?);
+        }
+        if let Some(role) = change.role {
+            let content = snapshot.text_layer(layer)?.content()?.id();
+            steps.push(Box::new(move |edit| {
+                edit.promote_entity_to_user(content)?;
+                edit.set(
+                    content,
+                    &koharu_scene::TextRole {
+                        origin: Origin::User,
+                        role: role.kind().to_owned(),
+                    },
+                )
+            }));
         }
         if let Some(visible) = change.visible {
             let opacity = snapshot
@@ -2165,6 +2287,37 @@ fn automatic_style_layers(snapshot: &Snapshot, page: EntityId) -> Result<Vec<Ent
     Ok(layers)
 }
 
+/// Every text layer's address, 45#13, by layer.
+pub(super) fn addresses(snapshot: &Snapshot) -> Result<HashMap<EntityId, String>> {
+    let mut addresses = HashMap::new();
+    for (index, page) in snapshot.pages().enumerate() {
+        if let Some(group) = page.text_group()? {
+            for (number, layer) in group.text_layers()?.enumerate() {
+                addresses.insert(layer.id(), format!("{}#{}", index + 1, number + 1));
+            }
+        }
+    }
+    Ok(addresses)
+}
+
+/// A layer's address as the tools take it, 45#13, for messages; its id when
+/// it has none.
+fn named(snapshot: &Snapshot, layer: EntityId) -> String {
+    let address = || -> Result<String> {
+        let page = owning_page(snapshot, layer)?;
+        let page_number = snapshot
+            .pages()
+            .position(|candidate| candidate.id() == page)
+            .context("the layer's page is not in the project")?
+            + 1;
+        Ok(format!(
+            "{page_number}#{}",
+            numbering(snapshot, page)?(layer)
+        ))
+    };
+    address().unwrap_or_else(|_| layer.to_string())
+}
+
 fn numbering(snapshot: &Snapshot, page: EntityId) -> Result<impl Fn(EntityId) -> usize> {
     let order = match snapshot.page(page)?.text_group()? {
         Some(group) => group.text_layers()?.map(|layer| layer.id()).collect(),
@@ -2234,6 +2387,13 @@ fn layer_value(
         "id": layer,
         "number": number,
         "visible": visible,
+        "hidden_by": if !visible {
+            Some("layer")
+        } else if text_group_hidden(snapshot, owning_page(snapshot, layer)?)? {
+            Some("text_group")
+        } else {
+            None
+        },
         "role": content.role()?.map(|role| role.role),
         "source_text": content.source()?.map(|source| source.text.value),
         "ocr": ocr,
@@ -2274,6 +2434,12 @@ fn layer_value(
                 })).collect::<Vec<_>>(),
                 "hyphenated": hyphenated_words(&rendered.lines),
                 "warning": warning(frame.diagnostics(), layer),
+                "readable_color": frame.diagnostics().iter().find_map(|diagnostic| match diagnostic {
+                    RenderDiagnostic::TextLowContrast { entity, readable, .. } if *entity == layer => {
+                        Some(*readable)
+                    }
+                    _ => None,
+                }),
                 "overflow": overflow(frame.diagnostics(), layer, angle.and(frame_box)),
             })
         }),
@@ -2515,6 +2681,7 @@ fn compact_layer(value: &Value) -> Value {
         ("size", &rendered["font_size"]),
         ("auto_fit_max", &rendered["auto_fit_max"]),
         ("warning", &rendered["warning"]),
+        ("readable_color", &rendered["readable_color"]),
         ("overflow", &rendered["overflow"]),
         ("flow", &value["flow"]),
         ("inner_box", &value["balloon"]["inner_box"]),
@@ -3467,15 +3634,24 @@ mod tests {
     #[test]
     fn text_turns_on_a_surface_to_the_printed_slant() {
         // A flat, upright surface: a turn on it is a turn on the page.
-        let flat = Surface::new([[100.0, 100.0], [300.0, 100.0], [300.0, 200.0], [100.0, 200.0]])
-            .unwrap();
+        let flat = Surface::new([
+            [100.0, 100.0],
+            [300.0, 100.0],
+            [300.0, 200.0],
+            [100.0, 200.0],
+        ])
+        .unwrap();
         assert!((flat.slant(0.0)).abs() < 1e-6);
         assert!((flat.turn_to(-12.0) + 12.0).abs() < 0.05);
         // A receding column: whatever the turn, the drawn lines reach the
         // slant asked for.
-        let column =
-            Surface::new([[410.0, 220.0], [612.0, 251.0], [598.0, 530.0], [380.0, 488.0]])
-                .unwrap();
+        let column = Surface::new([
+            [410.0, 220.0],
+            [612.0, 251.0],
+            [598.0, 530.0],
+            [380.0, 488.0],
+        ])
+        .unwrap();
         for slant in [-14.0, 0.0, 9.0] {
             let turn = column.turn_to(slant);
             assert!((column.slant(turn) - slant).abs() < 0.05, "{slant} {turn}");
@@ -3545,9 +3721,134 @@ mod tests {
         assert!(found[2].is_empty());
         assert_eq!(
             found[3],
-            ["crosses=-9", "off_centre=30,60", "size=20 page_median=26"]
+            [
+                "crosses=-9",
+                "off_centre=30,60",
+                "size=20 similar_median=26"
+            ]
         );
         assert!(found[4].is_empty());
+
+        // A narrow balloon is compared with narrow ones, and a measure a
+        // panel line cut short reports no crossing.
+        let narrow = |size: f64, measured: &str| {
+            json!({
+                "visible": true,
+                "translated_text": "Привет",
+                "typography": { "writing_mode": null },
+                "balloon": {
+                    "measured": measured,
+                    "interior": { "box": [0.0, 0.0, 60.0, 400.0] },
+                    "off_centre": [0.0, 0.0],
+                    "edge_gap": -9.0,
+                },
+                "rendered": { "font_size": size, "small": false },
+            })
+        };
+        let layers = [
+            layer(26.0, 10.0, [0.0, 0.0]),
+            layer(26.0, 10.0, [0.0, 0.0]),
+            layer(26.0, 10.0, [0.0, 0.0]),
+            narrow(16.0, "partial"),
+            narrow(16.0, "partial"),
+            narrow(15.0, "partial"),
+        ];
+        let found = page_balloon_issues(&layers.iter().collect::<Vec<_>>());
+        assert!(found.iter().all(Vec::is_empty), "{found:?}");
+    }
+
+    #[tokio::test]
+    async fn restyling_detected_typography_keeps_the_translation_horizontal() {
+        let mut session = koharu_scene::Session::memory().await.unwrap();
+        let mut setup = session.snapshot().edit();
+        let page = setup
+            .add_page(
+                koharu_scene::PageDraft::new("1", 100.0, 100.0),
+                koharu_scene::At::End,
+            )
+            .unwrap();
+        let content = setup.add_text_content(page, koharu_scene::At::End).unwrap();
+        let layer = setup
+            .add_text_layer(
+                page,
+                koharu_scene::At::End,
+                content,
+                &koharu_scene::TextLayout {
+                    origin: Origin::User,
+                    kind: koharu_scene::TextLayoutKind::Paragraph,
+                    angle_degrees: None,
+                    perspective: None,
+                },
+            )
+            .unwrap();
+        session.commit(setup.finish().unwrap()).await.unwrap();
+        // Detection records the Japanese source's vertical direction.
+        let detection = koharu_scene::Generation::new(
+            koharu_scene::ProducerId::new("dev.koharu.pipeline.detection").unwrap(),
+        );
+        let mut detected = session.snapshot().edit_as(detection.clone());
+        detected
+            .set(
+                layer,
+                &koharu_scene::Typography {
+                    origin: Origin::Generated(detection),
+                    preferred_font: None,
+                    font_weight: None,
+                    font_style: None,
+                    size: None,
+                    auto_fit: true,
+                    color: Some([0, 0, 0, 255]),
+                    stroke_color: None,
+                    stroke_width: None,
+                    alignment: None,
+                    writing_mode: Some(koharu_scene::WritingMode::Vertical),
+                    extensions: Default::default(),
+                    line_breaking: None,
+                },
+            )
+            .unwrap();
+        session.commit(detected.finish().unwrap()).await.unwrap();
+
+        let change: TrialChange = serde_json::from_value(json!({
+            "element": "1#1",
+            "typography": { "preferred_font": "Arial", "line_breaking": "whole_words" },
+        }))
+        .unwrap();
+        let restyled = steps(&session.snapshot(), vec![change], &HashMap::new(), |_| None).unwrap();
+        let mut edit = session.snapshot().edit();
+        for step in restyled {
+            step(&mut edit).unwrap();
+        }
+        session.commit(edit.finish().unwrap()).await.unwrap();
+        let restyled = session
+            .snapshot()
+            .component::<koharu_scene::Typography>(layer)
+            .unwrap()
+            .unwrap();
+        assert_eq!(restyled.writing_mode, None);
+        assert_eq!(restyled.preferred_font.as_deref(), Some("Arial"));
+
+        // Automatic line breaking can be asked for again.
+        let change: TrialChange = serde_json::from_value(json!({
+            "element": "1#1",
+            "typography": { "line_breaking": "automatic", "size": 20.0 },
+        }))
+        .unwrap();
+        let reset = steps(&session.snapshot(), vec![change], &HashMap::new(), |_| None).unwrap();
+        let mut edit = session.snapshot().edit();
+        for step in reset {
+            step(&mut edit).unwrap();
+        }
+        session.commit(edit.finish().unwrap()).await.unwrap();
+        let reset = session
+            .snapshot()
+            .component::<koharu_scene::Typography>(layer)
+            .unwrap()
+            .unwrap();
+        assert_eq!(reset.line_breaking, None);
+        // A size given alone is drawn at that size.
+        assert!(!reset.auto_fit);
+        assert_eq!(reset.size, Some(20.0));
     }
 
     #[tokio::test]

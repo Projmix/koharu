@@ -137,6 +137,18 @@ impl Scheduler {
         }
     }
 
+    /// A hybrid OCR's local pass alone: the API pass never runs.
+    pub(crate) fn local_ocr_only(&mut self) {
+        for work in self
+            .pages
+            .iter_mut()
+            .flat_map(|page| &mut page.stages)
+            .filter(|work| work.stage == Stage::Ocr)
+        {
+            work.ocr_pass = OcrPass::Local;
+        }
+    }
+
     pub(crate) fn ocr_pass(&self, target: StageTarget) -> OcrPass {
         target
             .page()
@@ -356,6 +368,21 @@ mod tests {
             scheduler.start_next(&busy),
             Some((StageTarget::Chapter, Stage::Translation))
         );
+    }
+
+    #[test]
+    fn local_ocr_runs_the_local_pass_alone() {
+        let pages = pages(2);
+        let mut scheduler = Scheduler::new(&pages, &[Stage::Ocr], false, false);
+        scheduler.local_ocr_only();
+        let busy = BTreeSet::new();
+        assert_eq!(scheduler.total(), 2);
+        for _ in &pages {
+            let work = scheduler.start_next(&busy).unwrap();
+            assert_eq!(scheduler.ocr_pass(work.0), OcrPass::Local);
+            scheduler.complete_stage(work.0, work.1);
+        }
+        assert!(scheduler.start_next(&busy).is_none());
     }
 
     #[test]

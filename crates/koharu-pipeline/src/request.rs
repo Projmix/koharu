@@ -93,6 +93,9 @@ pub struct Request {
     pub progress: Option<ProgressSink>,
     pub inpainting_mask: Option<InpaintingMask>,
     pub image_edit_reviewer: Option<Arc<dyn ImageEditReviewer>>,
+    /// Read text with the local models only: a hybrid OCR stops after its
+    /// local pass and sends nothing to the API, and an API-only OCR refuses.
+    pub local_ocr: bool,
 }
 
 impl Default for Request {
@@ -104,6 +107,7 @@ impl Default for Request {
             progress: None,
             inpainting_mask: None,
             image_edit_reviewer: None,
+            local_ocr: false,
         }
     }
 }

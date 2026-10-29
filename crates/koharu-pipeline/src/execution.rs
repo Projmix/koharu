@@ -71,8 +71,19 @@ impl<'a> Execution<'a> {
             matches!(request.scope, crate::Scope::Project),
             runner.parallel_inpainting() && request.inpainting_mask.is_none(),
         );
+        if request.local_ocr && runner.api_ocr() && stages.contains(&Stage::Ocr) {
+            return Err(PipelineError::new(
+                ErrorKind::InvalidInput,
+                Some(Stage::Ocr),
+                anyhow::anyhow!("OCR is set to the API alone; local OCR needs a local model"),
+            ));
+        }
         if runner.hybrid_ocr() {
-            scheduler.enable_hybrid_ocr();
+            if request.local_ocr {
+                scheduler.local_ocr_only();
+            } else {
+                scheduler.enable_hybrid_ocr();
+            }
         }
         if let Some(mask) = request.inpainting_mask.as_ref()
             && (!pages.contains(&mask.page) || !stages.contains(&Stage::Inpainting))
