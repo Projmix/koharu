@@ -2791,24 +2791,28 @@ impl Project {
                 let mut image =
                     image::load_from_memory(&snapshot.read_blob(asset.blob).await?)?.to_rgba8();
                 let opaque = image.pixels().filter(|pixel| pixel[3] == 255).count();
-                if target.is_some() && opaque * 100 >= image.pixels().len() * 99 {
-                    // On a page the enhancement made grey, a whole cleaned
-                    // page drawn on the tinted scan goes grey with it.
-                    let grey = images[&target]
-                        .pixels()
-                        .all(|pixel| pixel[0] == pixel[1] && pixel[1] == pixel[2]);
+                // The enhancement of a monochrome page is grey; a colour page
+                // keeps its hues.
+                let grey = images[&target]
+                    .pixels()
+                    .all(|pixel| pixel[0] == pixel[1] && pixel[1] == pixel[2]);
+                if target.is_some() && grey && opaque * 100 >= image.pixels().len() * 99 {
+                    // A whole cleaned monochrome page takes the page's tone
+                    // curve on its own luminance and goes grey with the
+                    // enhancement. On a colour page that curve stretches the
+                    // brightest colours to white and washes the page out
+                    // (the owner's HY-cleaned cover), so a colour page takes
+                    // the enhancement's own per-channel change below.
                     image = tokio_rayon::spawn(move || {
                         koharu_pipeline::tone_cleaned_page(&mut image);
-                        if grey {
-                            for pixel in image.pixels_mut() {
-                                let luma = ((u32::from(pixel[0]) * 299
-                                    + u32::from(pixel[1]) * 587
-                                    + u32::from(pixel[2]) * 114)
-                                    / 1000) as u8;
-                                pixel[0] = luma;
-                                pixel[1] = luma;
-                                pixel[2] = luma;
-                            }
+                        for pixel in image.pixels_mut() {
+                            let luma = ((u32::from(pixel[0]) * 299
+                                + u32::from(pixel[1]) * 587
+                                + u32::from(pixel[2]) * 114)
+                                / 1000) as u8;
+                            pixel[0] = luma;
+                            pixel[1] = luma;
+                            pixel[2] = luma;
                         }
                         image
                     })
@@ -3707,6 +3711,86 @@ mod tests {
             Project::typography_view(typography).writing_mode,
             Some(WritingMode::Vertical)
         );
+    }
+
+    #[tokio::test]
+    async fn a_whole_cleaned_colour_page_keeps_its_colours_when_enhanced() {
+        let colour = |pixels: &[[u8; 3]]| {
+            let image = image::RgbImage::from_fn(pixels.len() as u32, 1, |x, _| {
+                image::Rgb(pixels[x as usize])
+            });
+            page_png(
+                png(DynamicImage::ImageRgb8(image)).unwrap(),
+                pixels.len() as u32,
+                1,
+            )
+        };
+        // A colour cover with no black or white, cleaned whole by a model.
+        let cover = [[200, 150, 100], [120, 160, 210], [180, 180, 60]];
+        let source_role = AssetRole::new("source").unwrap();
+        let mut session = Session::memory().await.unwrap();
+        let mut setup = session.snapshot().edit();
+        let page = setup
+            .add_page(PageDraft::new("page", 3.0, 1.0), At::End)
+            .unwrap();
+        setup.set_asset(page, &source_role, colour(&cover)).unwrap();
+        let cleaned = setup.add_entity(page, At::End).unwrap();
+        setup
+            .set(
+                cleaned,
+                &SceneRasterLayer {
+                    origin: Origin::User,
+                    name: "Cleanup".to_owned(),
+                    kind: RasterLayerKind::Cleanup,
+                },
+            )
+            .unwrap();
+        let whole = RgbaImage::from_fn(3, 1, |x, _| {
+            let [r, g, b] = cover[x as usize];
+            image::Rgba([r, g, b, 255])
+        });
+        setup
+            .set_asset(
+                cleaned,
+                &source_role,
+                page_png(png(DynamicImage::ImageRgba8(whole)).unwrap(), 3, 1),
+            )
+            .unwrap();
+        session.commit(setup.finish().unwrap()).await.unwrap();
+        let mut project = Project::new(session, "test".to_owned());
+
+        // An enhancement that leaves the colours as they are.
+        let snapshot = project.snapshot();
+        let patch = snapshot
+            .patch(|edit| {
+                let layer = edit.add_entity(page, At::Start)?;
+                edit.set(
+                    layer,
+                    &SceneRasterLayer {
+                        origin: Origin::User,
+                        name: "Scan enhancement".to_owned(),
+                        kind: RasterLayerKind::Enhancement,
+                    },
+                )?;
+                edit.set_asset(layer, &AssetRole::new("source").unwrap(), colour(&cover))
+            })
+            .unwrap();
+        project
+            .commit_stage_output(koharu_pipeline::StageOutput {
+                target: koharu_pipeline::StageTarget::Page(page),
+                stage: koharu_pipeline::Stage::Enhancement,
+                patch,
+            })
+            .await
+            .unwrap();
+        let snapshot = project.snapshot();
+        let asset = snapshot.asset(cleaned, &source_role).unwrap().unwrap();
+        let retoned = image::load_from_memory(&snapshot.read_blob(asset.blob).await.unwrap())
+            .unwrap()
+            .to_rgb8();
+        for (x, expected) in cover.iter().enumerate() {
+            assert_eq!(retoned.get_pixel(x as u32, 0).0, *expected);
+        }
     }
 
     #[tokio::test]

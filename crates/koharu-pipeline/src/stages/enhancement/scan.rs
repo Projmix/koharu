@@ -531,17 +531,45 @@ fn ink_edge(histogram: &[u64; 256], total: u64) -> Option<f32> {
     Some(edge as f32)
 }
 
-/// The light edge of a page's ink, when the page holds enough of it to tell.
+/// Whether the darkest ink peak is a thin spike of solid black (a filled
+/// area, or the scanner clipping) under a dark mass up to level 64 that
+/// holds at least as much. The page alone cannot tell that mass from
+/// screentone over real black; the chapter's other pages can.
+fn black_spike(histogram: &[u64; 256], total: u64) -> bool {
+    let window = |value: usize| {
+        histogram[value.saturating_sub(2)..=(value + 2).min(255)]
+            .iter()
+            .sum::<u64>()
+    };
+    let Some(darkest) =
+        (0..=112).find(|&value| window(value) * 100 >= total && window(value) >= window(value + 1))
+    else {
+        return false;
+    };
+    window(darkest + 4) * 2 < window(darkest)
+        && (darkest + 5..=64).any(|value| window(value) >= window(darkest))
+}
+
+/// The light edge of a page's ink, when the page holds enough of it to tell
+/// and its darkest peak is not a thin spike of solid black.
 pub(crate) fn ink_black(plane: &Plane) -> Option<f32> {
     let (histogram, total) = histogram(plane.data.iter().copied());
-    ink_edge(&histogram, total)
+    (!black_spike(&histogram, total))
+        .then(|| ink_edge(&histogram, total))
+        .flatten()
 }
 
 /// `chapter_ink` stands in for the page's own ink edge when the page holds
-/// too little ink to measure.
+/// too little ink to measure, or when its darkest peak is a thin spike of
+/// solid black: on Osananajimi A to Z a 1% spike at 0 kept the black point at
+/// 2 under ink at 30-45, and those pages stayed grey beside their neighbours.
 fn levels_of(histogram: &[u64; 256], total: u64, chapter_ink: Option<f32>) -> Levels {
+    let own = match chapter_ink {
+        Some(_) if black_spike(histogram, total) => None,
+        _ => ink_edge(histogram, total),
+    };
     let mut levels = Levels {
-        black: ink_edge(histogram, total).or(chapter_ink).unwrap_or(0.0),
+        black: own.or(chapter_ink).unwrap_or(0.0),
         white: paper_edge(histogram, total).unwrap_or(255.0),
         linear: false,
     };
@@ -1047,6 +1075,23 @@ mod tests {
         histogram[255] = 6000;
         let total = histogram.iter().sum();
         assert!(levels_of(&histogram, total, None).black < 8.0);
+    }
+
+    #[test]
+    fn a_thin_spike_of_black_takes_the_chapter_black() {
+        // A 1% spike of solid black at 0 under ink spread around 38: alone
+        // the page keeps the darkest peak, beside its chapter it takes the
+        // chapter's black.
+        let mut histogram = [0u64; 256];
+        histogram[0] = 120;
+        for value in 30..=46 {
+            histogram[value] = 40;
+        }
+        histogram[255] = 6000;
+        let total = histogram.iter().sum();
+        assert!(black_spike(&histogram, total));
+        assert!(levels_of(&histogram, total, None).black < 8.0);
+        assert_eq!(levels_of(&histogram, total, Some(47.0)).black, 47.0);
     }
 
     #[test]

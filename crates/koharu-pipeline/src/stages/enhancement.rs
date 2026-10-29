@@ -30,7 +30,7 @@ use crate::{EnhancementConfig, ModelCell};
 
 const PRODUCER: &str = "dev.koharu.pipeline.enhancement";
 /// Bumped whenever the analysis, filters or checks change what a page gets.
-const REVISION: &str = "8";
+const REVISION: &str = "9";
 const LAYER_NAME: &str = "Scan enhancement";
 /// Paper grain of a physical scan (1.1-1.8 on the owner's scans) rather than
 /// a digital release (0.02-0.13). Only scanned colour pages get Auto Color:
@@ -298,7 +298,8 @@ impl StageProcessor for Processor {
         let mut edit = input.scene.edit_as(generation(PRODUCER, &self.model_id())?);
         edit.observe_assets(page)?;
         edit.observe_subtree(page)?;
-        if let Some(layer) = enhancement_layer(&input.scene, page)? {
+        let previous = enhancement_layer(&input.scene, page)?;
+        if let Some(layer) = previous {
             edit.remove_entity(layer, RemovePolicy::Cascade)?;
         }
         if method.is_none() && tone.is_none() {
@@ -306,7 +307,15 @@ impl StageProcessor for Processor {
                 bail!("kept the original page: {}", rejected.join("; "));
             }
             // Nothing to fix. A layer from another configuration goes, so the
-            // page shows what this run decided.
+            // page shows what this run decided; a page that never had one says
+            // why it gets none, rather than looking skipped.
+            if previous.is_none() {
+                bail!(if analysis.monochrome {
+                    "nothing to fix: the ink is already black and the paper white"
+                } else {
+                    "nothing to fix: a digital colour page keeps its colours"
+                });
+            }
             return finish(edit);
         }
         tracing::info!(%page, ?analysis, method, ?tone, "enhanced scan");
@@ -381,6 +390,11 @@ mod tests {
     }
 
     async fn run(image: &GrayImage) -> (Session, EntityId, koharu_scene::Patch) {
+        let (session, page, patch) = processed(image).await;
+        (session, page, patch.unwrap())
+    }
+
+    async fn processed(image: &GrayImage) -> (Session, EntityId, Result<koharu_scene::Patch>) {
         let mut session = Session::memory().await.unwrap();
         let mut setup = session.snapshot().edit();
         let page = setup
@@ -417,7 +431,7 @@ mod tests {
             },
             koharu_ml::Device::cpu(),
         );
-        let patch = processor.process(input).await.unwrap();
+        let patch = processor.process(input).await;
         (session, page, patch)
     }
 
@@ -444,8 +458,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_clean_page_is_left_alone() {
-        let (_, _, patch) = run(&page(0, 255)).await;
-        assert!(patch.is_empty());
+    async fn a_clean_page_is_left_alone_and_says_so() {
+        // The run reports the page as a warning instead of passing it by.
+        let (_, _, patch) = processed(&page(0, 255)).await;
+        let error = patch.unwrap_err().to_string();
+        assert!(error.contains("nothing to fix"), "{error}");
     }
 }

@@ -81,22 +81,35 @@ original and the run says why.
    per-channel table from base to base (the median target level per source
    level, made monotonic). A cleaned page a model returned whole (at least
    99% opaque) hides the enhancement and is lighter than the source (ink
-   53-67 against 40-50 on book "2"); it takes the page's tone curve on its
-   own luminance. Histogram matching against the enhancement darkened a
+   53-67 against 40-50 on book "2"); on a monochrome page it takes the
+   page's tone curve on its own luminance. A colour page takes the
+   per-channel table like a partial layer: the tone curve stretched the
+   brightest colours of an HY-cleaned cover to white (Osananajimi A to Z,
+   page 1). Histogram matching against the enhancement darkened a
    faint watermark and copied the enhancement's colour cast. The manual
    "Match cleanup" command is gone: on book "2" it retoned patches drawn
    on the enhancement a second time.
    A monochrome page with too little ink to measure (a light page of a
    washed scan, Shanpankouru 2 pages 30 and 82) takes the chapter's black:
    the median ink edge of up to eight evenly spaced other monochrome pages,
-   when at least three measure one.
+   when at least three measure one. So does a page whose darkest peak is a
+   thin spike of solid black (falling by half within four levels) under a
+   dark mass up to level 64 that holds as much: alone the page cannot tell
+   ink from screentone over real black, and on Osananajimi A to Z pages
+   7-26 a 1% spike at 0 kept the black point at 2 under ink at 30-45. Such
+   a page counts for no other page's chapter black.
 5. **Result**: one opaque raster layer of kind `Enhancement` at the bottom of
    the page, owned by `dev.koharu.pipeline.enhancement`. The source asset is
    never replaced. Detection, OCR, markup, translation crops and inpainting
    read the layer while it is visible. Hiding it is the before/after
    comparison; PSD exports both. A rerun with the same settings skips the
    page; a user-owned layer is never replaced.
-6. **Nothing to fix** gives an empty patch (the stage is skipped). **Rejected**
+6. **Nothing to fix** on a page that has no layer yet becomes the page's
+   warning ("nothing to fix: the ink is already black and the paper white",
+   or a digital colour page keeping its colours), so it no longer looks
+   skipped; a page whose
+   layer came from another configuration loses it in an otherwise empty
+   patch. **Rejected**
    candidates with nothing else to apply become the page's warning ("kept the
    original page: ..."), and the run continues.
 
